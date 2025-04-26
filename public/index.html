@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="UTF-8">
+    <title>Авторизація</title>
+    <style>
+      body { font-family: Arial, sans-serif; text-align: center; padding: 50px; }
+      .container { max-width: 400px; margin: 0 auto; }
+      input[type="password"], button { padding: 10px; margin: 10px; width: 100%; }
+      .show-password { margin-left: 10px; }
+    </style>
+  </head>
+  <body>
+    <div class="container">
+      <h1>Введіть пароль</h1>
+      <form action="/login" method="POST">
+        <input type="password" name="password" id="password" placeholder="Пароль" required>
+        <br>
+        <input type="checkbox" id="showPassword" class="show-password">
+        <label for="showPassword">Показати пароль</label>
+        <br>
+        <input type="checkbox" id="rememberMe" name="rememberMe">
+        <label for="rememberMe">Запам’ятати мене</label>
+        <br>
+        <button type="submit">Ввести пароль</button>
+      </form>
+    </div>
+    <script>
+      document.getElementById('showPassword').addEventListener('change', function() {
+        const passwordInput = document.getElementById('password');
+        passwordInput.type = this.checked ? 'text' : 'password';
+      });
+    </script>
+  </body>
+</html>
