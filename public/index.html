@@ -8,12 +8,14 @@
       .container { max-width: 400px; margin: 0 auto; }
       input[type="password"], button { padding: 10px; margin: 10px; width: 100%; }
       .show-password { margin-left: 10px; }
+      .error { color: red; }
+      .success { color: green; }
     </style>
   </head>
   <body>
     <div class="container">
       <h1>Введіть пароль</h1>
-      <form action="/login" method="POST">
+      <form id="loginForm" onsubmit="handleLogin(event)">
         <input type="password" name="password" id="password" placeholder="Пароль" required>
         <br>
         <input type="checkbox" id="showPassword" class="show-password">
@@ -24,12 +26,41 @@
         <br>
         <button type="submit">Ввести пароль</button>
       </form>
+      <p id="message"></p>
     </div>
     <script>
       document.getElementById('showPassword').addEventListener('change', function() {
         const passwordInput = document.getElementById('password');
         passwordInput.type = this.checked ? 'text' : 'password';
       });
+
+      async function handleLogin(event) {
+        event.preventDefault();
+        const form = document.getElementById('loginForm');
+        const messageElement = document.getElementById('message');
+        const formData = new FormData(form);
+        try {
+          const response = await fetch('/login', {
+            method: 'POST',
+            body: formData
+          });
+          const data = await response.json();
+          if (data.success) {
+            messageElement.textContent = 'Успішний вхід!';
+            messageElement.className = 'success';
+            setTimeout(() => {
+              window.location.href = data.redirect;
+            }, 1000);
+          } else {
+            messageElement.textContent = data.message || 'Невірний пароль';
+            messageElement.className = 'error';
+          }
+        } catch (error) {
+          console.error('Login error:', error);
+          messageElement.textContent = 'Помилка сервера';
+          messageElement.className = 'error';
+        }
+      }
     </script>
   </body>
 </html>
