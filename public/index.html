@@ -50,9 +50,11 @@
             body: new URLSearchParams({
               password: password,
               rememberMe: rememberMe
-            }).toString()
+            }).toString(),
+            credentials: 'include' // Добавляем credentials: 'include' для отправки cookie
           });
           const data = await response.json();
+          console.log('Login response:', data); // Логируем ответ для отладки
           if (data.success) {
             messageElement.textContent = 'Успішний вхід!';
             messageElement.className = 'success';
@@ -65,7 +67,7 @@
           }
         } catch (error) {
           console.error('Login error:', error);
-          messageElement.textContent = 'Помилка сервера';
+          messageElement.textContent = `Помилка: ${error.message}`;
           messageElement.className = 'error';
         }
       }

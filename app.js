@@ -39,14 +39,16 @@ app.use(cookieParser());
 
 // Настройка сессий с Redis
 app.use(session({
-  store: new RedisStore({ client: redisClient }), // Используем new для RedisStore
-  secret: process.env.SESSION_SECRET,
-  resave: false,
-  saveUninitialized: false,
-  cookie: { 
-    secure: process.env.NODE_ENV === 'production',
-    maxAge: 24 * 60 * 60 * 1000 // 24 часа
-  }
+    store: new RedisStore({ client: redisClient }),
+    secret: process.env.SESSION_SECRET,
+    resave: false,
+    saveUninitialized: false,
+    cookie: { 
+      secure: process.env.NODE_ENV === 'production', // true на Vercel (HTTPS), false локально (HTTP)
+      httpOnly: true,
+      sameSite: process.env.NODE_ENV === 'production' ? 'none' : 'lax', // Для Vercel нужно 'none', чтобы cookie работали через HTTPS
+      maxAge: 24 * 60 * 60 * 1000 // 24 часа
+    }
 }));
 
 // Функции загрузки данных
@@ -185,35 +187,38 @@ app.get('/', (req, res) => {
 });
 
 app.post('/login', async (req, res) => {
-  try {
-    const { password } = req.body;
-    if (!password) return res.status(400).json({ success: false, message: 'Пароль не вказано' });
-    console.log('Checking password:', password, 'against validPasswords:', validPasswords);
-    const user = Object.keys(validPasswords).find(u => validPasswords[u] === password);
-    if (!user) return res.status(401).json({ success: false, message: 'Невірний пароль' });
-
-    req.session.user = user; // Сохраняем пользователя в сессии
-
-    if (user === 'admin') {
-      res.json({ success: true, redirect: '/admin' });
-    } else {
-      res.json({ success: true, redirect: '/select-test' });
+    try {
+      const { password } = req.body;
+      if (!password) return res.status(400).json({ success: false, message: 'Пароль не вказано' });
+      console.log('Checking password:', password, 'against validPasswords:', validPasswords);
+      const user = Object.keys(validPasswords).find(u => validPasswords[u] === password);
+      if (!user) return res.status(401).json({ success: false, message: 'Невірний пароль' });
+  
+      req.session.user = user;
+      console.log('Session after setting user:', req.session); // Логируем сессию после сохранения
+  
+      if (user === 'admin') {
+        res.json({ success: true, redirect: '/admin' });
+      } else {
+        res.json({ success: true, redirect: '/select-test' });
+      }
+    } catch (error) {
+      console.error('Ошибка в /login:', error.stack);
+      res.status(500).json({ success: false, message: 'Помилка сервера' });
     }
-  } catch (error) {
-    console.error('Ошибка в /login:', error.stack);
-    res.status(500).json({ success: false, message: 'Помилка сервера' });
-  }
 });
 
 const checkAuth = (req, res, next) => {
-  const user = req.session.user;
-  console.log('checkAuth: user from session:', user);
-  if (!user || !validPasswords[user]) {
-    console.log('checkAuth: No valid auth, redirecting to /');
-    return res.redirect('/');
-  }
-  req.user = user;
-  next();
+    console.log('checkAuth: Session data:', req.session);
+    console.log('checkAuth: Cookies:', req.cookies);
+    const user = req.session.user;
+    console.log('checkAuth: user from session:', user);
+    if (!user || !validPasswords[user]) {
+      console.log('checkAuth: No valid auth, redirecting to /');
+      return res.redirect('/');
+    }
+    req.user = user;
+    next();
 };
 
 const checkAdmin = (req, res, next) => {
