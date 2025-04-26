@@ -38,11 +38,19 @@
         event.preventDefault();
         const form = document.getElementById('loginForm');
         const messageElement = document.getElementById('message');
-        const formData = new FormData(form);
+        const password = document.getElementById('password').value;
+        const rememberMe = document.getElementById('rememberMe').checked;
+
         try {
           const response = await fetch('/login', {
             method: 'POST',
-            body: formData
+            headers: {
+              'Content-Type': 'application/x-www-form-urlencoded'
+            },
+            body: new URLSearchParams({
+              password: password,
+              rememberMe: rememberMe
+            }).toString()
           });
           const data = await response.json();
           if (data.success) {
