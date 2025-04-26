@@ -4,7 +4,7 @@ const path = require('path');
 const ExcelJS = require('exceljs');
 const { createClient } = require('redis');
 const session = require('express-session');
-const { default: RedisStore } = require('connect-redis'); // Правильный импорт для версии 7.1.1
+const createRedisStore = require('connect-redis'); // Правильный импорт для версии 7.1.1
 const fs = require('fs');
 
 const app = express();
@@ -13,12 +13,11 @@ let validPasswords = {};
 let isInitialized = false;
 let initializationError = null;
 let testNames = { 
-  '1': { name: 'Тест 1', timeLimit: 3600 }, // По умолчанию 1 час (3600 секунд)
-  '2': { name: 'Тест 2', timeLimit: 3600 }, // По умолчанию 1 час
-  '3': { name: 'Тест 3', timeLimit: 3600 }  // По умолчанию 1 час
+  '1': { name: 'Тест 1', timeLimit: 3600 },
+  '2': { name: 'Тест 2', timeLimit: 3600 },
+  '3': { name: 'Тест 3', timeLimit: 3600 }
 };
 
-// Настройка Redis клиента
 const redisClient = createClient({
   url: process.env.REDIS_URL,
   socket: {
@@ -31,27 +30,24 @@ redisClient.on('error', (err) => console.error('Redis Client Error:', err));
 redisClient.on('connect', () => console.log('Redis connected'));
 redisClient.on('reconnecting', () => console.log('Redis reconnecting'));
 
-// Middleware
 app.use(express.urlencoded({ extended: true }));
 app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
 app.use(cookieParser());
 
-// Настройка сессий с Redis
 app.use(session({
-    store: new RedisStore({ client: redisClient }),
-    secret: process.env.SESSION_SECRET,
-    resave: false,
-    saveUninitialized: false,
-    cookie: { 
-      secure: process.env.NODE_ENV === 'production', // true на Vercel (HTTPS), false локально (HTTP)
-      httpOnly: true,
-      sameSite: process.env.NODE_ENV === 'production' ? 'none' : 'lax', // Для Vercel нужно 'none', чтобы cookie работали через HTTPS
-      maxAge: 24 * 60 * 60 * 1000 // 24 часа
-    }
+  store: new (createRedisStore(session))({ client: redisClient }), // Используем createRedisStore
+  secret: process.env.SESSION_SECRET,
+  resave: false,
+  saveUninitialized: false,
+  cookie: { 
+    secure: process.env.NODE_ENV === 'production',
+    httpOnly: true,
+    sameSite: process.env.NODE_ENV === 'production' ? 'none' : 'lax',
+    maxAge: 24 * 60 * 60 * 1000
+  }
 }));
 
-// Функции загрузки данных
 const loadUsers = async () => {
   try {
     const filePath = path.join(__dirname, 'users.xlsx');
@@ -135,7 +131,6 @@ const loadQuestions = async (testNumber) => {
   }
 };
 
-// Middleware для проверки инициализации
 const ensureInitialized = (req, res, next) => {
   if (!isInitialized) {
     if (initializationError) {
@@ -146,7 +141,6 @@ const ensureInitialized = (req, res, next) => {
   next();
 };
 
-// Инициализация сервера
 const initializeServer = async () => {
   let attempt = 1;
   const maxAttempts = 5;
@@ -175,50 +169,48 @@ const initializeServer = async () => {
   }
 };
 
-// Инициализация сервера
 (async () => {
   await initializeServer();
   app.use(ensureInitialized);
 })();
 
-// Маршруты
 app.get('/', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
 
 app.post('/login', async (req, res) => {
-    try {
-      const { password } = req.body;
-      if (!password) return res.status(400).json({ success: false, message: 'Пароль не вказано' });
-      console.log('Checking password:', password, 'against validPasswords:', validPasswords);
-      const user = Object.keys(validPasswords).find(u => validPasswords[u] === password);
-      if (!user) return res.status(401).json({ success: false, message: 'Невірний пароль' });
-  
-      req.session.user = user;
-      console.log('Session after setting user:', req.session); // Логируем сессию после сохранения
-  
-      if (user === 'admin') {
-        res.json({ success: true, redirect: '/admin' });
-      } else {
-        res.json({ success: true, redirect: '/select-test' });
-      }
-    } catch (error) {
-      console.error('Ошибка в /login:', error.stack);
-      res.status(500).json({ success: false, message: 'Помилка сервера' });
+  try {
+    const { password } = req.body;
+    if (!password) return res.status(400).json({ success: false, message: 'Пароль не вказано' });
+    console.log('Checking password:', password, 'against validPasswords:', validPasswords);
+    const user = Object.keys(validPasswords).find(u => validPasswords[u] === password);
+    if (!user) return res.status(401).json({ success: false, message: 'Невірний пароль' });
+
+    req.session.user = user;
+    console.log('Session after setting user:', req.session);
+
+    if (user === 'admin') {
+      res.json({ success: true, redirect: '/admin' });
+    } else {
+      res.json({ success: true, redirect: '/select-test' });
     }
+  } catch (error) {
+    console.error('Ошибка в /login:', error.stack);
+    res.status(500).json({ success: false, message: 'Помилка сервера' });
+  }
 });
 
 const checkAuth = (req, res, next) => {
-    console.log('checkAuth: Session data:', req.session);
-    console.log('checkAuth: Cookies:', req.cookies);
-    const user = req.session.user;
-    console.log('checkAuth: user from session:', user);
-    if (!user || !validPasswords[user]) {
-      console.log('checkAuth: No valid auth, redirecting to /');
-      return res.redirect('/');
-    }
-    req.user = user;
-    next();
+  console.log('checkAuth: Session data:', req.session);
+  console.log('checkAuth: Cookies:', req.cookies);
+  const user = req.session.user;
+  console.log('checkAuth: user from session:', user);
+  if (!user || !validPasswords[user]) {
+    console.log('checkAuth: No valid auth, redirecting to /');
+    return res.redirect('/');
+  }
+  req.user = user;
+  next();
 };
 
 const checkAdmin = (req, res, next) => {
@@ -242,7 +234,7 @@ app.get('/select-test', checkAuth, (req, res) => {
         <style>
           body { font-family: Arial, sans-serif; text-align: center; padding: 50px; }
           button { padding: 10px 20px; margin: 10px; font-size: 18px; cursor: pointer; }
-          button:hover { background-color: #90ee90; } /* Эффект наведения как в Duolingo */
+          button:hover { background-color: #90ee90; }
         </style>
       </head>
       <body>
@@ -335,7 +327,7 @@ app.get('/test', checkAuth, async (req, res) => {
       answers: {},
       currentQuestion: 0,
       startTime: Date.now(),
-      timeLimit: testNames[testNumber].timeLimit * 1000 // В миллисекундах
+      timeLimit: testNames[testNumber].timeLimit * 1000
     });
     res.redirect(`/test/question?index=0`);
   } catch (error) {
@@ -1210,7 +1202,6 @@ app.post('/admin/create-test', checkAuth, checkAdmin, async (req, res) => {
   }
 });
 
-// Запуск сервера
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`Server is running on port ${PORT}`);
