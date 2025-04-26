@@ -4,8 +4,7 @@ const path = require('path');
 const ExcelJS = require('exceljs');
 const { createClient } = require('redis');
 const session = require('express-session');
-const createRedisStore = require('connect-redis');
-const RedisStore = createRedisStore.default;
+const { default: RedisStore } = require('connect-redis'); // Правильный импорт для версии 7.1.1
 const fs = require('fs');
 
 const app = express();
@@ -15,16 +14,17 @@ let isInitialized = false;
 let initializationError = null;
 let testNames = { 
   '1': { name: 'Тест 1', timeLimit: 3600 }, // По умолчанию 1 час (3600 секунд)
-  '2': { name: 'Тест 2', timeLimit: 3600 }  // По умолчанию 1 час
+  '2': { name: 'Тест 2', timeLimit: 3600 }, // По умолчанию 1 час
+  '3': { name: 'Тест 3', timeLimit: 3600 }  // По умолчанию 1 час
 };
 
 // Настройка Redis клиента
 const redisClient = createClient({
-    url: process.env.REDIS_URL,
-    socket: {
-      connectTimeout: 10000,
-      reconnectStrategy: (retries) => Math.min(retries * 500, 3000)
-    }
+  url: process.env.REDIS_URL,
+  socket: {
+    connectTimeout: 10000,
+    reconnectStrategy: (retries) => Math.min(retries * 500, 3000)
+  }
 });
 
 redisClient.on('error', (err) => console.error('Redis Client Error:', err));
@@ -39,14 +39,14 @@ app.use(cookieParser());
 
 // Настройка сессий с Redis
 app.use(session({
-    store: RedisStore({ client: redisClient }), // Без изменений в этой части
-    secret: process.env.SESSION_SECRET,
-    resave: false,
-    saveUninitialized: false,
-    cookie: { 
-      secure: process.env.NODE_ENV === 'production',
-      maxAge: 24 * 60 * 60 * 1000 // 24 часа
-    }
+  store: new RedisStore({ client: redisClient }), // Используем new для RedisStore
+  secret: process.env.SESSION_SECRET,
+  resave: false,
+  saveUninitialized: false,
+  cookie: { 
+    secure: process.env.NODE_ENV === 'production',
+    maxAge: 24 * 60 * 60 * 1000 // 24 часа
+  }
 }));
 
 // Функции загрузки данных
@@ -883,9 +883,6 @@ app.get('/admin', checkAuth, checkAdmin, (req, res) => {
         <style>
           body { font-size: 24px; margin: 20px; }
           button { font-size: 24px; padding: 10px 20px; margin: 5px; }
-          table { border-collapse: collapse; margin-top: 20px; }
-          th, td { border: 1px solid black; padding: 8px; text-align: left; }
-          th { background-color: #f2f2f2; }
         </style>
       </head>
       <body>
@@ -1086,6 +1083,12 @@ app.get('/admin/edit-tests', checkAuth, checkAdmin, (req, res) => {
             <label for="time2">Час (сек):</label>
             <input type="number" id="time2" name="time2" value="${testNames['2'].timeLimit}" required min="1">
           </div>
+          <div>
+            <label for="test3">Назва Тесту 3:</label>
+            <input type="text" id="test3" name="test3" value="${testNames['3'].name}" required>
+            <label for="time3">Час (сек):</label>
+            <input type="number" id="time3" name="time3" value="${testNames['3'].timeLimit}" required min="1">
+          </div>
           <button type="submit">Зберегти</button>
         </form>
         <button onclick="window.location.href='/admin'">Повернутися до адмін-панелі</button>
@@ -1096,7 +1099,7 @@ app.get('/admin/edit-tests', checkAuth, checkAdmin, (req, res) => {
 
 app.post('/admin/edit-tests', checkAuth, checkAdmin, (req, res) => {
   try {
-    const { test1, test2, time1, time2 } = req.body;
+    const { test1, test2, test3, time1, time2, time3 } = req.body;
     testNames['1'] = {
       name: test1 || testNames['1'].name,
       timeLimit: parseInt(time1) || testNames['1'].timeLimit
@@ -1104,6 +1107,10 @@ app.post('/admin/edit-tests', checkAuth, checkAdmin, (req, res) => {
     testNames['2'] = {
       name: test2 || testNames['2'].name,
       timeLimit: parseInt(time2) || testNames['2'].timeLimit
+    };
+    testNames['3'] = {
+      name: test3 || testNames['3'].name,
+      timeLimit: parseInt(time3) || testNames['3'].timeLimit
     };
     console.log('Updated test names and time limits:', testNames);
     res.send(`
