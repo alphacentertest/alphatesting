@@ -4,7 +4,7 @@ const path = require('path');
 const ExcelJS = require('exceljs');
 const { createClient } = require('redis');
 const session = require('express-session');
-const { RedisStore } = require('connect-redis'); // Обновлённый импорт
+const RedisStore = require('connect-redis').RedisStore;
 const fs = require('fs');
 
 const app = express();
@@ -38,7 +38,7 @@ app.use(cookieParser());
 
 // Настройка сессий с Redis
 app.use(session({
-    store: new RedisStore({ client: redisClient }),
+    store: RedisStore({ client: redisClient }), 
     secret: process.env.SESSION_SECRET,
     resave: false,
     saveUninitialized: false,
