@@ -1,6 +1,7 @@
 {
   "name": "alphatest",
   "version": "1.0.0",
+  "packageManager": "npm@11.3.0",
   "dependencies": {
     "connect-redis": "^7.1.1",
     "cookie-parser": "^1.4.6",
@@ -11,8 +12,5 @@
   },
   "scripts": {
     "clean": "rimraf node_modules package-lock.json && npm cache clean --force && npm install"
-  },
-  "devDependencies": {
-    "rimraf": "^6.0.1"
   }
 }
