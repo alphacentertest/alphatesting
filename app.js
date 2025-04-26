@@ -4,7 +4,7 @@ const path = require('path');
 const ExcelJS = require('exceljs');
 const { createClient } = require('redis');
 const session = require('express-session');
-const createRedisStore = require('connect-redis'); // Правильный импорт для версии 7.1.1
+const RedisStore = require('connect-redis')(session); // Правильный импорт для версии 7.1.1
 const fs = require('fs');
 
 const app = express();
@@ -36,7 +36,7 @@ app.use(express.static(path.join(__dirname, 'public')));
 app.use(cookieParser());
 
 app.use(session({
-  store: new (createRedisStore(session))({ client: redisClient }), // Используем createRedisStore
+  store: new RedisStore({ client: redisClient }),
   secret: process.env.SESSION_SECRET,
   resave: false,
   saveUninitialized: false,
