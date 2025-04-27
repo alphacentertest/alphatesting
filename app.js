@@ -1,10 +1,10 @@
+require('dotenv').config();
 const express = require('express');
 const cookieParser = require('cookie-parser');
 const path = require('path');
 const ExcelJS = require('exceljs');
-const { createClient } = require('redis');
 const session = require('express-session');
-const RedisStore = require('connect-redis')(session); // Правильный импорт для версии 7.1.1
+const FileStore = require('session-file-store')(session);
 const fs = require('fs');
 
 const app = express();
@@ -18,25 +18,13 @@ let testNames = {
   '3': { name: 'Тест 3', timeLimit: 3600 }
 };
 
-const redisClient = createClient({
-  url: process.env.REDIS_URL,
-  socket: {
-    connectTimeout: 10000,
-    reconnectStrategy: (retries) => Math.min(retries * 500, 3000)
-  }
-});
-
-redisClient.on('error', (err) => console.error('Redis Client Error:', err));
-redisClient.on('connect', () => console.log('Redis connected'));
-redisClient.on('reconnecting', () => console.log('Redis reconnecting'));
-
 app.use(express.urlencoded({ extended: true }));
 app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
 app.use(cookieParser());
 
 app.use(session({
-  store: new RedisStore({ client: redisClient }),
+  store: new FileStore({ path: './sessions' }), // Store sessions in ./sessions directory
   secret: process.env.SESSION_SECRET,
   resave: false,
   saveUninitialized: false,
@@ -86,7 +74,7 @@ const loadUsers = async () => {
     });
     if (Object.keys(users).length === 0) {
       console.error('No valid users found in users.xlsx');
-      throw new Error('Не знайдено користувачів у файлі');
+      throw new Error('Не найдено пользователей в файле');
     }
     console.log('Loaded users from Excel:', users);
     return users;
@@ -150,8 +138,6 @@ const initializeServer = async () => {
       console.log(`Starting server initialization (Attempt ${attempt} of ${maxAttempts})...`);
       validPasswords = await loadUsers();
       console.log('Users loaded successfully:', validPasswords);
-      await redisClient.connect();
-      console.log('Connected to Redis and loaded users');
       isInitialized = true;
       initializationError = null;
       break;
