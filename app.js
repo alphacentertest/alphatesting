@@ -4,7 +4,7 @@ const cookieParser = require('cookie-parser');
 const path = require('path');
 const ExcelJS = require('exceljs');
 const session = require('express-session');
-const MongoStore = require('connect-mongo');
+const FileStore = require('session-file-store')(session);
 const { MongoClient } = require('mongodb');
 const fs = require('fs');
 
@@ -41,23 +41,16 @@ app.use(express.static(path.join(__dirname, 'public')));
 app.use(cookieParser());
 
 app.use(session({
-  store: MongoStore.create({ 
-    mongoUrl: MONGO_URL,
-    collectionName: 'sessions',
+  store: new FileStore({
+    path: './sessions', // Папка для хранения сессий
     ttl: 24 * 60 * 60,
-    clientPromise: client.connect().then(() => {
-      console.log('MongoStore client connected');
-      return client;
-    }).catch(err => {
-      console.error('MongoStore client connection error:', err);
-      throw err;
-    })
+    retries: 0
   }),
   secret: process.env.SESSION_SECRET || 'a1b2c3d4e5f6g7h8i9j0k1l2m3n4o5p6q7r8s9t0',
   resave: false,
   saveUninitialized: false,
   cookie: { 
-    secure: process.env.NODE_ENV === 'production' ? true : false, // Для отладки попробуем отключить secure
+    secure: process.env.NODE_ENV === 'production' ? true : false,
     httpOnly: true,
     sameSite: process.env.NODE_ENV === 'production' ? 'none' : 'lax',
     maxAge: 24 * 60 * 60 * 1000
@@ -442,6 +435,7 @@ app.get('/test/question', checkAuth, (req, res) => {
         <meta charset="UTF-8">
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
         <title>${testNames[testNumber].name}</title>
+        <script src="https://cdnjs.cloudflare.com/ajax/libs/Sortable/1.15.0/Sortable.min.js"></script>
         <style>
           body { font-family: Arial, sans-serif; margin: 0; padding: 20px; padding-bottom: 80px; background-color: #f0f0f0; }
           img { max-width: 300px; margin-bottom: 10px; }
@@ -507,7 +501,7 @@ app.get('/test/question', checkAuth, (req, res) => {
       html += `
         <div id="sortable-options">
           ${(answers[index] || q.options).map((option, optIndex) => `
-            <div class="option-box draggable" draggable="true" data-index="${optIndex}" data-value="${option}">
+            <div class="option-box draggable" data-index="${optIndex}" data-value="${option}">
               ${option}
             </div>
           `).join('')}
@@ -614,43 +608,13 @@ app.get('/test/question', checkAuth, (req, res) => {
 
           const sortable = document.getElementById('sortable-options');
           if (sortable) {
-            let dragged;
-            sortable.addEventListener('dragstart', (e) => {
-              dragged = e.target;
-              if (dragged.classList.contains('draggable')) {
-                console.log('Drag started on:', dragged.dataset.value);
-                e.dataTransfer.setData('text/plain', dragged.dataset.index);
-                dragged.classList.add('dragging');
-                e.preventDefault();
-              }
-            });
-            sortable.addEventListener('dragend', (e) => {
-              if (e.target.classList.contains('draggable')) {
-                console.log('Drag ended on:', e.target.dataset.value);
-                e.target.classList.remove('dragging');
-              }
-            });
-            sortable.addEventListener('dragover', (e) => {
-              e.preventDefault();
-              console.log('Drag over:', e.target);
-            });
-            sortable.addEventListener('drop', (e) => {
-              e.preventDefault();
-              const draggedIndex = e.dataTransfer.getData('text');
-              const draggedElement = sortable.querySelector('[data-index="' + draggedIndex + '"]');
-              const dropTarget = e.target.closest('.draggable');
-              if (draggedElement && dropTarget && draggedElement !== dropTarget) {
-                console.log('Dropped:', draggedElement.dataset.value, 'on:', dropTarget.dataset.value);
-                const allItems = Array.from(sortable.querySelectorAll('.draggable'));
-                const draggedPos = allItems.indexOf(draggedElement);
-                const dropPos = allItems.indexOf(dropTarget);
-                if (draggedPos < dropPos) {
-                  dropTarget.after(draggedElement);
-                } else {
-                  dropTarget.before(draggedElement);
-                }
-              } else {
-                console.log('Drop failed:', { draggedElement, dropTarget });
+            new Sortable(sortable, {
+              animation: 150,
+              onStart: function(evt) {
+                console.log('Drag started on:', evt.item.dataset.value);
+              },
+              onEnd: function(evt) {
+                console.log('Drag ended:', evt.item.dataset.value, 'from index:', evt.oldIndex, 'to index:', evt.newIndex);
               }
             });
           } else {
@@ -721,6 +685,20 @@ app.get('/result', checkAuth, async (req, res) => {
 
   await saveResult(req.user, testNumber, score, totalPoints, startTime, endTime, totalClicks, correctClicks, totalQuestions, percentage);
 
+  const endDateTime = new Date(endTime);
+  const formattedTime = endDateTime.toLocaleTimeString('uk-UA', { hour12: false });
+  const formattedDate = endDateTime.toLocaleDateString('uk-UA');
+
+  // Преобразуем изображение A.png в base64
+  const imagePath = path.join(__dirname, 'public', 'images', 'A.png');
+  let imageBase64 = '';
+  try {
+    const imageBuffer = fs.readFileSync(imagePath);
+    imageBase64 = imageBuffer.toString('base64');
+  } catch (error) {
+    console.error('Error reading image A.png:', error);
+  }
+
   const resultHtml = `
     <!DOCTYPE html>
     <html lang="uk">
@@ -759,15 +737,31 @@ app.get('/result', checkAuth, async (req, res) => {
           const score = ${score};
           const totalPoints = ${totalPoints};
           const percentage = ${Math.round(percentage)};
+          const time = "${formattedTime}";
+          const date = "${formattedDate}";
+          const imageBase64 = "${imageBase64}";
 
           document.getElementById('exportPDF').addEventListener('click', () => {
             const docDefinition = {
               content: [
-                { text: 'Результат тесту користувача ' + user + ' з ' + testName + ' складає ' + percentage + '%', style: 'header' },
+                {
+                  image: 'data:image/png;base64,' + imageBase64,
+                  width: 150,
+                  alignment: 'center',
+                  margin: [0, 0, 0, 20]
+                },
+                { text: 'Результат тесту користувача ' + user + ' з тесту ' + testName + ' складає ' + percentage + '%', style: 'header' },
                 { text: 'Кількість питань: ' + totalQuestions },
                 { text: 'Правильних відповідей: ' + correctClicks },
                 { text: 'Набрано балів: ' + score },
-                { text: 'Максимально можлива кількість балів: ' + totalPoints }
+                { text: 'Максимально можлива кількість балів: ' + totalPoints },
+                {
+                  columns: [
+                    { text: 'Час: ' + time, width: '50%' },
+                    { text: 'Дата: ' + date, width: '50%', alignment: 'right' }
+                  ],
+                  margin: [0, 10, 0, 0]
+                }
               ],
               styles: {
                 header: { fontSize: 14, bold: true, margin: [0, 0, 0, 10] }
@@ -843,11 +837,26 @@ app.get('/results', checkAuth, async (req, res) => {
     });
 
     score = scoresPerQuestion.reduce((sum, s) => sum + s, 0);
-    const duration = Math.round((Date.now() - startTime) / 1000);
+    const endTime = Date.now();
+    const duration = Math.round((endTime - startTime) / 1000);
     const percentage = (score / totalPoints) * 100;
     const totalClicks = Object.keys(answers).length;
     const correctClicks = scoresPerQuestion.filter(s => s > 0).length;
     const totalQuestions = questions.length;
+
+    const endDateTime = new Date(endTime);
+    const formattedTime = endDateTime.toLocaleTimeString('uk-UA', { hour12: false });
+    const formattedDate = endDateTime.toLocaleDateString('uk-UA');
+
+    // Преобразуем изображение A.png в base64
+    const imagePath = path.join(__dirname, 'public', 'images', 'A.png');
+    let imageBase64 = '';
+    try {
+      const imageBuffer = fs.readFileSync(imagePath);
+      imageBase64 = imageBuffer.toString('base64');
+    } catch (error) {
+      console.error('Error reading image A.png:', error);
+    }
 
     resultsHtml += `
       <p>
@@ -897,16 +906,31 @@ app.get('/results', checkAuth, async (req, res) => {
         const score = ${score};
         const totalPoints = ${totalPoints};
         const percentage = ${Math.round(percentage)};
-        const duration = ${duration};
+        const time = "${formattedTime}";
+        const date = "${formattedDate}";
+        const imageBase64 = "${imageBase64}";
 
         document.getElementById('exportPDF').addEventListener('click', () => {
           const docDefinition = {
             content: [
-              { text: 'Результат тесту користувача ' + user + ' з ' + testName + ' складає ' + percentage + '%', style: 'header' },
+              {
+                image: 'data:image/png;base64,' + imageBase64,
+                width: 150,
+                alignment: 'center',
+                margin: [0, 0, 0, 20]
+              },
+              { text: 'Результат тесту користувача ' + user + ' з тесту ' + testName + ' складає ' + percentage + '%', style: 'header' },
               { text: 'Кількість питань: ' + totalQuestions },
               { text: 'Правильних відповідей: ' + correctClicks },
               { text: 'Набрано балів: ' + score },
-              { text: 'Максимально можлива кількість балів: ' + totalPoints }
+              { text: 'Максимально можлива кількість балів: ' + totalPoints },
+              {
+                columns: [
+                  { text: 'Час: ' + time, width: '50%' },
+                  { text: 'Дата: ' + date, width: '50%', alignment: 'right' }
+                ],
+                margin: [0, 10, 0, 0]
+              }
             ],
             styles: {
               header: { fontSize: 14, bold: true, margin: [0, 0, 0, 10] }

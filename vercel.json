@@ -11,6 +11,18 @@
         "src": "/(.*)",
         "dest": "app.js"
       }
-    ]
+    ],
+    "projects": [
+    {
+      "name": "alphatesting",
+      "gitRepository": {
+        "type": "github",
+        "repo": "alphacentertest/alphatesting"
+      },
+      "source": {
+        "branch": "main"
+      }
+    }
+  ]
   }
   
