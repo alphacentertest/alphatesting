@@ -26,7 +26,6 @@ let db;
   }
 })();
 
-let validPasswords = {};
 let isInitialized = false;
 let initializationError = null;
 let testNames = { 
@@ -105,6 +104,37 @@ const loadUsers = async () => {
   }
 };
 
+// Сохранение пользователей в MongoDB
+const saveUsersToMongo = async (users) => {
+  try {
+    await db.collection('users').deleteMany({});
+    const userDocs = Object.entries(users).map(([username, password]) => ({ username, password }));
+    if (userDocs.length > 0) {
+      await db.collection('users').insertMany(userDocs);
+      console.log('Users saved to MongoDB:', userDocs);
+    }
+  } catch (error) {
+    console.error('Error saving users to MongoDB:', error.stack);
+    throw error;
+  }
+};
+
+// Загрузка пользователей из MongoDB
+const loadUsersFromMongo = async () => {
+  try {
+    const userDocs = await db.collection('users').find({}).toArray();
+    const users = {};
+    userDocs.forEach(doc => {
+      users[doc.username] = doc.password;
+    });
+    console.log('Loaded users from MongoDB:', users);
+    return users;
+  } catch (error) {
+    console.error('Error loading users from MongoDB:', error.stack);
+    throw error;
+  }
+};
+
 const loadQuestions = async (testNumber) => {
   try {
     const filePath = path.join(__dirname, `questions${testNumber}.xlsx`);
@@ -157,8 +187,9 @@ const initializeServer = async () => {
   while (attempt <= maxAttempts) {
     try {
       console.log(`Starting server initialization (Attempt ${attempt} of ${maxAttempts})...`);
-      validPasswords = await loadUsers();
-      console.log('Users loaded successfully:', validPasswords);
+      const users = await loadUsers();
+      await saveUsersToMongo(users);
+      console.log('Users initialized successfully');
       isInitialized = true;
       initializationError = null;
       break;
@@ -189,9 +220,22 @@ app.post('/login', async (req, res) => {
   try {
     const { password } = req.body;
     if (!password) return res.status(400).json({ success: false, message: 'Пароль не вказано' });
-    console.log('Checking password:', password, 'against validPasswords:', validPasswords);
-    const user = Object.keys(validPasswords).find(u => validPasswords[u] === password);
-    if (!user) return res.status(401).json({ success: false, message: 'Невірний пароль' });
+
+    const validPasswords = await loadUsersFromMongo();
+    console.log('Checking password:', password);
+    console.log('validPasswords entries:', Object.entries(validPasswords));
+    console.log('validPasswords keys:', Object.keys(validPasswords));
+
+    const user = Object.keys(validPasswords).find(u => {
+      const match = validPasswords[u] === password;
+      console.log(`Comparing ${u}: ${validPasswords[u]} with ${password} -> ${match}`);
+      return match;
+    });
+
+    if (!user) {
+      console.log('Password not found in validPasswords');
+      return res.status(401).json({ success: false, message: 'Невірний пароль' });
+    }
 
     req.session.user = user;
     console.log('Session after setting user:', req.session);
@@ -212,7 +256,7 @@ const checkAuth = (req, res, next) => {
   console.log('checkAuth: Cookies:', req.cookies);
   const user = req.session.user;
   console.log('checkAuth: user from session:', user);
-  if (!user || !validPasswords[user]) {
+  if (!user) {
     console.log('checkAuth: No valid auth, redirecting to /');
     return res.redirect('/');
   }
