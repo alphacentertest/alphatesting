@@ -4,10 +4,27 @@ const cookieParser = require('cookie-parser');
 const path = require('path');
 const ExcelJS = require('exceljs');
 const session = require('express-session');
-const FileStore = require('session-file-store')(session);
+const MongoStore = require('connect-mongo');
+const { MongoClient } = require('mongodb');
 const fs = require('fs');
 
 const app = express();
+
+// Подключение к MongoDB
+const MONGO_URL = process.env.MONGO_URL || 'mongodb+srv://romanhaleckij7:DNMaH9w2X4gel3Xc@cluster0.r93r1p8.mongodb.net/testdb?retryWrites=true&w=majority';
+const client = new MongoClient(MONGO_URL);
+let db;
+
+(async () => {
+  try {
+    await client.connect();
+    console.log('Connected to MongoDB');
+    db = client.db('testdb');
+  } catch (error) {
+    console.error('Failed to connect to MongoDB:', error);
+    process.exit(1);
+  }
+})();
 
 let validPasswords = {};
 let isInitialized = false;
@@ -24,15 +41,19 @@ app.use(express.static(path.join(__dirname, 'public')));
 app.use(cookieParser());
 
 app.use(session({
-  store: new FileStore({ path: './sessions' }), // Store sessions in ./sessions directory
-  secret: process.env.SESSION_SECRET,
+  store: MongoStore.create({ 
+    mongoUrl: MONGO_URL,
+    collectionName: 'sessions',
+    ttl: 24 * 60 * 60 // 24 hours in seconds
+  }),
+  secret: process.env.SESSION_SECRET || 'a1b2c3d4e5f6g7h8i9j0k1l2m3n4o5p6q7r8s9t0',
   resave: false,
   saveUninitialized: false,
   cookie: { 
     secure: process.env.NODE_ENV === 'production',
     httpOnly: true,
     sameSite: process.env.NODE_ENV === 'production' ? 'none' : 'lax',
-    maxAge: 24 * 60 * 60 * 1000
+    maxAge: 24 * 60 * 60 * 1000 // 24 hours
   }
 }));
 
@@ -105,10 +126,10 @@ const loadQuestions = async (testNumber) => {
         jsonData.push({
           picture: picture.match(/^Picture (\d+)/i) ? `/images/Picture ${picture.match(/^Picture (\d+)/i)[1]}.png` : null,
           text: questionText,
-          options: rowValues.slice(2, 8).filter(Boolean),
-          correctAnswers: rowValues.slice(8, 11).filter(Boolean),
-          type: rowValues[11] || 'multiple',
-          points: Number(rowValues[12]) || 0
+          options: rowValues.slice(2, 8).filter(Boolean).map(String),
+          correctAnswers: rowValues.slice(8, 11).filter(Boolean).map(String),
+          type: String(rowValues[11] || 'multiple').toLowerCase(),
+          points: Number(rowValues[12]) || 1
         });
       }
     });
@@ -213,7 +234,7 @@ app.get('/select-test', checkAuth, (req, res) => {
   if (req.user === 'admin') return res.redirect('/admin');
   res.send(`
     <!DOCTYPE html>
-    <html>
+    <html lang="uk">
       <head>
         <meta charset="UTF-8">
         <title>Вибір тесту</title>
@@ -237,50 +258,35 @@ const userTests = new Map();
 
 const saveResult = async (user, testNumber, score, totalPoints, startTime, endTime) => {
   try {
-    if (!redisClient.isOpen) {
-      console.log('Redis not connected in saveResult, attempting to reconnect...');
-      await redisClient.connect();
-      console.log('Reconnected to Redis in saveResult');
-    }
-    const keyType = await redisClient.type('test_results');
-    console.log('Type of test_results before save:', keyType);
-    if (keyType !== 'list' && keyType !== 'none') {
-      console.log('Incorrect type detected, clearing test_results');
-      await redisClient.del('test_results');
-      console.log('test_results cleared, new type:', await redisClient.type('test_results'));
-    }
-
+    const duration = Math.round((endTime - startTime) / 1000);
     const userTest = userTests.get(user);
     const answers = userTest ? userTest.answers : {};
     const questions = userTest ? userTest.questions : [];
     const scoresPerQuestion = questions.map((q, index) => {
       const userAnswer = answers[index];
       let questionScore = 0;
-      if (!q.options || q.options.length === 0) {
-        if (userAnswer && String(userAnswer).trim().toLowerCase() === String(q.correctAnswers[0]).trim().toLowerCase()) {
+      if (q.type === 'multiple' && userAnswer && Array.isArray(userAnswer)) {
+        const correctAnswers = q.correctAnswers.map(String).map(val => val.trim().toLowerCase());
+        const userAnswers = userAnswer.map(String).map(val => val.trim().toLowerCase());
+        if (correctAnswers.length === userAnswers.length && 
+            correctAnswers.every(val => userAnswers.includes(val)) && 
+            userAnswers.every(val => correctAnswers.includes(val))) {
           questionScore = q.points;
         }
-      } else {
-        if (q.type === 'multiple' && userAnswer && userAnswer.length > 0) {
-          const correctAnswers = q.correctAnswers.map(String);
-          const userAnswers = userAnswer.map(String);
-          if (correctAnswers.length === userAnswers.length && 
-              correctAnswers.every(val => userAnswers.includes(val)) && 
-              userAnswers.every(val => correctAnswers.includes(val))) {
-            questionScore = q.points;
-          }
-        } else if (q.type === 'ordering' && userAnswer && userAnswer.length === q.correctAnswers.length) {
-          const userAnswers = userAnswer.map(String).map(val => val.trim().toLowerCase());
-          const correctAnswers = q.correctAnswers.map(String).map(val => val.trim().toLowerCase());
-          if (userAnswers.join(',') === correctAnswers.join(',')) {
-            questionScore = q.points;
-          }
+      } else if (q.type === 'input' && userAnswer) {
+        if (String(userAnswer).trim().toLowerCase() === String(q.correctAnswers[0]).trim().toLowerCase()) {
+          questionScore = q.points;
+        }
+      } else if (q.type === 'ordering' && userAnswer && Array.isArray(userAnswer)) {
+        const userAnswers = userAnswer.map(String).map(val => val.trim().toLowerCase());
+        const correctAnswers = q.correctAnswers.map(String).map(val => val.trim().toLowerCase());
+        if (userAnswers.join(',') === correctAnswers.join(',')) {
+          questionScore = q.points;
         }
       }
       return questionScore;
     });
 
-    const duration = Math.round((endTime - startTime) / 1000);
     const result = {
       user,
       testNumber,
@@ -292,12 +298,11 @@ const saveResult = async (user, testNumber, score, totalPoints, startTime, endTi
       answers,
       scoresPerQuestion
     };
-    console.log('Saving result to Redis:', result);
-    await redisClient.lPush('test_results', JSON.stringify(result));
-    console.log(`Successfully saved result for ${user} in Redis`);
-    console.log('Type of test_results after save:', await redisClient.type('test_results'));
+    console.log('Saving result to MongoDB:', result);
+    await db.collection('test_results').insertOne(result);
+    console.log(`Successfully saved result for ${user} in MongoDB`);
   } catch (error) {
-    console.error('Ошибка сохранения в Redis:', error.stack);
+    console.error('Ошибка сохранения в MongoDB:', error.stack);
   }
 };
 
@@ -350,23 +355,24 @@ app.get('/test/question', checkAuth, (req, res) => {
 
   let html = `
     <!DOCTYPE html>
-    <html>
+    <html lang="uk">
       <head>
         <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
         <title>${testNames[testNumber].name}</title>
         <style>
-          body { font-size: 32px; margin: 0; padding: 20px; padding-bottom: 80px; }
-          img { max-width: 300px; }
-          .option-box { border: 2px solid #ccc; padding: 10px; margin: 5px 0; border-radius: 5px; cursor: pointer; }
+          body { font-family: Arial, sans-serif; margin: 0; padding: 20px; padding-bottom: 80px; background-color: #f0f0f0; }
+          img { max-width: 300px; margin-bottom: 10px; }
           .progress-bar { display: flex; align-items: center; margin-bottom: 20px; }
           .progress-line { flex-grow: 1; height: 2px; background-color: #ccc; }
           .progress-circle { width: 30px; height: 30px; border-radius: 50%; display: flex; align-items: center; justify-content: center; margin: 0 5px; }
           .progress-circle.unanswered { background-color: red; color: white; }
           .progress-circle.answered { background-color: green; color: white; }
           .progress-line.answered { background-color: green; }
+          .option-box { border: 2px solid #ccc; padding: 10px; margin: 5px 0; border-radius: 5px; cursor: pointer; font-size: 16px; }
           .option-box.selected { background-color: #90ee90; }
           .button-container { position: fixed; bottom: 20px; left: 20px; right: 20px; display: flex; justify-content: space-between; }
-          button { font-size: 32px; padding: 10px 20px; border: none; cursor: pointer; }
+          button { padding: 10px 20px; margin: 5px; border: none; cursor: pointer; border-radius: 5px; font-size: 16px; }
           .back-btn { background-color: red; color: white; }
           .next-btn { background-color: blue; color: white; }
           .finish-btn { background-color: green; color: white; }
@@ -376,7 +382,9 @@ app.get('/test/question', checkAuth, (req, res) => {
           #confirm-modal button { margin: 0 10px; }
           .question-box { border: 2px solid #ccc; padding: 10px; margin: 5px 0; border-radius: 5px; cursor: pointer; }
           .question-box.selected { background-color: #90ee90; }
-          .instruction { font-style: italic; color: #555; }
+          .instruction { font-style: italic; color: #555; margin-bottom: 10px; font-size: 18px; }
+          .option-box.draggable { cursor: move; }
+          .option-box.dragging { opacity: 0.5; }
         </style>
       </head>
       <body>
@@ -388,7 +396,7 @@ app.get('/test/question', checkAuth, (req, res) => {
             ${i < progress.length - 1 ? '<div class="progress-line ' + (p.answered ? 'answered' : '') + '"></div>' : ''}
           `).join('')}
         </div>
-        <div>
+        <div id="question-container">
   `;
   if (q.picture) {
     html += `<img src="${q.picture}" alt="Picture" onerror="this.src='/images/placeholder.png'; console.log('Image failed to load: ${q.picture}')"><br>`;
@@ -399,22 +407,23 @@ app.get('/test/question', checkAuth, (req, res) => {
                          q.type === 'ordering' ? 'Розташуйте відповіді у правильній послідовності' : '';
   html += `
           <div class="question-box ${answers[index] ? 'selected' : ''}" onclick="this.classList.toggle('selected')">
-            <p>${index + 1}. ${q.text}</p>
+            <h2 id="question-text">${index + 1}. ${q.text}</h2>
           </div>
-          <p class="instruction">${instructionText}</p>
+          <p id="instruction" class="instruction">${instructionText}</p>
+          <div id="answers">
   `;
 
   if (!q.options || q.options.length === 0) {
     const userAnswer = answers[index] || '';
     html += `
-      <input type="text" name="q${index}" id="q${index}_input" value="${userAnswer}" placeholder="Введіть відповідь"><br>
+      <input type="text" name="q${index}" id="q${index}_input" value="${userAnswer}" placeholder="Введіть відповідь" class="answer-option"><br>
     `;
   } else {
     if (q.type === 'ordering') {
       html += `
         <div id="sortable-options">
           ${(answers[index] || q.options).map((option, optIndex) => `
-            <div class="option-box" data-value="${option}">
+            <div class="option-box draggable" data-value="${option}">
               ${option}
             </div>
           `).join('')}
@@ -434,10 +443,11 @@ app.get('/test/question', checkAuth, (req, res) => {
   }
 
   html += `
+          </div>
+          <button id="submit-answer" class="next-btn" ${index === questions.length - 1 ? 'disabled' : ''}>Далі</button>
         </div>
         <div class="button-container">
           <button class="back-btn" ${index === 0 ? 'disabled' : ''} onclick="window.location.href='/test/question?index=${index - 1}'">Назад</button>
-          <button class="next-btn" ${index === questions.length - 1 ? 'disabled' : ''} onclick="saveAndNext(${index})">Вперед</button>
           <button class="finish-btn" onclick="showConfirm(${index})">Завершити тест</button>
         </div>
         <div id="confirm-modal">
@@ -472,6 +482,7 @@ app.get('/test/question', checkAuth, (req, res) => {
             });
           });
 
+          document.getElementById('submit-answer').addEventListener('click', () => saveAndNext(${index}));
           async function saveAndNext(index) {
             let answers;
             if (document.querySelector('input[type="text"][name="q' + index + '"]')) {
@@ -522,15 +533,15 @@ app.get('/test/question', checkAuth, (req, res) => {
             let dragged;
             sortable.addEventListener('dragstart', (e) => {
               dragged = e.target;
-              e.target.style.opacity = 0.5;
+              e.target.classList.add('dragging');
             });
             sortable.addEventListener('dragend', (e) => {
-              e.target.style.opacity = '';
+              e.target.classList.remove('dragging');
             });
             sortable.addEventListener('dragover', (e) => e.preventDefault());
             sortable.addEventListener('drop', (e) => {
               e.preventDefault();
-              if (e.target.className === 'option-box') {
+              if (e.target.className.includes('option-box')) {
                 const target = e.target;
                 if (dragged !== target) {
                   const allItems = Array.from(sortable.children);
@@ -576,67 +587,42 @@ app.get('/result', checkAuth, async (req, res) => {
   let score = 0;
   const totalPoints = questions.reduce((sum, q) => sum + q.points, 0);
 
-  questions.forEach((q, index) => {
+  const scoresPerQuestion = questions.map((q, index) => {
     const userAnswer = answers[index];
-    if (!q.options || q.options.length === 0) {
-      if (userAnswer && String(userAnswer).trim().toLowerCase() === String(q.correctAnswers[0]).trim().toLowerCase()) {
-        score += q.points;
+    let questionScore = 0;
+    if (q.type === 'multiple' && userAnswer && Array.isArray(userAnswer)) {
+      const correctAnswers = q.correctAnswers.map(String).map(val => val.trim().toLowerCase());
+      const userAnswers = userAnswer.map(String).map(val => val.trim().toLowerCase());
+      if (correctAnswers.length === userAnswers.length && 
+          correctAnswers.every(val => userAnswers.includes(val)) && 
+          userAnswers.every(val => correctAnswers.includes(val))) {
+        questionScore = q.points;
       }
-    } else if (q.type === 'multiple') {
-      if (userAnswer && Array.isArray(userAnswer) && userAnswer.length > 0) {
-        const correctAnswers = q.correctAnswers.map(String).map(val => val.trim().toLowerCase());
-        const userAnswers = userAnswer.map(String).map(val => val.trim().toLowerCase());
-        if (correctAnswers.length === userAnswers.length && 
-            correctAnswers.every(val => userAnswers.includes(val)) && 
-            userAnswers.every(val => correctAnswers.includes(val))) {
-          score += q.points;
-        }
+    } else if (q.type === 'input' && userAnswer) {
+      if (String(userAnswer).trim().toLowerCase() === String(q.correctAnswers[0]).trim().toLowerCase()) {
+        questionScore = q.points;
       }
-    } else if (q.type === 'ordering') {
-      if (userAnswer && Array.isArray(userAnswer) && userAnswer.length === q.correctAnswers.length) {
-        const userAnswers = userAnswer.map(String).map(val => val.trim().toLowerCase());
-        const correctAnswers = q.correctAnswers.map(String).map(val => val.trim().toLowerCase());
-        if (userAnswers.join(',') === correctAnswers.join(',')) {
-          score += q.points;
-        }
+    } else if (q.type === 'ordering' && userAnswer && Array.isArray(userAnswer)) {
+      const userAnswers = userAnswer.map(String).map(val => val.trim().toLowerCase());
+      const correctAnswers = q.correctAnswers.map(String).map(val => val.trim().toLowerCase());
+      if (userAnswers.join(',') === correctAnswers.join(',')) {
+        questionScore = q.points;
       }
     }
+    return questionScore;
   });
 
+  score = scoresPerQuestion.reduce((sum, s) => sum + s, 0);
   const endTime = Date.now();
   await saveResult(req.user, testNumber, score, totalPoints, startTime, endTime);
 
   const percentage = (score / totalPoints) * 100;
   const totalClicks = Object.keys(answers).length;
-  const correctClicks = questions.reduce((count, q, index) => {
-    const userAnswer = answers[index];
-    if (!q.options || q.options.length === 0) {
-      return count + (userAnswer && String(userAnswer).trim().toLowerCase() === String(q.correctAnswers[0]).trim().toLowerCase() ? 1 : 0);
-    } else if (q.type === 'multiple') {
-      if (userAnswer && Array.isArray(userAnswer) && userAnswer.length > 0) {
-        const correctAnswers = q.correctAnswers.map(String).map(val => val.trim().toLowerCase());
-        const userAnswers = userAnswer.map(String).map(val => val.trim().toLowerCase());
-        if (correctAnswers.length === userAnswers.length && 
-            correctAnswers.every(val => userAnswers.includes(val)) && 
-            userAnswers.every(val => correctAnswers.includes(val))) {
-          return count + 1;
-        }
-      }
-    } else if (q.type === 'ordering') {
-      if (userAnswer && Array.isArray(userAnswer) && userAnswer.length === q.correctAnswers.length) {
-        const userAnswers = userAnswer.map(String).map(val => val.trim().toLowerCase());
-        const correctAnswers = q.correctAnswers.map(String).map(val => val.trim().toLowerCase());
-        if (userAnswers.join(',') === correctAnswers.join(',')) {
-          return count + 1;
-        }
-      }
-    }
-    return count;
-  }, 0);
+  const correctClicks = scoresPerQuestion.filter(s => s > 0).length;
 
   const resultHtml = `
     <!DOCTYPE html>
-    <html>
+    <html lang="uk">
       <head>
         <meta charset="UTF-8">
         <title>Результати ${testNames[testNumber].name}</title>
@@ -710,7 +696,7 @@ app.get('/results', checkAuth, async (req, res) => {
   const userTest = userTests.get(req.user);
   let resultsHtml = `
     <!DOCTYPE html>
-    <html>
+    <html lang="uk">
       <head>
         <meta charset="UTF-8">
         <title>Результати</title>
@@ -719,6 +705,8 @@ app.get('/results', checkAuth, async (req, res) => {
           table { border-collapse: collapse; width: 100%; margin-top: 20px; }
           th, td { border: 1px solid black; padding: 8px; text-align: left; }
           th { background-color: #f2f2f2; }
+          .error { color: red; }
+          .answers { white-space: pre-wrap; max-width: 300px; overflow-wrap: break-word; line-height: 1.8; }
           .buttons { margin-top: 20px; }
           button { padding: 10px 20px; margin: 5px; cursor: pointer; border: none; border-radius: 5px; font-size: 16px; }
           #exportPDF { background-color: #ffeb3b; }
@@ -739,37 +727,33 @@ app.get('/results', checkAuth, async (req, res) => {
     const scoresPerQuestion = questions.map((q, index) => {
       const userAnswer = answers[index];
       let questionScore = 0;
-      if (!q.options || q.options.length === 0) {
-        if (userAnswer && String(userAnswer).trim().toLowerCase() === String(q.correctAnswers[0]).trim().toLowerCase()) {
+      if (q.type === 'multiple' && userAnswer && Array.isArray(userAnswer)) {
+        const correctAnswers = q.correctAnswers.map(String).map(val => val.trim().toLowerCase());
+        const userAnswers = userAnswer.map(String).map(val => val.trim().toLowerCase());
+        if (correctAnswers.length === userAnswers.length && 
+            correctAnswers.every(val => userAnswers.includes(val)) && 
+            userAnswers.every(val => correctAnswers.includes(val))) {
           questionScore = q.points;
         }
-      } else if (q.type === 'multiple') {
-        if (userAnswer && Array.isArray(userAnswer) && userAnswer.length > 0) {
-          const correctAnswers = q.correctAnswers.map(String).map(val => val.trim().toLowerCase());
-          const userAnswers = userAnswer.map(String).map(val => val.trim().toLowerCase());
-          if (correctAnswers.length === userAnswers.length && 
-              correctAnswers.every(val => userAnswers.includes(val)) && 
-              userAnswers.every(val => correctAnswers.includes(val))) {
-            questionScore = q.points;
-          }
+      } else if (q.type === 'input' && userAnswer) {
+        if (String(userAnswer).trim().toLowerCase() === String(q.correctAnswers[0]).trim().toLowerCase()) {
+          questionScore = q.points;
         }
-      } else if (q.type === 'ordering') {
-        if (userAnswer && Array.isArray(userAnswer) && userAnswer.length === q.correctAnswers.length) {
-          const userAnswers = userAnswer.map(String).map(val => val.trim().toLowerCase());
-          const correctAnswers = q.correctAnswers.map(String).map(val => val.trim().toLowerCase());
-          if (userAnswers.join(',') === correctAnswers.join(',')) {
-            questionScore = q.points;
-          }
+      } else if (q.type === 'ordering' && userAnswer && Array.isArray(userAnswer)) {
+        const userAnswers = userAnswer.map(String).map(val => val.trim().toLowerCase());
+        const correctAnswers = q.correctAnswers.map(String).map(val => val.trim().toLowerCase());
+        if (userAnswers.join(',') === correctAnswers.join(',')) {
+          questionScore = q.points;
         }
       }
       return questionScore;
     });
 
     score = scoresPerQuestion.reduce((sum, s) => sum + s, 0);
+    const duration = Math.round((Date.now() - startTime) / 1000);
     const percentage = (score / totalPoints) * 100;
     const totalClicks = Object.keys(answers).length;
     const correctClicks = scoresPerQuestion.filter(s => s > 0).length;
-    const duration = Math.round((Date.now() - startTime) / 1000);
 
     resultsHtml += `
       <p>
@@ -859,7 +843,7 @@ app.get('/results', checkAuth, async (req, res) => {
 app.get('/admin', checkAuth, checkAdmin, (req, res) => {
   res.send(`
     <!DOCTYPE html>
-    <html>
+    <html lang="uk">
       <head>
         <meta charset="UTF-8">
         <title>Адмін-панель</title>
@@ -884,33 +868,22 @@ app.get('/admin/results', checkAuth, checkAdmin, async (req, res) => {
   let results = [];
   let errorMessage = '';
   try {
-    if (!redisClient.isOpen) {
-      console.log('Redis not connected in /admin/results, attempting to reconnect...');
-      await redisClient.connect();
-      console.log('Reconnected to Redis in /admin/results');
-    }
-    const keyType = await redisClient.type('test_results');
-    console.log('Type of test_results:', keyType);
-    if (keyType !== 'list' && keyType !== 'none') {
-      errorMessage = `Неверный тип данных для test_results: ${keyType}. Ожидается list.`;
-      console.error(errorMessage);
-    } else {
-      results = await redisClient.lRange('test_results', 0, -1);
-      console.log('Fetched results from Redis:', results);
-    }
+    results = await db.collection('test_results').find({}).toArray();
+    console.log('Fetched results from MongoDB:', results);
   } catch (fetchError) {
-    console.error('Ошибка при получении данных из Redis:', fetchError);
-    errorMessage = `Ошибка Redis: ${fetchError.message}`;
+    console.error('Ошибка при получении данных из MongoDB:', fetchError);
+    errorMessage = `Ошибка MongoDB: ${fetchError.message}`;
   }
 
   let adminHtml = `
     <!DOCTYPE html>
-    <html>
+    <html lang="uk">
       <head>
         <meta charset="UTF-8">
         <title>Результати всіх користувачів</title>
         <style>
-          table { border-collapse: collapse; width: 100%; }
+          body { font-family: Arial, sans-serif; padding: 20px; }
+          table { border-collapse: collapse; width: 100%; margin-top: 20px; }
           th, td { border: 1px solid black; padding: 8px; text-align: left; }
           th { background-color: #f2f2f2; }
           .error { color: red; }
@@ -942,47 +915,41 @@ app.get('/admin/results', checkAuth, checkAdmin, async (req, res) => {
     adminHtml += '<tr><td colspan="9">Немає результатів</td></tr>';
     console.log('No results found in test_results');
   } else {
-    results.forEach((result, index) => {
-      try {
-        const r = JSON.parse(result);
-        console.log(`Parsed result ${index}:`, r);
-        const answersDisplay = r.answers 
-          ? Object.entries(r.answers).map(([q, a], i) => 
-              `Питання ${parseInt(q) + 1}: ${Array.isArray(a) ? a.join(', ') : a} (${r.scoresPerQuestion[i] || 0} балів)`
-            ).join('\n')
-          : 'Немає відповідей';
-        const formatDateTime = (isoString) => {
-          if (!isoString) return 'N/A';
-          const date = new Date(isoString);
-          return `${date.toLocaleTimeString('uk-UA', { hour12: false })} ${date.toLocaleDateString('uk-UA')}`;
-        };
-        adminHtml += `
-          <tr>
-            <td>${r.user || 'N/A'}</td>
-            <td>${testNames[r.testNumber]?.name || 'N/A'}</td>
-            <td>${r.score || '0'}</td>
-            <td>${r.totalPoints || '0'}</td>
-            <td>${formatDateTime(r.startTime)}</td>
-            <td>${formatDateTime(r.endTime)}</td>
-            <td>${r.duration || 'N/A'}</td>
-            <td class="answers">${answersDisplay}</td>
-            <td><button class="delete-btn" onclick="deleteResult(${index})">🗑️ Видалити</button></td>
-          </tr>
-        `;
-      } catch (parseError) {
-        console.error(`Ошибка парсинга результата ${index}:`, parseError, 'Raw data:', result);
-      }
+    results.forEach((r, index) => {
+      const answersDisplay = r.answers 
+        ? Object.entries(r.answers).map(([q, a], i) => 
+            `Питання ${parseInt(q) + 1}: ${Array.isArray(a) ? a.join(', ') : a} (${r.scoresPerQuestion[i] || 0} балів)`
+          ).join('\n')
+        : 'Немає відповідей';
+      const formatDateTime = (isoString) => {
+        if (!isoString) return 'N/A';
+        const date = new Date(isoString);
+        return `${date.toLocaleTimeString('uk-UA', { hour12: false })} ${date.toLocaleDateString('uk-UA')}`;
+      };
+      adminHtml += `
+        <tr>
+          <td>${r.user || 'N/A'}</td>
+          <td>${testNames[r.testNumber]?.name || 'N/A'}</td>
+          <td>${r.score || '0'}</td>
+          <td>${r.totalPoints || '0'}</td>
+          <td>${formatDateTime(r.startTime)}</td>
+          <td>${formatDateTime(r.endTime)}</td>
+          <td>${r.duration || 'N/A'}</td>
+          <td class="answers">${answersDisplay}</td>
+          <td><button class="delete-btn" onclick="deleteResult('${r._id}')">🗑️ Видалити</button></td>
+        </tr>
+      `;
     });
   }
   adminHtml += `
         <button onclick="window.location.href='/admin'">Повернутися до адмін-панелі</button>
         <script>
-          async function deleteResult(index) {
+          async function deleteResult(id) {
             if (confirm('Ви впевнені, що хочете видалити цей результат?')) {
               await fetch('/admin/delete-result', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ index })
+                body: JSON.stringify({ id })
               });
               window.location.reload();
             }
@@ -996,15 +963,9 @@ app.get('/admin/results', checkAuth, checkAdmin, async (req, res) => {
 
 app.post('/admin/delete-result', checkAuth, checkAdmin, async (req, res) => {
   try {
-    const { index } = req.body;
-    if (!redisClient.isOpen) {
-      await redisClient.connect();
-    }
-    const results = await redisClient.lRange('test_results', 0, -1);
-    if (index >= 0 && index < results.length) {
-      await redisClient.lRem('test_results', 1, results[index]);
-      console.log(`Result at index ${index} deleted from Redis`);
-    }
+    const { id } = req.body;
+    await db.collection('test_results').deleteOne({ _id: new require('mongodb').ObjectId(id) });
+    console.log(`Result with id ${id} deleted from MongoDB`);
     res.json({ success: true });
   } catch (error) {
     console.error('Ошибка при удалении результата:', error.stack);
@@ -1014,14 +975,11 @@ app.post('/admin/delete-result', checkAuth, checkAdmin, async (req, res) => {
 
 app.get('/admin/delete-results', checkAuth, checkAdmin, async (req, res) => {
   try {
-    if (!redisClient.isOpen) {
-      await redisClient.connect();
-    }
-    await redisClient.del('test_results');
-    console.log('Test results deleted from Redis');
+    await db.collection('test_results').deleteMany({});
+    console.log('Test results deleted from MongoDB');
     res.send(`
       <!DOCTYPE html>
-      <html>
+      <html lang="uk">
         <head>
           <meta charset="UTF-8">
           <title>Видалено результати</title>
@@ -1041,7 +999,7 @@ app.get('/admin/delete-results', checkAuth, checkAdmin, async (req, res) => {
 app.get('/admin/edit-tests', checkAuth, checkAdmin, (req, res) => {
   res.send(`
     <!DOCTYPE html>
-    <html>
+    <html lang="uk">
       <head>
         <meta charset="UTF-8">
         <title>Редагувати назви тестів</title>
@@ -1098,7 +1056,7 @@ app.post('/admin/edit-tests', checkAuth, checkAdmin, (req, res) => {
     console.log('Updated test names and time limits:', testNames);
     res.send(`
       <!DOCTYPE html>
-      <html>
+      <html lang="uk">
         <head>
           <meta charset="UTF-8">
           <title>Назви оновлено</title>
@@ -1120,7 +1078,7 @@ app.get('/admin/create-test', checkAuth, checkAdmin, (req, res) => {
   console.log('Available Excel files:', excelFiles);
   res.send(`
     <!DOCTYPE html>
-    <html>
+    <html lang="uk">
       <head>
         <meta charset="UTF-8">
         <title>Створити новий тест</title>
@@ -1171,7 +1129,7 @@ app.post('/admin/create-test', checkAuth, checkAdmin, async (req, res) => {
     console.log('Created new test:', { testNumber, testName, timeLimit, excelFile });
     res.send(`
       <!DOCTYPE html>
-      <html>
+      <html lang="uk">
         <head>
           <meta charset="UTF-8">
           <title>Тест створено</title>
