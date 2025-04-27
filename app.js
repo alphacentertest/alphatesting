@@ -4,7 +4,7 @@ const cookieParser = require('cookie-parser');
 const path = require('path');
 const ExcelJS = require('exceljs');
 const session = require('express-session');
-const FileStore = require('session-file-store')(session);
+const MongoStore = require('connect-mongo');
 const { MongoClient } = require('mongodb');
 const fs = require('fs');
 
@@ -16,16 +16,17 @@ const client = new MongoClient(MONGO_URL);
 let db;
 
 // Синхронная инициализация MongoDB
-(async () => {
+const connectToMongoDB = async () => {
   try {
+    console.log('Attempting to connect to MongoDB...');
     await client.connect();
-    console.log('Connected to MongoDB');
+    console.log('Connected to MongoDB successfully');
     db = client.db('testdb');
   } catch (error) {
-    console.error('Failed to connect to MongoDB:', error);
-    process.exit(1);
+    console.error('Failed to connect to MongoDB:', error.message, error.stack);
+    throw error;
   }
-})();
+};
 
 let isInitialized = false;
 let initializationError = null;
@@ -41,10 +42,17 @@ app.use(express.static(path.join(__dirname, 'public')));
 app.use(cookieParser());
 
 app.use(session({
-  store: new FileStore({
-    path: './sessions', // Папка для хранения сессий
+  store: MongoStore.create({ 
+    mongoUrl: MONGO_URL,
+    collectionName: 'sessions',
     ttl: 24 * 60 * 60,
-    retries: 0
+    clientPromise: client.connect().then(() => {
+      console.log('MongoStore client connected successfully');
+      return client;
+    }).catch(err => {
+      console.error('MongoStore client connection error:', err.message, err.stack);
+      throw err;
+    })
   }),
   secret: process.env.SESSION_SECRET || 'a1b2c3d4e5f6g7h8i9j0k1l2m3n4o5p6q7r8s9t0',
   resave: false,
@@ -107,6 +115,10 @@ const loadUsers = async () => {
 
 const saveUsersToMongo = async (users) => {
   try {
+    if (!db) {
+      throw new Error('MongoDB connection not established');
+    }
+    console.log('Saving users to MongoDB...');
     await db.collection('users').deleteMany({});
     const userDocs = Object.entries(users).map(([username, password]) => ({ username, password }));
     if (userDocs.length > 0) {
@@ -114,7 +126,7 @@ const saveUsersToMongo = async (users) => {
       console.log('Users saved to MongoDB:', userDocs);
     }
   } catch (error) {
-    console.error('Error saving users to MongoDB:', error.stack);
+    console.error('Error saving users to MongoDB:', error.message, error.stack);
     throw error;
   }
 };
@@ -124,6 +136,7 @@ const loadUsersFromMongo = async () => {
     if (!db) {
       throw new Error('MongoDB connection not established');
     }
+    console.log('Loading users from MongoDB...');
     const userDocs = await db.collection('users').find({}).toArray();
     const users = {};
     userDocs.forEach(doc => {
@@ -132,7 +145,7 @@ const loadUsersFromMongo = async () => {
     console.log('Loaded users from MongoDB:', users);
     return users;
   } catch (error) {
-    console.error('Error loading users from MongoDB:', error.stack);
+    console.error('Error loading users from MongoDB:', error.message, error.stack);
     throw error;
   }
 };
@@ -140,6 +153,7 @@ const loadUsersFromMongo = async () => {
 const loadQuestions = async (testNumber) => {
   try {
     const filePath = path.join(__dirname, `questions${testNumber}.xlsx`);
+    console.log(`Attempting to load questions from: ${filePath}`);
     if (!fs.existsSync(filePath)) {
       throw new Error(`File questions${testNumber}.xlsx not found at path: ${filePath}`);
     }
@@ -173,7 +187,7 @@ const loadQuestions = async (testNumber) => {
     console.log(`Loaded questions for test ${testNumber}:`, jsonData);
     return jsonData;
   } catch (error) {
-    console.error(`Ошибка в loadQuestions (test ${testNumber}):`, error.stack);
+    console.error(`Ошибка в loadQuestions (test ${testNumber}):`, error.message, error.stack);
     throw error;
   }
 };
@@ -181,8 +195,10 @@ const loadQuestions = async (testNumber) => {
 const ensureInitialized = (req, res, next) => {
   if (!isInitialized) {
     if (initializationError) {
+      console.error('Server not initialized due to error:', initializationError.message, initializationError.stack);
       return res.status(500).json({ success: false, message: `Server initialization failed: ${initializationError.message}` });
     }
+    console.warn('Server is still initializing...');
     return res.status(503).json({ success: false, message: 'Server is initializing, please try again later' });
   }
   next();
@@ -191,6 +207,14 @@ const ensureInitialized = (req, res, next) => {
 const initializeServer = async () => {
   let attempt = 1;
   const maxAttempts = 5;
+
+  // Ждем завершения подключения к MongoDB
+  try {
+    await connectToMongoDB();
+  } catch (error) {
+    console.error('Failed to initialize server due to MongoDB connection error:', error.message, error.stack);
+    throw error;
+  }
 
   while (attempt <= maxAttempts) {
     try {
@@ -216,19 +240,30 @@ const initializeServer = async () => {
 };
 
 (async () => {
-  await initializeServer();
-  app.use(ensureInitialized);
+  try {
+    await initializeServer();
+    app.use(ensureInitialized);
+  } catch (error) {
+    console.error('Failed to start server due to initialization error:', error.message, error.stack);
+    process.exit(1);
+  }
 })();
 
 app.get('/', (req, res) => {
+  console.log('Serving index.html');
   res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
 
 app.post('/login', async (req, res) => {
   try {
+    console.log('Handling /login request...');
     const { password } = req.body;
-    if (!password) return res.status(400).json({ success: false, message: 'Пароль не вказано' });
+    if (!password) {
+      console.warn('Password not provided in /login request');
+      return res.status(400).json({ success: false, message: 'Пароль не вказано' });
+    }
 
+    console.log('Loading users from MongoDB for authentication...');
     const validPasswords = await loadUsersFromMongo();
     console.log('Checking password:', password, 'against validPasswords:', validPasswords);
     
@@ -239,7 +274,7 @@ app.post('/login', async (req, res) => {
     });
 
     if (!user) {
-      console.log('Password not found in validPasswords');
+      console.warn('Password not found in validPasswords');
       return res.status(401).json({ success: false, message: 'Невірний пароль' });
     }
 
@@ -250,24 +285,26 @@ app.post('/login', async (req, res) => {
 
     req.session.save(err => {
       if (err) {
-        console.error('Error saving session:', err);
+        console.error('Error saving session in /login:', err.message, err.stack);
         return res.status(500).json({ success: false, message: 'Помилка сервера' });
       }
       console.log('Session saved successfully');
       if (user === 'admin') {
+        console.log('Redirecting to /admin for user:', user);
         res.json({ success: true, redirect: '/admin' });
       } else {
+        console.log('Redirecting to /select-test for user:', user);
         res.json({ success: true, redirect: '/select-test' });
       }
     });
   } catch (error) {
-    console.error('Ошибка в /login:', error.stack);
+    console.error('Ошибка в /login:', error.message, error.stack);
     res.status(500).json({ success: false, message: 'Помилка сервера' });
   }
 });
 
 const checkAuth = (req, res, next) => {
-  console.log('checkAuth: Session data:', req.session);
+  console.log('checkAuth: Session.ConcurrentModificationException data:', req.session);
   console.log('checkAuth: Cookies:', req.cookies);
   console.log('checkAuth: Session ID:', req.sessionID);
   const user = req.session.user;
@@ -292,6 +329,7 @@ const checkAdmin = (req, res, next) => {
 
 app.get('/select-test', checkAuth, (req, res) => {
   if (req.user === 'admin') return res.redirect('/admin');
+  console.log('Serving /select-test for user:', req.user);
   res.send(`
     <!DOCTYPE html>
     <html lang="uk">
@@ -376,7 +414,7 @@ const saveResult = async (user, testNumber, score, totalPoints, startTime, endTi
     const insertResult = await db.collection('test_results').insertOne(result);
     console.log(`Successfully saved result for ${user} in MongoDB with ID:`, insertResult.insertedId);
   } catch (error) {
-    console.error('Ошибка сохранения в MongoDB:', error.stack);
+    console.error('Ошибка сохранения в MongoDB:', error.message, error.stack);
     throw error;
   }
 };
@@ -384,8 +422,12 @@ const saveResult = async (user, testNumber, score, totalPoints, startTime, endTi
 app.get('/test', checkAuth, async (req, res) => {
   if (req.user === 'admin') return res.redirect('/admin');
   const testNumber = req.query.test;
-  if (!testNames[testNumber]) return res.status(404).send('Тест не знайдено');
+  if (!testNames[testNumber]) {
+    console.warn(`Test ${testNumber} not found`);
+    return res.status(404).send('Тест не знайдено');
+  }
   try {
+    console.log(`Loading questions for test ${testNumber}...`);
     const questions = await loadQuestions(testNumber);
     userTests.set(req.user, {
       testNumber,
@@ -395,9 +437,10 @@ app.get('/test', checkAuth, async (req, res) => {
       startTime: Date.now(),
       timeLimit: testNames[testNumber].timeLimit * 1000
     });
+    console.log(`Redirecting to first question for user ${req.user}`);
     res.redirect(`/test/question?index=0`);
   } catch (error) {
-    console.error('Ошибка в /test:', error.stack);
+    console.error('Ошибка в /test:', error.message, error.stack);
     res.status(500).send('Помилка при завантаженні тесту');
   }
 });
@@ -405,12 +448,16 @@ app.get('/test', checkAuth, async (req, res) => {
 app.get('/test/question', checkAuth, (req, res) => {
   if (req.user === 'admin') return res.redirect('/admin');
   const userTest = userTests.get(req.user);
-  if (!userTest) return res.status(400).send('Тест не розпочато');
+  if (!userTest) {
+    console.warn(`Test not started for user ${req.user}`);
+    return res.status(400).send('Тест не розпочато');
+  }
 
   const { questions, testNumber, answers, currentQuestion, startTime, timeLimit } = userTest;
   const index = parseInt(req.query.index) || 0;
 
   if (index < 0 || index >= questions.length) {
+    console.warn(`Invalid question index ${index} for user ${req.user}`);
     return res.status(400).send('Невірний номер питання');
   }
 
@@ -435,7 +482,7 @@ app.get('/test/question', checkAuth, (req, res) => {
         <meta charset="UTF-8">
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
         <title>${testNames[testNumber].name}</title>
-        <script src="https://cdnjs.cloudflare.com/ajax/libs/Sortable/1.15.0/Sortable.min.js"></script>
+        <script src="https://cdnjs.cloudflare.com/ajax/libs/Sortable/1.15.0/Sortable.min.js" onerror="console.error('Failed to load Sortable.js')"></script>
         <style>
           body { font-family: Arial, sans-serif; margin: 0; padding: 20px; padding-bottom: 80px; background-color: #f0f0f0; }
           img { max-width: 300px; margin-bottom: 10px; }
@@ -608,15 +655,19 @@ app.get('/test/question', checkAuth, (req, res) => {
 
           const sortable = document.getElementById('sortable-options');
           if (sortable) {
-            new Sortable(sortable, {
-              animation: 150,
-              onStart: function(evt) {
-                console.log('Drag started on:', evt.item.dataset.value);
-              },
-              onEnd: function(evt) {
-                console.log('Drag ended:', evt.item.dataset.value, 'from index:', evt.oldIndex, 'to index:', evt.newIndex);
-              }
-            });
+            if (typeof Sortable === 'undefined') {
+              console.error('Sortable.js is not loaded');
+            } else {
+              new Sortable(sortable, {
+                animation: 150,
+                onStart: function(evt) {
+                  console.log('Drag started on:', evt.item.dataset.value);
+                },
+                onEnd: function(evt) {
+                  console.log('Drag ended:', evt.item.dataset.value, 'from index:', evt.oldIndex, 'to index:', evt.newIndex);
+                }
+              });
+            }
           } else {
             console.log('Sortable options not found');
           }
@@ -632,12 +683,15 @@ app.post('/answer', checkAuth, (req, res) => {
   try {
     const { index, answer } = req.body;
     const userTest = userTests.get(req.user);
-    if (!userTest) return res.status(400).json({ error: 'Тест не розпочато' });
+    if (!userTest) {
+      console.warn(`Test not started for user ${req.user} in /answer`);
+      return res.status(400).json({ error: 'Тест не розпочато' });
+    }
     userTest.answers[index] = answer;
     console.log(`Saved answer for user ${req.user}, question ${index}:`, answer);
     res.json({ success: true });
   } catch (error) {
-    console.error('Ошибка в /answer:', error.stack);
+    console.error('Ошибка в /answer:', error.message, error.stack);
     res.status(500).json({ error: 'Помилка сервера' });
   }
 });
@@ -645,7 +699,10 @@ app.post('/answer', checkAuth, (req, res) => {
 app.get('/result', checkAuth, async (req, res) => {
   if (req.user === 'admin') return res.redirect('/admin');
   const userTest = userTests.get(req.user);
-  if (!userTest) return res.status(400).json({ error: 'Тест не розпочато' });
+  if (!userTest) {
+    console.warn(`Test not started for user ${req.user} in /result`);
+    return res.status(400).json({ error: 'Тест не розпочато' });
+  }
 
   const { questions, answers, testNumber, startTime } = userTest;
   let score = 0;
@@ -683,7 +740,12 @@ app.get('/result', checkAuth, async (req, res) => {
   const correctClicks = scoresPerQuestion.filter(s => s > 0).length;
   const totalQuestions = questions.length;
 
-  await saveResult(req.user, testNumber, score, totalPoints, startTime, endTime, totalClicks, correctClicks, totalQuestions, percentage);
+  try {
+    await saveResult(req.user, testNumber, score, totalPoints, startTime, endTime, totalClicks, correctClicks, totalQuestions, percentage);
+  } catch (error) {
+    console.error('Error saving result in /result:', error.message, error.stack);
+    return res.status(500).send('Помилка при збереженні результату');
+  }
 
   const endDateTime = new Date(endTime);
   const formattedTime = endDateTime.toLocaleTimeString('uk-UA', { hour12: false });
@@ -696,7 +758,7 @@ app.get('/result', checkAuth, async (req, res) => {
     const imageBuffer = fs.readFileSync(imagePath);
     imageBase64 = imageBuffer.toString('base64');
   } catch (error) {
-    console.error('Error reading image A.png:', error);
+    console.error('Error reading image A.png:', error.message, error.stack);
   }
 
   const resultHtml = `
@@ -855,7 +917,7 @@ app.get('/results', checkAuth, async (req, res) => {
       const imageBuffer = fs.readFileSync(imagePath);
       imageBase64 = imageBuffer.toString('base64');
     } catch (error) {
-      console.error('Error reading image A.png:', error);
+      console.error('Error reading image A.png:', error.message, error.stack);
     }
 
     resultsHtml += `
@@ -958,6 +1020,7 @@ app.get('/results', checkAuth, async (req, res) => {
 });
 
 app.get('/admin', checkAuth, checkAdmin, (req, res) => {
+  console.log('Serving /admin for user:', req.user);
   res.send(`
     <!DOCTYPE html>
     <html lang="uk">
@@ -985,10 +1048,12 @@ app.get('/admin/results', checkAuth, checkAdmin, async (req, res) => {
   let results = [];
   let errorMessage = '';
   try {
-    results = await db.collection('test_results').find({}).toArray();
+    console.log('Fetching test results from MongoDB...');
+    // Сортируем результаты по endTime в порядке убывания (самые новые сверху)
+    results = await db.collection('test_results').find({}).sort({ endTime: -1 }).toArray();
     console.log('Fetched results from MongoDB:', results);
   } catch (fetchError) {
-    console.error('Ошибка при получении данных из MongoDB:', fetchError);
+    console.error('Ошибка при получении данных из MongoDB:', fetchError.message, fetchError.stack);
     errorMessage = `Ошибка MongoDB: ${fetchError.message}`;
   }
 
@@ -1081,17 +1146,19 @@ app.get('/admin/results', checkAuth, checkAdmin, async (req, res) => {
 app.post('/admin/delete-result', checkAuth, checkAdmin, async (req, res) => {
   try {
     const { id } = req.body;
+    console.log(`Deleting result with id ${id}...`);
     await db.collection('test_results').deleteOne({ _id: new require('mongodb').ObjectId(id) });
     console.log(`Result with id ${id} deleted from MongoDB`);
     res.json({ success: true });
   } catch (error) {
-    console.error('Ошибка при удалении результата:', error.stack);
+    console.error('Ошибка при удалении результата:', error.message, error.stack);
     res.status(500).json({ success: false, message: 'Помилка при видаленні результату' });
   }
 });
 
 app.get('/admin/delete-results', checkAuth, checkAdmin, async (req, res) => {
   try {
+    console.log('Deleting all test results...');
     await db.collection('test_results').deleteMany({});
     console.log('Test results deleted from MongoDB');
     res.send(`
@@ -1108,12 +1175,13 @@ app.get('/admin/delete-results', checkAuth, checkAdmin, async (req, res) => {
       </html>
     `);
   } catch (error) {
-    console.error('Ошибка при удалении результатов:', error.stack);
+    console.error('Ошибка при удалении результатов:', error.message, error.stack);
     res.status(500).send('Помилка при видаленні результатів');
   }
 });
 
 app.get('/admin/edit-tests', checkAuth, checkAdmin, (req, res) => {
+  console.log('Serving /admin/edit-tests for user:', req.user);
   res.send(`
     <!DOCTYPE html>
     <html lang="uk">
@@ -1157,6 +1225,7 @@ app.get('/admin/edit-tests', checkAuth, checkAdmin, (req, res) => {
 
 app.post('/admin/edit-tests', checkAuth, checkAdmin, (req, res) => {
   try {
+    console.log('Updating test names and time limits...');
     const { test1, test2, test3, time1, time2, time3 } = req.body;
     testNames['1'] = {
       name: test1 || testNames['1'].name,
@@ -1185,7 +1254,7 @@ app.post('/admin/edit-tests', checkAuth, checkAdmin, (req, res) => {
       </html>
     `);
   } catch (error) {
-    console.error('Ошибка при редактировании названий тестов:', error.stack);
+    console.error('Ошибка при редактировании названий тестов:', error.message, error.stack);
     res.status(500).send('Помилка при оновленні назв тестів');
   }
 });
@@ -1258,7 +1327,7 @@ app.post('/admin/create-test', checkAuth, checkAdmin, async (req, res) => {
       </html>
     `);
   } catch (error) {
-    console.error('Ошибка при создании нового теста:', error.stack);
+    console.error('Ошибка при создании нового теста:', error.message, error.stack);
     res.status(500).send(`Помилка при створенні тесту: ${error.message}`);
   }
 });
