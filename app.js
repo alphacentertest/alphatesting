@@ -45,7 +45,10 @@ app.use(session({
     mongoUrl: MONGO_URL,
     collectionName: 'sessions',
     ttl: 24 * 60 * 60,
-    clientPromise: client.connect().then(() => client).catch(err => {
+    clientPromise: client.connect().then(() => {
+      console.log('MongoStore client connected');
+      return client;
+    }).catch(err => {
       console.error('MongoStore client connection error:', err);
       throw err;
     })
@@ -54,7 +57,7 @@ app.use(session({
   resave: false,
   saveUninitialized: false,
   cookie: { 
-    secure: process.env.NODE_ENV === 'production' ? true : false,
+    secure: process.env.NODE_ENV === 'production' ? true : false, // Для отладки попробуем отключить secure
     httpOnly: true,
     sameSite: process.env.NODE_ENV === 'production' ? 'none' : 'lax',
     maxAge: 24 * 60 * 60 * 1000
@@ -325,10 +328,14 @@ const userTests = new Map();
 
 const saveResult = async (user, testNumber, score, totalPoints, startTime, endTime, totalClicks, correctClicks, totalQuestions, percentage) => {
   try {
+    console.log('Starting saveResult for user:', user, 'testNumber:', testNumber);
     const duration = Math.round((endTime - startTime) / 1000);
     const userTest = userTests.get(user);
+    console.log('User test data:', userTest);
     const answers = userTest ? userTest.answers : {};
     const questions = userTest ? userTest.questions : [];
+    console.log('Answers:', answers, 'Questions:', questions);
+
     const scoresPerQuestion = questions.map((q, index) => {
       const userAnswer = answers[index];
       let questionScore = 0;
@@ -500,7 +507,7 @@ app.get('/test/question', checkAuth, (req, res) => {
       html += `
         <div id="sortable-options">
           ${(answers[index] || q.options).map((option, optIndex) => `
-            <div class="option-box draggable" data-index="${optIndex}" data-value="${option}">
+            <div class="option-box draggable" draggable="true" data-index="${optIndex}" data-value="${option}">
               ${option}
             </div>
           `).join('')}
@@ -611,6 +618,7 @@ app.get('/test/question', checkAuth, (req, res) => {
             sortable.addEventListener('dragstart', (e) => {
               dragged = e.target;
               if (dragged.classList.contains('draggable')) {
+                console.log('Drag started on:', dragged.dataset.value);
                 e.dataTransfer.setData('text/plain', dragged.dataset.index);
                 dragged.classList.add('dragging');
                 e.preventDefault();
@@ -618,11 +626,13 @@ app.get('/test/question', checkAuth, (req, res) => {
             });
             sortable.addEventListener('dragend', (e) => {
               if (e.target.classList.contains('draggable')) {
+                console.log('Drag ended on:', e.target.dataset.value);
                 e.target.classList.remove('dragging');
               }
             });
             sortable.addEventListener('dragover', (e) => {
               e.preventDefault();
+              console.log('Drag over:', e.target);
             });
             sortable.addEventListener('drop', (e) => {
               e.preventDefault();
@@ -630,6 +640,7 @@ app.get('/test/question', checkAuth, (req, res) => {
               const draggedElement = sortable.querySelector('[data-index="' + draggedIndex + '"]');
               const dropTarget = e.target.closest('.draggable');
               if (draggedElement && dropTarget && draggedElement !== dropTarget) {
+                console.log('Dropped:', draggedElement.dataset.value, 'on:', dropTarget.dataset.value);
                 const allItems = Array.from(sortable.querySelectorAll('.draggable'));
                 const draggedPos = allItems.indexOf(draggedElement);
                 const dropPos = allItems.indexOf(dropTarget);
@@ -638,8 +649,12 @@ app.get('/test/question', checkAuth, (req, res) => {
                 } else {
                   dropTarget.before(draggedElement);
                 }
+              } else {
+                console.log('Drop failed:', { draggedElement, dropTarget });
               }
             });
+          } else {
+            console.log('Sortable options not found');
           }
         </script>
       </body>
@@ -718,7 +733,6 @@ app.get('/result', checkAuth, async (req, res) => {
           .buttons { margin-top: 20px; }
           button { padding: 10px 20px; margin: 5px; cursor: pointer; border: none; border-radius: 5px; font-size: 16px; }
           #exportPDF { background-color: #ffeb3b; }
-          #support { background-color: #42a5f5; }
           #restart { background-color: #ef5350; }
         </style>
         <script src="https://cdnjs.cloudflare.com/ajax/libs/pdfmake/0.2.7/pdfmake.min.js"></script>
@@ -735,10 +749,11 @@ app.get('/result', checkAuth, async (req, res) => {
         </p>
         <div class="buttons">
           <button id="exportPDF">Експортувати в PDF</button>
-          <button id="support">Підтримка на пошту</button>
           <button id="restart">Вихід</button>
         </div>
         <script>
+          const user = "${req.user}";
+          const testName = "${testNames[testNumber].name}";
           const totalQuestions = ${totalQuestions};
           const correctClicks = ${correctClicks};
           const score = ${score};
@@ -748,32 +763,17 @@ app.get('/result', checkAuth, async (req, res) => {
           document.getElementById('exportPDF').addEventListener('click', () => {
             const docDefinition = {
               content: [
-                { text: 'Результат тесту', style: 'header' },
-                { text: percentage + '%', style: 'subheader' },
+                { text: 'Результат тесту користувача ' + user + ' з ' + testName + ' складає ' + percentage + '%', style: 'header' },
                 { text: 'Кількість питань: ' + totalQuestions },
                 { text: 'Правильних відповідей: ' + correctClicks },
                 { text: 'Набрано балів: ' + score },
                 { text: 'Максимально можлива кількість балів: ' + totalPoints }
               ],
               styles: {
-                header: { fontSize: 18, bold: true, margin: [0, 0, 0, 10] },
-                subheader: { fontSize: 16, bold: true, margin: [0, 10, 0, 5] }
+                header: { fontSize: 14, bold: true, margin: [0, 0, 0, 10] }
               }
             };
             pdfMake.createPdf(docDefinition).download('result.pdf');
-          });
-
-          document.getElementById('support').addEventListener('click', () => {
-            const subject = encodeURIComponent('Проблема з тестом');
-            const body = encodeURIComponent(
-              'Проблема: Балли не нараховуються коректно.\\n' +
-              'Висота: ' + percentage + '%\\n' +
-              'Кількість питань: ' + totalQuestions + '\\n' +
-              'Правильних відповідей: ' + correctClicks + '\\n' +
-              'Набрано балів: ' + score + '\\n' +
-              'Максимально можлива кількість балів: ' + totalPoints
-            );
-            window.location.href = 'mailto:support@example.com?subject=' + subject + '&body=' + body;
           });
 
           document.getElementById('restart').addEventListener('click', () => {
@@ -805,7 +805,6 @@ app.get('/results', checkAuth, async (req, res) => {
           .buttons { margin-top: 20px; }
           button { padding: 10px 20px; margin: 5px; cursor: pointer; border: none; border-radius: 5px; font-size: 16px; }
           #exportPDF { background-color: #ffeb3b; }
-          #support { background-color: #42a5f5; }
           #restart { background-color: #ef5350; }
         </style>
       </head>
@@ -886,51 +885,34 @@ app.get('/results', checkAuth, async (req, res) => {
       </table>
       <div class="buttons">
         <button id="exportPDF">Експортувати в PDF</button>
-        <button id="support">Підтримка на пошту</button>
         <button id="restart">Повернутися на головну</button>
       </div>
       <script src="https://cdnjs.cloudflare.com/ajax/libs/pdfmake/0.2.7/pdfmake.min.js"></script>
       <script src="https://cdnjs.cloudflare.com/ajax/libs/pdfmake/0.2.7/vfs_fonts.js"></script>
       <script>
+        const user = "${req.user}";
+        const testName = "${testNames[testNumber].name}";
         const totalQuestions = ${totalQuestions};
         const correctClicks = ${correctClicks};
         const score = ${score};
         const totalPoints = ${totalPoints};
         const percentage = ${Math.round(percentage)};
         const duration = ${duration};
-        const testName = "${testNames[testNumber].name}";
 
         document.getElementById('exportPDF').addEventListener('click', () => {
           const docDefinition = {
             content: [
-              { text: 'Результат тесту: ' + testName, style: 'header' },
-              { text: percentage + '%', style: 'subheader' },
+              { text: 'Результат тесту користувача ' + user + ' з ' + testName + ' складає ' + percentage + '%', style: 'header' },
               { text: 'Кількість питань: ' + totalQuestions },
               { text: 'Правильних відповідей: ' + correctClicks },
               { text: 'Набрано балів: ' + score },
-              { text: 'Максимально можлива кількість балів: ' + totalPoints },
-              { text: 'Тривалість: ' + duration + ' сек' }
+              { text: 'Максимально можлива кількість балів: ' + totalPoints }
             ],
             styles: {
-              header: { fontSize: 18, bold: true, margin: [0, 0, 0, 10] },
-              subheader: { fontSize: 16, bold: true, margin: [0, 10, 0, 5] }
+              header: { fontSize: 14, bold: true, margin: [0, 0, 0, 10] }
             }
           };
           pdfMake.createPdf(docDefinition).download('results.pdf');
-        });
-
-        document.getElementById('support').addEventListener('click', () => {
-          const subject = encodeURIComponent('Проблема з тестом');
-          const body = encodeURIComponent(
-            'Проблема: Балли не нараховуються коректно.\\n' +
-            'Тест: ' + testName + '\\n' +
-            'Висота: ' + percentage + '%\\n' +
-            'Кількість питань: ' + totalQuestions + '\\n' +
-            'Правильних відповідей: ' + correctClicks + '\\n' +
-            'Набрано балів: ' + score + '\\n' +
-            'Максимально можлива кількість балів: ' + totalPoints
-          );
-          window.location.href = 'mailto:support@example.com?subject=' + subject + '&body=' + body;
         });
 
         document.getElementById('restart').addEventListener('click', () => {
