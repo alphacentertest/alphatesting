@@ -44,16 +44,20 @@ app.use(session({
   store: MongoStore.create({ 
     mongoUrl: MONGO_URL,
     collectionName: 'sessions',
-    ttl: 24 * 60 * 60 // 24 hours in seconds
+    ttl: 24 * 60 * 60,
+    clientPromise: client.connect().then(() => client).catch(err => {
+      console.error('MongoStore client connection error:', err);
+      throw err;
+    })
   }),
   secret: process.env.SESSION_SECRET || 'a1b2c3d4e5f6g7h8i9j0k1l2m3n4o5p6q7r8s9t0',
   resave: false,
   saveUninitialized: false,
   cookie: { 
-    secure: process.env.NODE_ENV === 'production' ? true : false, // Для Vercel secure должен быть true
+    secure: process.env.NODE_ENV === 'production' ? true : false,
     httpOnly: true,
-    sameSite: process.env.NODE_ENV === 'production' ? 'none' : 'lax', // Для Vercel используем 'none'
-    maxAge: 24 * 60 * 60 * 1000 // 24 hours
+    sameSite: process.env.NODE_ENV === 'production' ? 'none' : 'lax',
+    maxAge: 24 * 60 * 60 * 1000
   }
 }));
 
@@ -105,7 +109,6 @@ const loadUsers = async () => {
   }
 };
 
-// Сохранение пользователей в MongoDB
 const saveUsersToMongo = async (users) => {
   try {
     await db.collection('users').deleteMany({});
@@ -120,7 +123,6 @@ const saveUsersToMongo = async (users) => {
   }
 };
 
-// Загрузка пользователей из MongoDB
 const loadUsersFromMongo = async () => {
   try {
     if (!db) {
@@ -157,10 +159,10 @@ const loadQuestions = async (testNumber) => {
         const rowValues = row.values.slice(1);
         const picture = String(rowValues[0] || '').trim();
         const questionText = String(rowValues[1] || '').trim();
-        const options = rowValues.slice(2, 14).filter(Boolean).map(String); // Option 1 - Option 12
-        const correctAnswers = rowValues.slice(14, 26).filter(Boolean).map(String); // Correct Answer 1 - Correct Answer 12
-        const type = String(rowValues[26] || 'multiple').toLowerCase(); // Type
-        const points = Number(rowValues[27]) || 1; // Points
+        const options = rowValues.slice(2, 14).filter(Boolean).map(String);
+        const correctAnswers = rowValues.slice(14, 26).filter(Boolean).map(String);
+        const type = String(rowValues[26] || 'multiple').toLowerCase();
+        const points = Number(rowValues[27]) || 1;
 
         jsonData.push({
           picture: picture.match(/^Picture (\d+)/i) ? `/images/Picture ${picture.match(/^Picture (\d+)/i)[1]}.png` : null,
@@ -250,11 +252,18 @@ app.post('/login', async (req, res) => {
     console.log('Session ID after setting user:', req.sessionID);
     console.log('Cookies after setting session:', req.cookies);
 
-    if (user === 'admin') {
-      res.json({ success: true, redirect: '/admin' });
-    } else {
-      res.json({ success: true, redirect: '/select-test' });
-    }
+    req.session.save(err => {
+      if (err) {
+        console.error('Error saving session:', err);
+        return res.status(500).json({ success: false, message: 'Помилка сервера' });
+      }
+      console.log('Session saved successfully');
+      if (user === 'admin') {
+        res.json({ success: true, redirect: '/admin' });
+      } else {
+        res.json({ success: true, redirect: '/select-test' });
+      }
+    });
   } catch (error) {
     console.error('Ошибка в /login:', error.stack);
     res.status(500).json({ success: false, message: 'Помилка сервера' });
@@ -361,10 +370,14 @@ const saveResult = async (user, testNumber, score, totalPoints, startTime, endTi
       scoresPerQuestion
     };
     console.log('Saving result to MongoDB:', result);
-    await db.collection('test_results').insertOne(result);
-    console.log(`Successfully saved result for ${user} in MongoDB`);
+    if (!db) {
+      throw new Error('MongoDB connection not established');
+    }
+    const insertResult = await db.collection('test_results').insertOne(result);
+    console.log(`Successfully saved result for ${user} in MongoDB with ID:`, insertResult.insertedId);
   } catch (error) {
     console.error('Ошибка сохранения в MongoDB:', error.stack);
+    throw error;
   }
 };
 
@@ -600,6 +613,7 @@ app.get('/test/question', checkAuth, (req, res) => {
               if (dragged.classList.contains('draggable')) {
                 e.dataTransfer.setData('text/plain', dragged.dataset.index);
                 dragged.classList.add('dragging');
+                e.preventDefault();
               }
             });
             sortable.addEventListener('dragend', (e) => {
@@ -707,7 +721,8 @@ app.get('/result', checkAuth, async (req, res) => {
           #support { background-color: #42a5f5; }
           #restart { background-color: #ef5350; }
         </style>
-        <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+        <script src="https://cdnjs.cloudflare.com/ajax/libs/pdfmake/0.2.7/pdfmake.min.js"></script>
+        <script src="https://cdnjs.cloudflare.com/ajax/libs/pdfmake/0.2.7/vfs_fonts.js"></script>
       </head>
       <body>
         <h1>Результат тесту</h1>
@@ -731,15 +746,21 @@ app.get('/result', checkAuth, async (req, res) => {
           const percentage = ${Math.round(percentage)};
 
           document.getElementById('exportPDF').addEventListener('click', () => {
-            const { jsPDF } = window.jspdf;
-            const doc = new jsPDF();
-            doc.text('Результат тесту', 20, 20);
-            doc.text('Висота: ' + percentage + '%', 20, 30);
-            doc.text('Кількість питань: ' + totalQuestions, 20, 40);
-            doc.text('Правильних відповідей: ' + correctClicks, 20, 50);
-            doc.text('Набрано балів: ' + score, 20, 60);
-            doc.text('Максимально можлива кількість балів: ' + totalPoints, 20, 70);
-            doc.save('result.pdf');
+            const docDefinition = {
+              content: [
+                { text: 'Результат тесту', style: 'header' },
+                { text: percentage + '%', style: 'subheader' },
+                { text: 'Кількість питань: ' + totalQuestions },
+                { text: 'Правильних відповідей: ' + correctClicks },
+                { text: 'Набрано балів: ' + score },
+                { text: 'Максимально можлива кількість балів: ' + totalPoints }
+              ],
+              styles: {
+                header: { fontSize: 18, bold: true, margin: [0, 0, 0, 10] },
+                subheader: { fontSize: 16, bold: true, margin: [0, 10, 0, 5] }
+              }
+            };
+            pdfMake.createPdf(docDefinition).download('result.pdf');
           });
 
           document.getElementById('support').addEventListener('click', () => {
@@ -787,7 +808,6 @@ app.get('/results', checkAuth, async (req, res) => {
           #support { background-color: #42a5f5; }
           #restart { background-color: #ef5350; }
         </style>
-        <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
       </head>
       <body>
         <h1>Результати</h1>
@@ -869,6 +889,8 @@ app.get('/results', checkAuth, async (req, res) => {
         <button id="support">Підтримка на пошту</button>
         <button id="restart">Повернутися на головну</button>
       </div>
+      <script src="https://cdnjs.cloudflare.com/ajax/libs/pdfmake/0.2.7/pdfmake.min.js"></script>
+      <script src="https://cdnjs.cloudflare.com/ajax/libs/pdfmake/0.2.7/vfs_fonts.js"></script>
       <script>
         const totalQuestions = ${totalQuestions};
         const correctClicks = ${correctClicks};
@@ -879,15 +901,22 @@ app.get('/results', checkAuth, async (req, res) => {
         const testName = "${testNames[testNumber].name}";
 
         document.getElementById('exportPDF').addEventListener('click', () => {
-          const { jsPDF } = window.jspdf;
-          const doc = new jsPDF();
-          doc.text('Результат тесту: ' + testName, 20, 20);
-          doc.text('Висота: ' + percentage + '%', 20, 30);
-          doc.text('Кількість питань: ' + totalQuestions, 20, 40);
-          doc.text('Правильних відповідей: ' + correctClicks, 20, 50);
-          doc.text('Набрано балів: ' + score, 20, 60);
-          doc.text('Максимально можлива кількість балів: ' + totalPoints, 20, 70);
-          doc.save('results.pdf');
+          const docDefinition = {
+            content: [
+              { text: 'Результат тесту: ' + testName, style: 'header' },
+              { text: percentage + '%', style: 'subheader' },
+              { text: 'Кількість питань: ' + totalQuestions },
+              { text: 'Правильних відповідей: ' + correctClicks },
+              { text: 'Набрано балів: ' + score },
+              { text: 'Максимально можлива кількість балів: ' + totalPoints },
+              { text: 'Тривалість: ' + duration + ' сек' }
+            ],
+            styles: {
+              header: { fontSize: 18, bold: true, margin: [0, 0, 0, 10] },
+              subheader: { fontSize: 16, bold: true, margin: [0, 10, 0, 5] }
+            }
+          };
+          pdfMake.createPdf(docDefinition).download('results.pdf');
         });
 
         document.getElementById('support').addEventListener('click', () => {
