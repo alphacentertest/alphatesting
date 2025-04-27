@@ -15,6 +15,7 @@ const MONGO_URL = process.env.MONGO_URL || 'mongodb+srv://romanhaleckij7:DNMaH9w
 const client = new MongoClient(MONGO_URL);
 let db;
 
+// Синхронная инициализация MongoDB
 (async () => {
   try {
     await client.connect();
@@ -49,9 +50,9 @@ app.use(session({
   resave: false,
   saveUninitialized: false,
   cookie: { 
-    secure: process.env.NODE_ENV === 'production',
+    secure: process.env.NODE_ENV === 'production' ? true : false, // Для Vercel secure должен быть true
     httpOnly: true,
-    sameSite: process.env.NODE_ENV === 'production' ? 'none' : 'lax',
+    sameSite: process.env.NODE_ENV === 'production' ? 'none' : 'lax', // Для Vercel используем 'none'
     maxAge: 24 * 60 * 60 * 1000 // 24 hours
   }
 }));
@@ -122,6 +123,9 @@ const saveUsersToMongo = async (users) => {
 // Загрузка пользователей из MongoDB
 const loadUsersFromMongo = async () => {
   try {
+    if (!db) {
+      throw new Error('MongoDB connection not established');
+    }
     const userDocs = await db.collection('users').find({}).toArray();
     const users = {};
     userDocs.forEach(doc => {
@@ -153,16 +157,22 @@ const loadQuestions = async (testNumber) => {
         const rowValues = row.values.slice(1);
         const picture = String(rowValues[0] || '').trim();
         const questionText = String(rowValues[1] || '').trim();
+        const options = rowValues.slice(2, 14).filter(Boolean).map(String); // Option 1 - Option 12
+        const correctAnswers = rowValues.slice(14, 26).filter(Boolean).map(String); // Correct Answer 1 - Correct Answer 12
+        const type = String(rowValues[26] || 'multiple').toLowerCase(); // Type
+        const points = Number(rowValues[27]) || 1; // Points
+
         jsonData.push({
           picture: picture.match(/^Picture (\d+)/i) ? `/images/Picture ${picture.match(/^Picture (\d+)/i)[1]}.png` : null,
           text: questionText,
-          options: rowValues.slice(2, 8).filter(Boolean).map(String),
-          correctAnswers: rowValues.slice(8, 11).filter(Boolean).map(String),
-          type: String(rowValues[11] || 'multiple').toLowerCase(),
-          points: Number(rowValues[12]) || 1
+          options,
+          correctAnswers,
+          type,
+          points
         });
       }
     });
+    console.log(`Loaded questions for test ${testNumber}:`, jsonData);
     return jsonData;
   } catch (error) {
     console.error(`Ошибка в loadQuestions (test ${testNumber}):`, error.stack);
@@ -222,10 +232,8 @@ app.post('/login', async (req, res) => {
     if (!password) return res.status(400).json({ success: false, message: 'Пароль не вказано' });
 
     const validPasswords = await loadUsersFromMongo();
-    console.log('Checking password:', password);
-    console.log('validPasswords entries:', Object.entries(validPasswords));
-    console.log('validPasswords keys:', Object.keys(validPasswords));
-
+    console.log('Checking password:', password, 'against validPasswords:', validPasswords);
+    
     const user = Object.keys(validPasswords).find(u => {
       const match = validPasswords[u] === password;
       console.log(`Comparing ${u}: ${validPasswords[u]} with ${password} -> ${match}`);
@@ -239,6 +247,8 @@ app.post('/login', async (req, res) => {
 
     req.session.user = user;
     console.log('Session after setting user:', req.session);
+    console.log('Session ID after setting user:', req.sessionID);
+    console.log('Cookies after setting session:', req.cookies);
 
     if (user === 'admin') {
       res.json({ success: true, redirect: '/admin' });
@@ -254,6 +264,7 @@ app.post('/login', async (req, res) => {
 const checkAuth = (req, res, next) => {
   console.log('checkAuth: Session data:', req.session);
   console.log('checkAuth: Cookies:', req.cookies);
+  console.log('checkAuth: Session ID:', req.sessionID);
   const user = req.session.user;
   console.log('checkAuth: user from session:', user);
   if (!user) {
@@ -284,15 +295,18 @@ app.get('/select-test', checkAuth, (req, res) => {
         <title>Вибір тесту</title>
         <style>
           body { font-family: Arial, sans-serif; text-align: center; padding: 50px; }
-          button { padding: 10px 20px; margin: 10px; font-size: 18px; cursor: pointer; }
+          .test-buttons { display: flex; flex-direction: column; align-items: center; }
+          button { padding: 10px 20px; margin: 10px 0; font-size: 18px; cursor: pointer; width: 200px; }
           button:hover { background-color: #90ee90; }
         </style>
       </head>
       <body>
         <h1>Виберіть тест</h1>
-        ${Object.entries(testNames).map(([num, data]) => `
-          <button onclick="window.location.href='/test?test=${num}'">${data.name}</button>
-        `).join('')}
+        <div class="test-buttons">
+          ${Object.entries(testNames).map(([num, data]) => `
+            <button onclick="window.location.href='/test?test=${num}'">${data.name}</button>
+          `).join('')}
+        </div>
       </body>
     </html>
   `);
@@ -300,7 +314,7 @@ app.get('/select-test', checkAuth, (req, res) => {
 
 const userTests = new Map();
 
-const saveResult = async (user, testNumber, score, totalPoints, startTime, endTime) => {
+const saveResult = async (user, testNumber, score, totalPoints, startTime, endTime, totalClicks, correctClicks, totalQuestions, percentage) => {
   try {
     const duration = Math.round((endTime - startTime) / 1000);
     const userTest = userTests.get(user);
@@ -336,6 +350,10 @@ const saveResult = async (user, testNumber, score, totalPoints, startTime, endTi
       testNumber,
       score,
       totalPoints,
+      totalClicks,
+      correctClicks,
+      totalQuestions,
+      percentage,
       startTime: new Date(startTime).toISOString(),
       endTime: new Date(endTime).toISOString(),
       duration,
@@ -413,7 +431,7 @@ app.get('/test/question', checkAuth, (req, res) => {
           .progress-circle.unanswered { background-color: red; color: white; }
           .progress-circle.answered { background-color: green; color: white; }
           .progress-line.answered { background-color: green; }
-          .option-box { border: 2px solid #ccc; padding: 10px; margin: 5px 0; border-radius: 5px; cursor: pointer; font-size: 16px; }
+          .option-box { border: 2px solid #ccc; padding: 10px; margin: 5px 0; border-radius: 5px; cursor: pointer; font-size: 16px; user-select: none; }
           .option-box.selected { background-color: #90ee90; }
           .button-container { position: fixed; bottom: 20px; left: 20px; right: 20px; display: flex; justify-content: space-between; }
           button { padding: 10px 20px; margin: 5px; border: none; cursor: pointer; border-radius: 5px; font-size: 16px; }
@@ -429,11 +447,13 @@ app.get('/test/question', checkAuth, (req, res) => {
           .instruction { font-style: italic; color: #555; margin-bottom: 10px; font-size: 18px; }
           .option-box.draggable { cursor: move; }
           .option-box.dragging { opacity: 0.5; }
+          #question-container { background-color: white; padding: 20px; border-radius: 8px; box-shadow: 0 0 10px rgba(0, 0, 0, 0.1); width: 100%; margin-bottom: 20px; }
+          #answers { margin-bottom: 20px; }
         </style>
       </head>
       <body>
         <h1>${testNames[testNumber].name}</h1>
-        <div id="timer">Залишилося часу: ${minutes} мм ${seconds} с</div>
+        <div id="timer">Залишилось часу: ${minutes} мм ${seconds} с</div>
         <div class="progress-bar">
           ${progress.map((p, i) => `
             <div class="progress-circle ${p.answered ? 'answered' : 'unanswered'}">${p.number}</div>
@@ -467,7 +487,7 @@ app.get('/test/question', checkAuth, (req, res) => {
       html += `
         <div id="sortable-options">
           ${(answers[index] || q.options).map((option, optIndex) => `
-            <div class="option-box draggable" data-value="${option}">
+            <div class="option-box draggable" data-index="${optIndex}" data-value="${option}">
               ${option}
             </div>
           `).join('')}
@@ -488,10 +508,10 @@ app.get('/test/question', checkAuth, (req, res) => {
 
   html += `
           </div>
-          <button id="submit-answer" class="next-btn" ${index === questions.length - 1 ? 'disabled' : ''}>Далі</button>
         </div>
         <div class="button-container">
           <button class="back-btn" ${index === 0 ? 'disabled' : ''} onclick="window.location.href='/test/question?index=${index - 1}'">Назад</button>
+          <button id="submit-answer" class="next-btn" ${index === questions.length - 1 ? 'disabled' : ''}>Далі</button>
           <button class="finish-btn" onclick="showConfirm(${index})">Завершити тест</button>
         </div>
         <div id="confirm-modal">
@@ -508,7 +528,7 @@ app.get('/test/question', checkAuth, (req, res) => {
             const remainingTime = Math.max(0, Math.floor(timeLimit / 1000) - elapsedTime);
             const minutes = Math.floor(remainingTime / 60).toString().padStart(2, '0');
             const seconds = (remainingTime % 60).toString().padStart(2, '0');
-            timerElement.textContent = 'Залишилося часу: ' + minutes + ' мм ' + seconds + ' с';
+            timerElement.textContent = 'Залишилось часу: ' + minutes + ' мм ' + seconds + ' с';
             if (remainingTime <= 0) {
               window.location.href = '/result';
             }
@@ -517,9 +537,9 @@ app.get('/test/question', checkAuth, (req, res) => {
           setInterval(updateTimer, 1000);
 
           document.querySelectorAll('.option-box').forEach(box => {
-            box.addEventListener('click', () => {
+            box.addEventListener('click', (e) => {
               const checkbox = box.querySelector('input[type="checkbox"]');
-              if (checkbox) {
+              if (checkbox && !e.target.classList.contains('draggable')) {
                 checkbox.checked = !checkbox.checked;
                 box.classList.toggle('selected', checkbox.checked);
               }
@@ -577,25 +597,32 @@ app.get('/test/question', checkAuth, (req, res) => {
             let dragged;
             sortable.addEventListener('dragstart', (e) => {
               dragged = e.target;
-              e.target.classList.add('dragging');
+              if (dragged.classList.contains('draggable')) {
+                e.dataTransfer.setData('text/plain', dragged.dataset.index);
+                dragged.classList.add('dragging');
+              }
             });
             sortable.addEventListener('dragend', (e) => {
-              e.target.classList.remove('dragging');
+              if (e.target.classList.contains('draggable')) {
+                e.target.classList.remove('dragging');
+              }
             });
-            sortable.addEventListener('dragover', (e) => e.preventDefault());
+            sortable.addEventListener('dragover', (e) => {
+              e.preventDefault();
+            });
             sortable.addEventListener('drop', (e) => {
               e.preventDefault();
-              if (e.target.className.includes('option-box')) {
-                const target = e.target;
-                if (dragged !== target) {
-                  const allItems = Array.from(sortable.children);
-                  const draggedIndex = allItems.indexOf(dragged);
-                  const targetIndex = allItems.indexOf(target);
-                  if (draggedIndex < targetIndex) {
-                    target.after(dragged);
-                  } else {
-                    target.before(dragged);
-                  }
+              const draggedIndex = e.dataTransfer.getData('text');
+              const draggedElement = sortable.querySelector('[data-index="' + draggedIndex + '"]');
+              const dropTarget = e.target.closest('.draggable');
+              if (draggedElement && dropTarget && draggedElement !== dropTarget) {
+                const allItems = Array.from(sortable.querySelectorAll('.draggable'));
+                const draggedPos = allItems.indexOf(draggedElement);
+                const dropPos = allItems.indexOf(dropTarget);
+                if (draggedPos < dropPos) {
+                  dropTarget.after(draggedElement);
+                } else {
+                  dropTarget.before(draggedElement);
                 }
               }
             });
@@ -658,11 +685,12 @@ app.get('/result', checkAuth, async (req, res) => {
 
   score = scoresPerQuestion.reduce((sum, s) => sum + s, 0);
   const endTime = Date.now();
-  await saveResult(req.user, testNumber, score, totalPoints, startTime, endTime);
-
   const percentage = (score / totalPoints) * 100;
   const totalClicks = Object.keys(answers).length;
   const correctClicks = scoresPerQuestion.filter(s => s > 0).length;
+  const totalQuestions = questions.length;
+
+  await saveResult(req.user, testNumber, score, totalPoints, startTime, endTime, totalClicks, correctClicks, totalQuestions, percentage);
 
   const resultHtml = `
     <!DOCTYPE html>
@@ -685,12 +713,10 @@ app.get('/result', checkAuth, async (req, res) => {
         <h1>Результат тесту</h1>
         <div class="result-circle">${Math.round(percentage)}%</div>
         <p>
-          Кількість кліків: ${totalClicks}<br>
-          Кліків правильних: ${correctClicks}<br>
-          Запрошених кліків: ${questions.length}<br>
+          Кількість питань: ${totalQuestions}<br>
+          Правильних відповідей: ${correctClicks}<br>
           Набрано балів: ${score}<br>
           Максимально можлива кількість балів: ${totalPoints}<br>
-          Висота: ${Math.round(percentage)}%
         </p>
         <div class="buttons">
           <button id="exportPDF">Експортувати в PDF</button>
@@ -698,16 +724,21 @@ app.get('/result', checkAuth, async (req, res) => {
           <button id="restart">Вихід</button>
         </div>
         <script>
+          const totalQuestions = ${totalQuestions};
+          const correctClicks = ${correctClicks};
+          const score = ${score};
+          const totalPoints = ${totalPoints};
+          const percentage = ${Math.round(percentage)};
+
           document.getElementById('exportPDF').addEventListener('click', () => {
             const { jsPDF } = window.jspdf;
             const doc = new jsPDF();
             doc.text('Результат тесту', 20, 20);
-            doc.text('Кількість кліків: ${totalClicks}', 20, 30);
-            doc.text('Кліків правильних: ${correctClicks}', 20, 40);
-            doc.text('Запрошених кліків: ${questions.length}', 20, 50);
-            doc.text('Набрано балів: ${score}', 20, 60);
-            doc.text('Максимально можлива кількість балів: ${totalPoints}', 20, 70);
-            doc.text('Висота: ${Math.round(percentage)}%', 20, 80);
+            doc.text('Висота: ' + percentage + '%', 20, 30);
+            doc.text('Кількість питань: ' + totalQuestions, 20, 40);
+            doc.text('Правильних відповідей: ' + correctClicks, 20, 50);
+            doc.text('Набрано балів: ' + score, 20, 60);
+            doc.text('Максимально можлива кількість балів: ' + totalPoints, 20, 70);
             doc.save('result.pdf');
           });
 
@@ -715,12 +746,11 @@ app.get('/result', checkAuth, async (req, res) => {
             const subject = encodeURIComponent('Проблема з тестом');
             const body = encodeURIComponent(
               'Проблема: Балли не нараховуються коректно.\\n' +
-              'Кількість кліків: ${totalClicks}\\n' +
-              'Кліків правильних: ${correctClicks}\\n' +
-              'Запрошених кліків: ${questions.length}\\n' +
-              'Набрано балів: ${score}\\n' +
-              'Максимально можлива кількість балів: ${totalPoints}\\n' +
-              'Висота: ${Math.round(percentage)}%'
+              'Висота: ' + percentage + '%\\n' +
+              'Кількість питань: ' + totalQuestions + '\\n' +
+              'Правильних відповідей: ' + correctClicks + '\\n' +
+              'Набрано балів: ' + score + '\\n' +
+              'Максимально можлива кількість балів: ' + totalPoints
             );
             window.location.href = 'mailto:support@example.com?subject=' + subject + '&body=' + body;
           });
@@ -798,14 +828,16 @@ app.get('/results', checkAuth, async (req, res) => {
     const percentage = (score / totalPoints) * 100;
     const totalClicks = Object.keys(answers).length;
     const correctClicks = scoresPerQuestion.filter(s => s > 0).length;
+    const totalQuestions = questions.length;
 
     resultsHtml += `
       <p>
-        ${testNames[testNumber].name}: ${score} з ${totalPoints}, тривалість: ${duration} сек<br>
-        Кількість кліків: ${totalClicks}<br>
-        Кліків правильних: ${correctClicks}<br>
-        Запрошених кліків: ${questions.length}<br>
-        Висота: ${Math.round(percentage)}%
+        Результат тесту<br>
+        ${Math.round(percentage)}%<br>
+        Кількість питань: ${totalQuestions}<br>
+        Правильних відповідей: ${correctClicks}<br>
+        Набрано балів: ${score}<br>
+        Максимально можлива кількість балів: ${totalPoints}<br>
       </p>
       <table>
         <tr>
@@ -838,16 +870,23 @@ app.get('/results', checkAuth, async (req, res) => {
         <button id="restart">Повернутися на головну</button>
       </div>
       <script>
+        const totalQuestions = ${totalQuestions};
+        const correctClicks = ${correctClicks};
+        const score = ${score};
+        const totalPoints = ${totalPoints};
+        const percentage = ${Math.round(percentage)};
+        const duration = ${duration};
+        const testName = "${testNames[testNumber].name}";
+
         document.getElementById('exportPDF').addEventListener('click', () => {
           const { jsPDF } = window.jspdf;
           const doc = new jsPDF();
-          doc.text('Результати тесту: ${testNames[testNumber].name}', 20, 20);
-          doc.text('Бали: ${score} з ${totalPoints}', 20, 30);
-          doc.text('Тривалість: ${duration} сек', 20, 40);
-          doc.text('Кількість кліків: ${totalClicks}', 20, 50);
-          doc.text('Кліків правильних: ${correctClicks}', 20, 60);
-          doc.text('Запрошених кліків: ${questions.length}', 20, 70);
-          doc.text('Висота: ${Math.round(percentage)}%', 20, 80);
+          doc.text('Результат тесту: ' + testName, 20, 20);
+          doc.text('Висота: ' + percentage + '%', 20, 30);
+          doc.text('Кількість питань: ' + totalQuestions, 20, 40);
+          doc.text('Правильних відповідей: ' + correctClicks, 20, 50);
+          doc.text('Набрано балів: ' + score, 20, 60);
+          doc.text('Максимально можлива кількість балів: ' + totalPoints, 20, 70);
           doc.save('results.pdf');
         });
 
@@ -855,13 +894,12 @@ app.get('/results', checkAuth, async (req, res) => {
           const subject = encodeURIComponent('Проблема з тестом');
           const body = encodeURIComponent(
             'Проблема: Балли не нараховуються коректно.\\n' +
-            'Тест: ${testNames[testNumber].name}\\n' +
-            'Бали: ${score} з ${totalPoints}\\n' +
-            'Тривалість: ${duration} сек\\n' +
-            'Кількість кліків: ${totalClicks}\\n' +
-            'Кліків правильних: ${correctClicks}\\n' +
-            'Запрошених кліків: ${questions.length}\\n' +
-            'Висота: ${Math.round(percentage)}%'
+            'Тест: ' + testName + '\\n' +
+            'Висота: ' + percentage + '%\\n' +
+            'Кількість питань: ' + totalQuestions + '\\n' +
+            'Правильних відповідей: ' + correctClicks + '\\n' +
+            'Набрано балів: ' + score + '\\n' +
+            'Максимально можлива кількість балів: ' + totalPoints
           );
           window.location.href = 'mailto:support@example.com?subject=' + subject + '&body=' + body;
         });
