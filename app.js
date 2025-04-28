@@ -5,6 +5,7 @@ const path = require('path');
 const ExcelJS = require('exceljs');
 const session = require('express-session');
 const MongoStore = require('connect-mongo');
+const MemoryStore = require('express-session').MemoryStore; // Для отладки
 const { MongoClient } = require('mongodb');
 const fs = require('fs');
 
@@ -12,7 +13,7 @@ const app = express();
 
 // Подключение к MongoDB
 const MONGO_URL = process.env.MONGO_URL || 'mongodb+srv://romanhaleckij7:DNMaH9w2X4gel3Xc@cluster0.r93r1p8.mongodb.net/testdb?retryWrites=true&w=majority';
-const client = new MongoClient(MONGO_URL);
+const client = new MongoClient(MONGO_URL, { connectTimeoutMS: 5000, serverSelectionTimeoutMS: 5000 });
 let db;
 
 // Синхронная инициализация MongoDB
@@ -22,6 +23,7 @@ const connectToMongoDB = async () => {
     await client.connect();
     console.log('Connected to MongoDB successfully');
     db = client.db('testdb');
+    console.log('Database initialized:', db.databaseName);
   } catch (error) {
     console.error('Failed to connect to MongoDB:', error.message, error.stack);
     throw error;
@@ -41,19 +43,9 @@ app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
 app.use(cookieParser());
 
+// Временно используем MemoryStore для отладки
 app.use(session({
-  store: MongoStore.create({ 
-    mongoUrl: MONGO_URL,
-    collectionName: 'sessions',
-    ttl: 24 * 60 * 60,
-    clientPromise: client.connect().then(() => {
-      console.log('MongoStore client connected successfully');
-      return client;
-    }).catch(err => {
-      console.error('MongoStore client connection error:', err.message, err.stack);
-      throw err;
-    })
-  }),
+  store: new MemoryStore(),
   secret: process.env.SESSION_SECRET || 'a1b2c3d4e5f6g7h8i9j0k1l2m3n4o5p6q7r8s9t0',
   resave: false,
   saveUninitialized: false,
@@ -249,6 +241,22 @@ const initializeServer = async () => {
   }
 })();
 
+// Тестовый маршрут для проверки MongoDB
+app.get('/test-mongo', async (req, res) => {
+  try {
+    console.log('Testing MongoDB connection...');
+    if (!db) {
+      throw new Error('MongoDB connection not established');
+    }
+    await db.collection('users').findOne();
+    console.log('MongoDB test successful');
+    res.json({ success: true, message: 'MongoDB connection successful' });
+  } catch (error) {
+    console.error('MongoDB test failed:', error.message, error.stack);
+    res.status(500).json({ success: false, message: 'MongoDB connection failed', error: error.message });
+  }
+});
+
 app.get('/', (req, res) => {
   console.log('Serving index.html');
   res.sendFile(path.join(__dirname, 'public', 'index.html'));
@@ -304,7 +312,7 @@ app.post('/login', async (req, res) => {
 });
 
 const checkAuth = (req, res, next) => {
-  console.log('checkAuth: Session.ConcurrentModificationException data:', req.session);
+  console.log('checkAuth: Session data:', req.session);
   console.log('checkAuth: Cookies:', req.cookies);
   console.log('checkAuth: Session ID:', req.sessionID);
   const user = req.session.user;
@@ -751,7 +759,6 @@ app.get('/result', checkAuth, async (req, res) => {
   const formattedTime = endDateTime.toLocaleTimeString('uk-UA', { hour12: false });
   const formattedDate = endDateTime.toLocaleDateString('uk-UA');
 
-  // Преобразуем изображение A.png в base64
   const imagePath = path.join(__dirname, 'public', 'images', 'A.png');
   let imageBase64 = '';
   try {
@@ -910,7 +917,6 @@ app.get('/results', checkAuth, async (req, res) => {
     const formattedTime = endDateTime.toLocaleTimeString('uk-UA', { hour12: false });
     const formattedDate = endDateTime.toLocaleDateString('uk-UA');
 
-    // Преобразуем изображение A.png в base64
     const imagePath = path.join(__dirname, 'public', 'images', 'A.png');
     let imageBase64 = '';
     try {
@@ -1049,7 +1055,6 @@ app.get('/admin/results', checkAuth, checkAdmin, async (req, res) => {
   let errorMessage = '';
   try {
     console.log('Fetching test results from MongoDB...');
-    // Сортируем результаты по endTime в порядке убывания (самые новые сверху)
     results = await db.collection('test_results').find({}).sort({ endTime: -1 }).toArray();
     console.log('Fetched results from MongoDB:', results);
   } catch (fetchError) {
