@@ -724,8 +724,9 @@ app.get('/test/question', checkAuth, (req, res) => {
     } else {
       q.options.forEach((option, optIndex) => {
         const selected = answers[index]?.includes(option) ? 'selected' : '';
+        const escapedOption = option.replace(/'/g, "\\'").replace(/"/g, '\\"');
         html += `
-          <div class="option-box ${selected}" data-value="${option}" onclick="toggleOption(this, ${index}, '${option}')">
+          <div class="option-box ${selected}" data-value="${escapedOption}">
             ${option}
           </div>
         `;
@@ -797,17 +798,20 @@ app.get('/test/question', checkAuth, (req, res) => {
             console.log('Keyboard activity detected, count:', activityCount);
           });
 
-          function toggleOption(element, index, option) {
-            const idx = selectedOptions.indexOf(option);
-            if (idx === -1) {
-              selectedOptions.push(option);
-              element.classList.add('selected');
-            } else {
-              selectedOptions.splice(idx, 1);
-              element.classList.remove('selected');
-            }
-            console.log('Selected options for question', index, ':', selectedOptions);
-          }
+          document.querySelectorAll('.option-box:not(.draggable)').forEach(box => {
+            box.addEventListener('click', () => {
+              const option = box.getAttribute('data-value');
+              const idx = selectedOptions.indexOf(option);
+              if (idx === -1) {
+                selectedOptions.push(option);
+                box.classList.add('selected');
+              } else {
+                selectedOptions.splice(idx, 1);
+                box.classList.remove('selected');
+              }
+              console.log('Selected options for question ${index}:', selectedOptions);
+            });
+          });
 
           async function saveAndNext(index) {
             console.log('Save and Next button clicked for index:', index);
@@ -845,7 +849,8 @@ app.get('/test/question', checkAuth, (req, res) => {
             document.getElementById('confirm-modal').style.display = 'none';
           }
 
-          async function finishTest(index gobiernos            console.log('Finish Test button clicked for index:', index);
+          async function finishTest(index) {
+            console.log('Finish Test button clicked for index:', index);
             try {
               let answers = selectedOptions;
               if (document.querySelector('input[name="q' + index + '"]')) {
