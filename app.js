@@ -667,7 +667,7 @@ app.get('/test/question', checkAuth, (req, res) => {
         </div>
         <div class="button-container">
           <button class="back-btn" ${index === 0 ? 'disabled' : ''} onclick="window.location.href='/test/question?index=${index - 1}'">Назад</button>
-          <button id="submit-answer" class="next-btn" ${index === questions.length - 1 ? 'disabled' : ''}>Далі</button>
+          <button id="submit-answer" class="next-btn" ${index === questions.length - 1 ? 'disabled' : ''} onclick="saveAndNext(${index})">Далі</button>
           <button class="finish-btn" onclick="showConfirm(${index})">Завершити тест</button>
         </div>
         <div id="confirm-modal">
@@ -684,7 +684,7 @@ app.get('/test/question', checkAuth, (req, res) => {
           let switchCount = 0;
           let lastActivityTime = Date.now();
           let activityCount = 0;
-          const questionStartTime = ${userTest.answerTimestamps[index]};
+          const questionStartTime = ${userTest.answerTimestamps[index] || Date.now()};
 
           function updateTimer() {
             const elapsedTime = Math.floor((Date.now() - startTime) / 1000);
@@ -735,24 +735,35 @@ app.get('/test/question', checkAuth, (req, res) => {
             });
           });
 
-          document.getElementById('submit-answer').addEventListener('click', () => saveAndNext(${index}));
           async function saveAndNext(index) {
-            let answers;
-            if (document.querySelector('input[type="text"][name="q' + index + '"]')) {
-              answers = document.getElementById('q' + index + '_input').value;
-            } else if (document.getElementById('sortable-options')) {
-              answers = Array.from(document.querySelectorAll('#sortable-options .option-box')).map(el => el.dataset.value);
-            } else {
-              const checked = document.querySelectorAll('input[name="q' + index + '"]:checked');
-              answers = Array.from(checked).map(input => input.value);
+            console.log('Save and Next button clicked for index:', index);
+            try {
+              let answers;
+              if (document.querySelector('input[type="text"][name="q' + index + '"]')) {
+                answers = document.getElementById('q' + index + '_input').value;
+              } else if (document.getElementById('sortable-options')) {
+                answers = Array.from(document.querySelectorAll('#sortable-options .option-box')).map(el => el.dataset.value);
+              } else {
+                const checked = document.querySelectorAll('input[name="q' + index + '"]:checked');
+                answers = Array.from(checked).map(input => input.value);
+              }
+              const responseTime = Date.now() - questionStartTime;
+              console.log('Sending answer with data:', { index, answers, timeAway, switchCount, responseTime, activityCount });
+              const response = await fetch('/answer', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ index, answer: answers, timeAway, switchCount, responseTime, activityCount })
+              });
+              const result = await response.json();
+              if (result.success) {
+                console.log('Answer saved successfully, redirecting to next question');
+                window.location.href = '/test/question?index=' + (index + 1);
+              } else {
+                console.error('Failed to save answer:', result);
+              }
+            } catch (error) {
+              console.error('Error in saveAndNext:', error);
             }
-            const responseTime = Date.now() - questionStartTime;
-            await fetch('/answer', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ index, answer, timeAway, switchCount, responseTime, activityCount })
-            });
-            window.location.href = '/test/question?index=' + (index + 1);
           }
 
           function showConfirm(index) {
@@ -764,23 +775,35 @@ app.get('/test/question', checkAuth, (req, res) => {
           }
 
           async function finishTest(index) {
-            let answers;
-            if (document.querySelector('input[type="text"][name="q' + index + '"]')) {
-              answers = document.getElementById('q' + index + '_input').value;
-            } else if (document.getElementById('sortable-options')) {
-              answers = Array.from(document.querySelectorAll('#sortable-options .option-box')).map(el => el.dataset.value);
-            } else {
-              const checked = document.querySelectorAll('input[name="q' + index + '"]:checked');
-              answers = Array.from(checked).map(input => input.value);
+            console.log('Finish Test button clicked for index:', index);
+            try {
+              let answers;
+              if (document.querySelector('input[type="text"][name="q' + index + '"]')) {
+                answers = document.getElementById('q' + index + '_input').value;
+              } else if (document.getElementById('sortable-options')) {
+                answers = Array.from(document.querySelectorAll('#sortable-options .option-box')).map(el => el.dataset.value);
+              } else {
+                const checked = document.querySelectorAll('input[name="q' + index + '"]:checked');
+                answers = Array.from(checked).map(input => input.value);
+              }
+              const responseTime = Date.now() - questionStartTime;
+              console.log('Finishing test with data:', { index, answers, timeAway, switchCount, responseTime, activityCount });
+              const response = await fetch('/answer', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ index, answer: answers, timeAway, switchCount, responseTime, activityCount })
+              });
+              const result = await response.json();
+              if (result.success) {
+                console.log('Answer saved successfully, redirecting to result');
+                hideConfirm();
+                window.location.href = '/result';
+              } else {
+                console.error('Failed to save answer:', result);
+              }
+            } catch (error) {
+              console.error('Error in finishTest:', error);
             }
-            const responseTime = Date.now() - questionStartTime;
-            await fetch('/answer', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ index, answer, timeAway, switchCount, responseTime, activityCount })
-            });
-            hideConfirm();
-            window.location.href = '/result';
           }
 
           const sortable = document.getElementById('sortable-options');
@@ -812,6 +835,7 @@ app.post('/answer', checkAuth, (req, res) => {
   if (req.user === 'admin') return res.redirect('/admin');
   try {
     const { index, answer, timeAway, switchCount, responseTime, activityCount } = req.body;
+    console.log('Received answer data:', { index, answer, timeAway, switchCount, responseTime, activityCount });
     const userTest = userTests.get(req.user);
     if (!userTest) {
       console.warn(`Test not started for user ${req.user} in /answer`);
