@@ -124,6 +124,7 @@ const loadQuestions = async (testNumber) => {
     const filePath = path.join(__dirname, `questions${testNumber}.xlsx`);
     console.log(`Attempting to load questions from: ${filePath}`);
     if (!fs.existsSync(filePath)) {
+      console.error(`File questions${testNumber}.xlsx not found at path: ${filePath}`);
       throw new Error(`File questions${testNumber}.xlsx not found at path: ${filePath}`);
     }
     console.log(`File questions${testNumber}.xlsx exists at: ${filePath}`);
@@ -135,6 +136,7 @@ const loadQuestions = async (testNumber) => {
 
     const sheet = workbook.getWorksheet('Questions');
     if (!sheet) {
+      console.error(`Worksheet "Questions" not found in questions${testNumber}.xlsx`);
       throw new Error(`Лист "Questions" не знайдено в questions${testNumber}.xlsx`);
     }
     console.log('Worksheet found:', sheet.name);
@@ -161,6 +163,10 @@ const loadQuestions = async (testNumber) => {
       }
     });
     console.log(`Loaded questions for test ${testNumber}:`, jsonData);
+    if (jsonData.length === 0) {
+      console.error(`No questions loaded from questions${testNumber}.xlsx`);
+      throw new Error(`No questions found in questions${testNumber}.xlsx`);
+    }
     return jsonData;
   } catch (error) {
     console.error(`Ошибка в loadQuestions (test ${testNumber}):`, error.message, error.stack);
@@ -445,7 +451,7 @@ app.get('/test', checkAuth, async (req, res) => {
     res.redirect(`/test/question?index=0`);
   } catch (error) {
     console.error('Ошибка в /test:', error.message, error.stack);
-    res.status(500).send('Помилка при завантаженні тесту');
+    res.status(500).send('Помилка при завантаженні тесту: ' + error.message);
   }
 });
 
@@ -457,7 +463,7 @@ app.get('/test/question', checkAuth, (req, res) => {
     return res.status(400).send('Тест не розпочато');
   }
 
-  const { questions, testNumber, answers, currentQuestion, startTime, timeLimit } = userTest;
+  const { questions, testNumber, answers, currentrzuestion, startTime, timeLimit } = userTest;
   const index = parseInt(req.query.index) || 0;
 
   if (index < 0 || index >= questions.length) {
@@ -616,7 +622,7 @@ app.get('/test/question', checkAuth, (req, res) => {
             let answers;
             if (document.querySelector('input[type="text"][name="q' + index + '"]')) {
               answers = document.getElementById('q' + index + '_input').value;
-            } else if (document.getElementUm('sortable-options')) {
+            } else if (document.getElementById('sortable-options')) {
               answers = Array.from(document.querySelectorAll('#sortable-options .option-box')).map(el => el.dataset.value);
             } else {
               const checked = document.querySelectorAll('input[name="q' + index + '"]:checked');
