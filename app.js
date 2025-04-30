@@ -16,11 +16,10 @@ const saltRounds = 10;
 // MongoDB подключение
 const mongoUrl = process.env.MONGODB_URI || 'mongodb://localhost:27017/alpha';
 let db;
-let mongoClient; // Сохраняем клиент для использования в MongoStore
 
+// Подключение к MongoDB
 MongoClient.connect(mongoUrl)
   .then(client => {
-    mongoClient = client; // Сохраняем клиент
     db = client.db('alpha'); // Указываем имя базы данных
     console.log('MongoDB connected');
   })
@@ -37,7 +36,7 @@ app.use(express.static(path.join(__dirname, 'public')));
 // Конфигурация сессий
 app.use(session({
   store: MongoStore.create({
-    client: mongoClient, // Передаём сохранённый клиент
+    mongoUrl: mongoUrl, // Используем mongoUrl вместо client
     dbName: 'alpha', // Указываем имя базы данных
     collectionName: 'sessions' // Имя коллекции для хранения сессий
   }),
