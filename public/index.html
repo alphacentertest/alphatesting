@@ -3,75 +3,28 @@
   <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Введіть пароль</title>
+    <title>Авторизація</title>
     <style>
-      body {
-        font-family: Arial, sans-serif;
-        display: flex;
-        justify-content: center;
-        align-items: center;
-        height: 100vh;
-        margin: 0;
-        background-color: #f0f0f0;
-      }
-      .login-container {
-        text-align: center;
-      }
-      h1 {
-        margin-bottom: 20px;
-      }
-      .password-input {
-        width: 200px;
-        padding: 10px;
-        margin-bottom: 10px;
-        font-size: 16px;
-        border: 1px solid #ccc;
-        border-radius: 4px;
-      }
-      .checkbox-container {
-        display: flex;
-        justify-content: center;
-        align-items: center;
-        margin-bottom: 10px;
-      }
-      .checkbox-container input {
-        margin-right: 5px;
-      }
-      button {
-        padding: 10px 20px;
-        font-size: 16px;
-        cursor: pointer;
-        background-color: #ccc;
-        border: none;
-        border-radius: 4px;
-      }
-      button:hover {
-        background-color: #bbb;
-      }
+      body { font-family: Arial, sans-serif; text-align: center; padding: 50px; }
+      input[type="password"] { padding: 10px; font-size: 16px; width: 200px; }
+      button { padding: 10px 20px; font-size: 16px; cursor: pointer; }
+      .error { color: red; }
     </style>
   </head>
   <body>
-    <div class="login-container">
-      <h1>Введіть пароль</h1>
-      <input type="password" id="password" class="password-input" placeholder="Введіть пароль">
-      <div class="checkbox-container">
-        <input type="checkbox" id="showPassword">
-        <label for="showPassword">Показати пароль</label>
-      </div>
-      <div class="checkbox-container">
-        <input type="checkbox" id="rememberMe">
-        <label for="rememberMe">Запам'ятати мене</label>
-      </div>
-      <button onclick="login()">Ввести пароль</button>
-    </div>
+    <h1>Введіть пароль</h1>
+    <form id="loginForm">
+      <input type="password" id="password" name="password" placeholder="Пароль" required><br><br>
+      <button type="submit">Увійти</button>
+    </form>
+    <p id="error" class="error"></p>
     <script>
-      document.getElementById('showPassword').addEventListener('change', function() {
-        const passwordInput = document.getElementById('password');
-        passwordInput.type = this.checked ? 'text' : 'password';
-      });
-
-      async function login() {
+      document.getElementById('loginForm').addEventListener('submit', async (e) => {
+        e.preventDefault();
         const password = document.getElementById('password').value;
+        const errorElement = document.getElementById('error');
+        errorElement.textContent = '';
+
         try {
           const response = await fetch('/login', {
             method: 'POST',
@@ -79,20 +32,15 @@
             body: JSON.stringify({ password })
           });
           const result = await response.json();
+
           if (result.success) {
             window.location.href = result.redirect;
           } else {
-            alert(result.message);
+            errorElement.textContent = result.message || 'Помилка входу';
           }
         } catch (error) {
-          console.error('Ошибка при входе:', error);
-          alert('Помилка сервера');
-        }
-      }
-
-      document.getElementById('password').addEventListener('keypress', function(e) {
-        if (e.key === 'Enter') {
-          login();
+          errorElement.textContent = 'Помилка сервера';
+          console.error('Login error:', error);
         }
       });
     </script>
