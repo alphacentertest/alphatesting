@@ -1354,12 +1354,59 @@ app.get('/admin', checkAuth, checkAdmin, (req, res) => {
     <html lang="uk">
       <head>
         <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
         <title>Адмін-панель</title>
         <style>
-          body { font-family: Arial, sans-serif; text-align: center; padding: 50px; }
-          button { padding: 10px 20px; margin: 10px; font-size: 18px; cursor: pointer; width: 200px; }
-          button:hover { background-color: #90ee90; }
-          #logout { background-color: #ef5350; color: white; }
+          body { 
+            font-family: Arial, sans-serif; 
+            text-align: center; 
+            padding: 50px; 
+            font-size: 24px; 
+            margin: 0; 
+          }
+          h1 { 
+            font-size: 36px; 
+            margin-bottom: 20px; 
+          }
+          button { 
+            padding: 15px 30px; 
+            margin: 10px; 
+            font-size: 24px; 
+            cursor: pointer; 
+            width: 300px; 
+            border: none; 
+            border-radius: 5px; 
+            background-color: #4CAF50; 
+            color: white; 
+          }
+          button:hover { 
+            background-color: #45a049; 
+          }
+          #logout { 
+            background-color: #ef5350; 
+            color: white; 
+          }
+          @media (max-width: 600px) {
+            body { 
+              padding: 20px; 
+              padding-bottom: 80px; 
+            }
+            h1 { 
+              font-size: 32px; 
+            }
+            button { 
+              font-size: 20px; 
+              width: 90%; 
+              padding: 15px; 
+            }
+            #logout { 
+              position: fixed; 
+              bottom: 20px; 
+              left: 50%; 
+              transform: translateX(-50%); 
+              width: 90%; 
+            }
+          }
         </style>
       </head>
       <body>
@@ -1748,7 +1795,8 @@ app.get('/admin/activity-log', checkAuth, checkAdmin, async (req, res) => {
           th, td { border: 1px solid black; padding: 8px; text-align: left; }
           th { background-color: #f2f2f2; }
           .error { color: red; }
-          .nav-btn { padding: 10px 20px; margin: 10px 0; cursor: pointer; }
+          .nav-btn, .clear-btn { padding: 10px 20px; margin: 10px 0; cursor: pointer; }
+          .clear-btn { background-color: #ff4d4d; color: white; }
         </style>
       </head>
       <body>
@@ -1773,8 +1821,10 @@ app.get('/admin/activity-log', checkAuth, checkAdmin, async (req, res) => {
   } else {
     activities.forEach(activity => {
       const timestamp = new Date(activity.timestamp);
-      const formattedTime = timestamp.toLocaleTimeString('uk-UA', { hour12: false });
-      const formattedDate = timestamp.toLocaleDateString('uk-UA');
+      // Добавляем смещение +3 часа
+      const adjustedTimestamp = new Date(timestamp.getTime());
+      const formattedTime = adjustedTimestamp.toLocaleTimeString('uk-UA', { hour12: false });
+      const formattedDate = adjustedTimestamp.toLocaleDateString('uk-UA');
       adminHtml += `
         <tr>
           <td>${activity.user || 'N/A'}</td>
@@ -1787,11 +1837,46 @@ app.get('/admin/activity-log', checkAuth, checkAdmin, async (req, res) => {
   }
   adminHtml += `
         </table>
-        <button class="nav-btn" onclick="window.location.href='/admin'">Повернутися до адмін-панелі</button>
+        <button class="clear-btn" onclick="clearActivityLog()">Видалення записів журналу</button>
+        <script>
+          async function clearActivityLog() {
+            if (confirm('Ви впевнені, що хочете видалити усі записи журналу дій?')) {
+              try {
+                const response = await fetch('/admin/delete-activity-log', {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' }
+                });
+                const result = await response.json();
+                if (result.success) {
+                  console.log('Activity log cleared successfully');
+                  window.location.reload();
+                } else {
+                  console.error('Failed to clear activity log:', result.message);
+                  alert('Помилка при видаленні записів журналу: ' + result.message);
+                }
+              } catch (error) {
+                console.error('Error clearing activity log:', error);
+                alert('Помилка при видаленні записів журналу');
+              }
+            }
+          }
+        </script>
       </body>
     </html>
   `;
   res.send(adminHtml);
+});
+
+app.post('/admin/delete-activity-log', checkAuth, checkAdmin, async (req, res) => {
+  try {
+    console.log('Deleting all activity log entries...');
+    await db.collection('activity_log').deleteMany({});
+    console.log('Activity log cleared from MongoDB');
+    res.json({ success: true });
+  } catch (error) {
+    console.error('Ошибка при удалении записей журнала действий:', error.message, error.stack);
+    res.status(500).json({ success: false, message: 'Помилка при видаленні записів журналу' });
+  }
 });
 
 const PORT = process.env.PORT || 3000;
