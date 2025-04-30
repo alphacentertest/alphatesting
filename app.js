@@ -1490,13 +1490,23 @@ app.get('/admin/results', checkAuth, checkAdmin, async (req, res) => {
     console.log('No results found in test_results');
   } else {
     results.forEach((r, index) => {
-      const answersDisplay = r.answers 
-        ? Object.entries(r.answers).map(([q, a], i) => {
+      // Преобразуем r.answers из объекта в массив, чтобы индексы совпадали с scoresPerQuestion
+      const answersArray = [];
+      if (r.answers) {
+        Object.keys(r.answers).forEach(key => {
+          const idx = parseInt(key);
+          answersArray[idx] = r.answers[key];
+        });
+      }
+
+      const answersDisplay = answersArray.length > 0 
+        ? answersArray.map((a, i) => {
+            if (!a) return null; // Пропускаем вопросы без ответов
             const userAnswer = Array.isArray(a) ? a.join(', ') : a;
             const questionScore = r.scoresPerQuestion[i] || 0; // Используем сохранённые баллы
-            console.log(`Result ${index + 1}, Question ${parseInt(q) + 1}: userAnswer=${userAnswer}, score=${questionScore}`);
-            return `Питання ${parseInt(q) + 1}: ${userAnswer.replace(/\\'/g, "'")} (${questionScore} балів)`;
-          }).join('\n')
+            console.log(`Result ${index + 1}, Question ${i + 1}: userAnswer=${userAnswer}, score=${questionScore}`);
+            return `Питання ${i + 1}: ${userAnswer.replace(/\\'/g, "'")} (${questionScore} балів)`;
+          }).filter(line => line !== null).join('\n')
         : 'Немає відповідей';
       const formatDateTime = (isoString) => {
         if (!isoString) return 'N/A';
