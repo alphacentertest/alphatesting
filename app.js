@@ -5,7 +5,7 @@ const path = require('path');
 const ExcelJS = require('exceljs');
 const session = require('express-session');
 const MongoStore = require('connect-mongo');
-const { MongoClient } = require('mongodb');
+const { MongoClient, ObjectId } = require('mongodb'); // Импортируем ObjectId
 const fs = require('fs');
 
 const app = express();
@@ -1001,7 +1001,7 @@ app.get('/result', checkAuth, async (req, res) => {
     let questionScore = 0;
     if (q.type === 'multiple' && userAnswer && Array.isArray(userAnswer)) {
       const correctAnswers = q.correctAnswers.map(val => String(val).trim().toLowerCase());
-      const userAnswers = userAnswer.map(val => String(val).trim().toLowerCase());
+      const userAnswers = userAnswer.map(val => String(val).trim().toLowerCase().replace(/\\'/g, "'")); // Убираем экранирование
       const isCorrect = correctAnswers.length === userAnswers.length &&
         correctAnswers.every(val => userAnswers.includes(val)) &&
         userAnswers.every(val => correctAnswers.includes(val));
@@ -1010,7 +1010,8 @@ app.get('/result', checkAuth, async (req, res) => {
         questionScore = q.points;
       }
     } else if (q.type === 'input' && userAnswer) {
-      const normalizedUserAnswer = String(userAnswer).trim().toLowerCase().replace(/\s+/g, '');
+      // Нормализуем числовой ввод: заменяем запятую на точку
+      const normalizedUserAnswer = String(userAnswer).trim().toLowerCase().replace(/\s+/g, '').replace(',', '.');
       const normalizedCorrectAnswer = String(q.correctAnswers[0]).trim().toLowerCase().replace(/\s+/g, '');
       const isCorrect = normalizedUserAnswer === normalizedCorrectAnswer;
       console.log(`Question ${index + 1} (input): userAnswer=${normalizedUserAnswer}, correctAnswer=${normalizedCorrectAnswer}, isCorrect=${isCorrect}`);
@@ -1423,7 +1424,7 @@ app.get('/admin/results', checkAuth, checkAdmin, async (req, res) => {
             const userAnswer = Array.isArray(a) ? a.join(', ') : a;
             const questionScore = r.scoresPerQuestion[i] || 0;
             console.log(`Result ${index + 1}, Question ${parseInt(q) + 1}: userAnswer=${userAnswer}, score=${questionScore}`);
-            return `Питання ${parseInt(q) + 1}: ${userAnswer} (${questionScore} балів)`;
+            return `Питання ${parseInt(q) + 1}: ${userAnswer.replace(/'/g, "'")} (${questionScore} балів)`;
           }).join('\n')
         : 'Немає відповідей';
       const formatDateTime = (isoString) => {
@@ -1500,7 +1501,6 @@ app.post('/admin/delete-result', checkAuth, checkAdmin, async (req, res) => {
   try {
     const { id } = req.body;
     console.log(`Deleting result with id ${id}...`);
-    const { ObjectId } = MongoClient; // Используем ObjectId из MongoClient
     await db.collection('test_results').deleteOne({ _id: new ObjectId(id) });
     console.log(`Result with id ${id} deleted from MongoDB`);
     res.json({ success: true });
