@@ -66,7 +66,7 @@ app.use(session({
   cookie: { 
     secure: false, // Отключаем secure для отладки
     httpOnly: true,
-    sameSite: 'lax', // Меняем на lax
+    sameSite: 'lax',
     maxAge: 24 * 60 * 60 * 1000
   }
 }));
@@ -257,6 +257,21 @@ app.get('/', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
 
+// Функция для логирования действий
+const logActivity = async (user, action) => {
+  try {
+    const timestamp = new Date();
+    await db.collection('activity_log').insertOne({
+      user,
+      action,
+      timestamp: timestamp.toISOString()
+    });
+    console.log(`Logged activity: ${user} - ${action} at ${timestamp}`);
+  } catch (error) {
+    console.error('Error logging activity:', error.message, error.stack);
+  }
+};
+
 app.post('/login', async (req, res) => {
   try {
     console.log('Handling /login request...');
@@ -282,6 +297,7 @@ app.post('/login', async (req, res) => {
     }
 
     req.session.user = user;
+    await logActivity(user, 'увійшов на сайт'); // Логируем вход
     console.log('Session after setting user:', req.session);
     console.log('Session ID after setting user:', req.sessionID);
     console.log('Cookies after setting session:', req.cookies);
@@ -345,7 +361,7 @@ app.get('/select-test', checkAuth, (req, res) => {
             font-family: Arial, sans-serif; 
             text-align: center; 
             padding: 20px; 
-            padding-bottom: 80px; /* Учитываем место для кнопки Вийти */
+            padding-bottom: 80px;
             margin: 0; 
           }
           h1 { 
@@ -561,7 +577,7 @@ app.get('/test', checkAuth, async (req, res) => {
   const testNumber = req.query.test;
   console.log(`Processing /test request for testNumber: ${testNumber}, user: ${req.user}`);
   if (!testNumber) {
-    console.warn('Test number not provided in query');
+    console.warn('Test Estamos number not provided in query');
     return res.status(400).send('Номер тесту не вказано');
   }
   if (!testNames[testNumber]) {
@@ -665,8 +681,12 @@ app.get('/test/question', checkAuth, (req, res) => {
           .progress-row { 
             display: flex; 
             align-items: center; 
-            justify-content: space-between; 
+            justify-content: center; 
             gap: 2px; 
+            flex-wrap: nowrap; 
+            overflow-x: auto; 
+            -webkit-overflow-scrolling: touch; 
+            padding-bottom: 5px; 
           }
           .option-box { border: 2px solid #ccc; padding: 10px; margin: 5px 0; border-radius: 5px; cursor: pointer; font-size: 16px; user-select: none; }
           .option-box.selected { background-color: #90ee90; }
@@ -690,17 +710,17 @@ app.get('/test/question', checkAuth, (req, res) => {
             .progress-bar { flex-direction: column; }
             .progress-circle { width: 20px; height: 20px; font-size: 10px; }
             .progress-line { width: 5px; }
-            .progress-row { justify-content: center; gap: 2px; }
+            .progress-row { justify-content: center; gap: 2px; flex-wrap: wrap; overflow-x: hidden; }
             .option-box { font-size: 18px; padding: 15px; }
             button { font-size: 18px; padding: 15px; }
             #timer { font-size: 20px; }
             .question-box h2 { font-size: 20px; }
           }
           @media (min-width: 601px) {
-            .progress-bar { flex-direction: row; justify-content: space-between; }
+            .progress-bar { flex-direction: row; justify-content: center; }
             .progress-circle { width: 40px; height: 40px; font-size: 14px; }
             .progress-line { width: 5px; }
-            .progress-row { justify-content: space-between; }
+            .progress-row { justify-content: center; }
           }
         </style>
       </head>
@@ -709,7 +729,7 @@ app.get('/test/question', checkAuth, (req, res) => {
         <div id="timer">Залишилось часу: ${minutes} мм ${seconds} с</div>
         <div class="progress-bar">
   `;
-  // Для мобильной версии — ряды по 10 кругов
+  // Для полной версии — один ряд с прокруткой, для мобильной — ряды по 10 кругов
   if (progress.length <= 10) {
     html += `
       <div class="progress-row">
@@ -1094,7 +1114,7 @@ app.get('/result', checkAuth, async (req, res) => {
                 content: [
                   imageBase64 ? {
                     image: 'data:image/png;base64,' + imageBase64,
-                    width: 50, // Уменьшаем логотип в 3 раза
+                    width: 50,
                     alignment: 'center',
                     margin: [0, 0, 0, 20]
                   } : { text: 'Логотип відсутній', alignment: 'center', margin: [0, 0, 0, 20], lineHeight: 2 },
@@ -1318,17 +1338,25 @@ app.get('/admin', checkAuth, checkAdmin, (req, res) => {
         <meta charset="UTF-8">
         <title>Адмін-панель</title>
         <style>
-          body { font-size: 24px; margin: 20px; }
-          button { font-size: 24px; padding: 10px 20px; margin: 5px; }
+          body { font-family: Arial, sans-serif; text-align: center; padding: 50px; }
+          button { padding: 10px 20px; margin: 10px; font-size: 18px; cursor: pointer; width: 200px; }
+          button:hover { background-color: #90ee90; }
+          #logout { background-color: #ef5350; color: white; }
         </style>
       </head>
       <body>
         <h1>Адмін-панель</h1>
-        <button onclick="window.location.href='/admin/results'">Переглянути результати</button>
-        <button onclick="window.location.href='/admin/delete-results'">Видалити результати</button>
-        <button onclick="window.location.href='/admin/edit-tests'">Редагувати назви тестів</button>
-        <button onclick="window.location.href='/admin/create-test'">Створити новий тест</button>
-        <button onclick="window.location.href='/'">Повернутися на головну</button>
+        <button onclick="window.location.href='/admin/results'">Перегляд результатів</button><br>
+        <button onclick="window.location.href='/admin/edit-tests'">Редагувати назви тестів</button><br>
+        <button onclick="window.location.href='/admin/create-test'">Створити новий тест</button><br>
+        <button onclick="window.location.href='/admin/activity-log'">Журнал дій</button><br>
+        <button id="logout" onclick="logout()">Вийти</button>
+        <script>
+          async function logout() {
+            await fetch('/logout', { method: 'POST' });
+            window.location.href = '/';
+          }
+        </script>
       </body>
     </html>
   `);
@@ -1408,262 +1436,332 @@ app.get('/admin/results', checkAuth, checkAdmin, async (req, res) => {
         Math.round((r.suspiciousActivity.timeAway / (r.duration * 1000)) * 100) : 0;
       const switchCount = r.suspiciousActivity ? r.suspiciousActivity.switchCount || 0 : 0;
       const avgResponseTime = r.suspiciousActivity && r.suspiciousActivity.responseTimes ? 
-        (r.suspiciousActivity.responseTimes.reduce((sum, time) => sum + (time || 0), 0) / r.suspiciousActivity.responseTimes.length / 1000).toFixed(2) : 0;
-      const avgActivityCount = r.suspiciousActivity && r.suspiciousActivity.activityCounts ? 
-        (r.suspiciousActivity.activityCounts.reduce((sum, count) => sum + (count || 0), 0) / r.suspiciousActivity.activityCounts.length).toFixed(2) : 0;
-      const activityDetails = `
+      (r.suspiciousActivity.responseTimes.reduce((sum, time) => sum + (time || 0), 0) / r.suspiciousActivity.responseTimes.length / 1000).toFixed(2) : 0;
+    const avgActivityCount = r.suspiciousActivity && r.suspiciousActivity.activityCounts ? 
+      (r.suspiciousActivity.activityCounts.reduce((sum, count) => sum + (count || 0), 0) / r.suspiciousActivity.activityCounts.length).toFixed(2) : 0;
+    const activityDetails = `
 Время вне вкладки: ${timeAwayPercent}%
 Переключения вкладок: ${switchCount}
 Среднее время ответа (сек): ${avgResponseTime}
 Средняя активность (действий): ${avgActivityCount}
-      `;
-      adminHtml += `
-        <tr>
-          <td>${r.user || 'N/A'}</td>
-          <td>${testNames[r.testNumber]?.name || 'N/A'}</td>
-          <td>${r.score || '0'}</td>
-          <td>${r.totalPoints || '0'}</td>
-          <td>${formatDateTime(r.startTime)}</td>
-          <td>${formatDateTime(r.endTime)}</td>
-          <td>${r.duration || 'N/A'}</td>
-          <td>${suspiciousActivityPercent}%</td>
-          <td class="details">${activityDetails}</td>
-          <td class="answers">${answersDisplay}</td>
-          <td><button class="delete-btn" onclick="deleteResult('${r._id}')">🗑️ Видалити</button></td>
-        </tr>
-      `;
-    });
-  }
-  adminHtml += `
-        </table>
-        <button class="nav-btn" onclick="window.location.href='/admin'">Повернутися до адмін-панелі</button>
-        <script>
-          async function deleteResult(id) {
-            if (confirm('Ви впевнені, що хочете видалити цей результат?')) {
-              await fetch('/admin/delete-result', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ id })
-              });
-              window.location.reload();
-            }
+    `;
+    adminHtml += `
+      <tr>
+        <td>${r.user || 'N/A'}</td>
+        <td>${testNames[r.testNumber]?.name || 'N/A'}</td>
+        <td>${r.score || '0'}</td>
+        <td>${r.totalPoints || '0'}</td>
+        <td>${formatDateTime(r.startTime)}</td>
+        <td>${formatDateTime(r.endTime)}</td>
+        <td>${r.duration || 'N/A'}</td>
+        <td>${suspiciousActivityPercent}%</td>
+        <td class="details">${activityDetails}</td>
+        <td class="answers">${answersDisplay}</td>
+        <td><button class="delete-btn" onclick="deleteResult('${r._id}')">🗑️ Видалити</button></td>
+      </tr>
+    `;
+  });
+}
+adminHtml += `
+      </table>
+      <button class="nav-btn" onclick="window.location.href='/admin'">Повернутися до адмін-панелі</button>
+      <script>
+        async function deleteResult(id) {
+          if (confirm('Ви впевнені, що хочете видалити цей результат?')) {
+            await fetch('/admin/delete-result', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ id })
+            });
+            window.location.reload();
           }
-        </script>
-      </body>
-    </html>
-  `;
-  res.send(adminHtml);
+        }
+      </script>
+    </body>
+  </html>
+`;
+res.send(adminHtml);
 });
 
 app.post('/admin/delete-result', checkAuth, checkAdmin, async (req, res) => {
-  try {
-    const { id } = req.body;
-    console.log(`Deleting result with id ${id}...`);
-    await db.collection('test_results').deleteOne({ _id: new require('mongodb').ObjectId(id) });
-    console.log(`Result with id ${id} deleted from MongoDB`);
-    res.json({ success: true });
-  } catch (error) {
-    console.error('Ошибка при удалении результата:', error.message, error.stack);
-    res.status(500).json({ success: false, message: 'Помилка при видаленні результату' });
-  }
+try {
+  const { id } = req.body;
+  console.log(`Deleting result with id ${id}...`);
+  await db.collection('test_results').deleteOne({ _id: new require('mongodb').ObjectId(id) });
+  console.log(`Result with id ${id} deleted from MongoDB`);
+  res.json({ success: true });
+} catch (error) {
+  console.error('Ошибка при удалении результата:', error.message, error.stack);
+  res.status(500).json({ success: false, message: 'Помилка при видаленні результату' });
+}
 });
 
 app.get('/admin/delete-results', checkAuth, checkAdmin, async (req, res) => {
-  try {
-    console.log('Deleting all test results...');
-    await db.collection('test_results').deleteMany({});
-    console.log('Test results deleted from MongoDB');
-    res.send(`
-      <!DOCTYPE html>
-      <html lang="uk">
-        <head>
-          <meta charset="UTF-8">
-          <title>Видалено результати</title>
-        </head>
-        <body>
-          <h1>Результати успішно видалено</h1>
-          <button onclick="window.location.href='/admin'">Повернутися до адмін-панелі</button>
-        </body>
-      </html>
-    `);
-  } catch (error) {
-    console.error('Ошибка при удалении результатов:', error.message, error.stack);
-    res.status(500).send('Помилка при видаленні результатів');
-  }
+try {
+  console.log('Deleting all test results...');
+  await db.collection('test_results').deleteMany({});
+  console.log('Test results deleted from MongoDB');
+  res.send(`
+    <!DOCTYPE html>
+    <html lang="uk">
+      <head>
+        <meta charset="UTF-8">
+        <title>Видалено результати</title>
+      </head>
+      <body>
+        <h1>Результати успішно видалено</h1>
+        <button onclick="window.location.href='/admin'">Повернутися до адмін-панелі</button>
+      </body>
+    </html>
+  `);
+} catch (error) {
+  console.error('Ошибка при удалении результатов:', error.message, error.stack);
+  res.status(500).send('Помилка при видаленні результатів');
+}
 });
 
 app.get('/admin/edit-tests', checkAuth, checkAdmin, (req, res) => {
-  console.log('Serving /admin/edit-tests for user:', req.user);
-  res.send(`
-    <!DOCTYPE html>
-    <html lang="uk">
-      <head>
-        <meta charset="UTF-8">
-        <title>Редагувати назви тестів</title>
-        <style>
-          body { font-size: 24px; margin: 20px; }
-          input { font-size: 24px; padding: 5px; margin: 5px; }
-          button { font-size: 24px; padding: 10px 20px; margin: 5px; }
-          .delete-btn { background-color: #ff4d4d; color: white; }
-          .test-row { display: flex; align-items: center; margin-bottom: 10px; }
-        </style>
-      </head>
-      <body>
-        <h1>Редагувати назви та час тестів</h1>
-        <form method="POST" action="/admin/edit-tests">
-          ${Object.entries(testNames).map(([num, data]) => `
-            <div class="test-row">
-              <label for="test${num}">Назва Тесту ${num}:</label>
-              <input type="text" id="test${num}" name="test${num}" value="${data.name}" required>
-              <label for="time${num}">Час (сек):</label>
-              <input type="number" id="time${num}" name="time${num}" value="${data.timeLimit}" required min="1">
-              <button type="button" class="delete-btn" onclick="deleteTest('${num}')">Видалити</button>
-            </div>
-          `).join('')}
-          <button type="submit">Зберегти</button>
-        </form>
-        <button onclick="window.location.href='/admin'">Повернутися до адмін-панелі</button>
-        <script>
-          async function deleteTest(testNumber) {
-            if (confirm('Ви впевнені, що хочете видалити Тест ' + testNumber + '?')) {
-              await fetch('/admin/delete-test', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ testNumber })
-              });
-              window.location.reload();
-            }
+console.log('Serving /admin/edit-tests for user:', req.user);
+res.send(`
+  <!DOCTYPE html>
+  <html lang="uk">
+    <head>
+      <meta charset="UTF-8">
+      <title>Редагувати назви тестів</title>
+      <style>
+        body { font-size: 24px; margin: 20px; }
+        input { font-size: 24px; padding: 5px; margin: 5px; }
+        button { font-size: 24px; padding: 10px 20px; margin: 5px; }
+        .delete-btn { background-color: #ff4d4d; color: white; }
+        .test-row { display: flex; align-items: center; margin-bottom: 10px; }
+      </style>
+    </head>
+    <body>
+      <h1>Редагувати назви та час тестів</h1>
+      <form method="POST" action="/admin/edit-tests">
+        ${Object.entries(testNames).map(([num, data]) => `
+          <div class="test-row">
+            <label for="test${num}">Назва Тесту ${num}:</label>
+            <input type="text" id="test${num}" name="test${num}" value="${data.name}" required>
+            <label for="time${num}">Час (сек):</label>
+            <input type="number" id="time${num}" name="time${num}" value="${data.timeLimit}" required min="1">
+            <button type="button" class="delete-btn" onclick="deleteTest('${num}')">Видалити</button>
+          </div>
+        `).join('')}
+        <button type="submit">Зберегти</button>
+      </form>
+      <button onclick="window.location.href='/admin'">Повернутися до адмін-панелі</button>
+      <script>
+        async function deleteTest(testNumber) {
+          if (confirm('Ви впевнені, що хочете видалити Тест ' + testNumber + '?')) {
+            await fetch('/admin/delete-test', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ testNumber })
+            });
+            window.location.reload();
           }
-        </script>
-      </body>
-    </html>
-  `);
+        }
+      </script>
+    </body>
+  </html>
+`);
 });
 
 app.post('/admin/edit-tests', checkAuth, checkAdmin, (req, res) => {
-  try {
-    console.log('Updating test names and time limits...');
-    Object.keys(testNames).forEach(num => {
-      const testName = req.body[`test${num}`];
-      const timeLimit = req.body[`time${num}`];
-      if (testName && timeLimit) {
-        testNames[num] = {
-          name: testName,
-          timeLimit: parseInt(timeLimit) || testNames[num].timeLimit
-        };
-      }
-    });
-    console.log('Updated test names and time limits:', testNames);
-    res.send(`
-      <!DOCTYPE html>
-      <html lang="uk">
-        <head>
-          <meta charset="UTF-8">
-          <title>Назви оновлено</title>
-        </head>
-        <body>
-          <h1>Назви та час тестів успішно оновлено</h1>
-          <button onclick="window.location.href='/admin'">Повернутися до адмін-панелі</button>
-        </body>
-      </html>
-    `);
-  } catch (error) {
-    console.error('Ошибка при редактировании названий тестов:', error.message, error.stack);
-    res.status(500).send('Помилка при оновленні назв тестів');
-  }
-});
-
-app.post('/admin/delete-test', checkAuth, checkAdmin, async (req, res) => {
-  try {
-    const { testNumber } = req.body;
-    if (!testNames[testNumber]) {
-      return res.status(404).json({ success: false, message: 'Тест не знайдено' });
+try {
+  console.log('Updating test names and time limits...');
+  Object.keys(testNames).forEach(num => {
+    const testName = req.body[`test${num}`];
+    const timeLimit = req.body[`time${num}`];
+    if (testName && timeLimit) {
+      testNames[num] = {
+        name: testName,
+        timeLimit: parseInt(timeLimit) || testNames[num].timeLimit
+      };
     }
-    delete testNames[testNumber];
-    console.log(`Deleted test ${testNumber}, updated testNames:`, testNames);
-    res.json({ success: true });
-  } catch (error) {
-    console.error('Ошибка при удалении теста:', error.message, error.stack);
-    res.status(500).json({ success: false, message: 'Помилка при видаленні тесту' });
-  }
-});
-
-app.get('/admin/create-test', checkAuth, checkAdmin, (req, res) => {
-  const excelFiles = fs.readdirSync(__dirname).filter(file => file.endsWith('.xlsx') && file.startsWith('questions'));
-  console.log('Available Excel files:', excelFiles);
+  });
+  console.log('Updated test names and time limits:', testNames);
   res.send(`
     <!DOCTYPE html>
     <html lang="uk">
       <head>
         <meta charset="UTF-8">
-        <title>Створити новий тест</title>
-        <style>
-          body { font-size: 24px; margin: 20px; }
-          input { font-size: 24px; padding: 5px; margin: 5px; }
-          select { font-size: 24px; padding: 5px; margin: 5px; }
-          button { font-size: 24px; padding: 10px 20px; margin: 5px; }
-        </style>
+        <title>Назви оновлено</title>
       </head>
       <body>
-        <h1>Створити новий тест</h1>
-        <form method="POST" action="/admin/create-test">
-          <div>
-            <label for="testName">Назва нового тесту:</label>
-            <input type="text" id="testName" name="testName" required>
-          </div>
-          <div>
-            <label for="timeLimit">Час (сек):</label>
-            <input type="number" id="timeLimit" name="timeLimit" value="3600" required min="1">
-          </div>
-          <div>
-            <label for="excelFile">Оберіть файл Excel з питаннями:</label>
-            <select id="excelFile" name="excelFile" required>
-              ${excelFiles.map(file => `<option value="${file}">${file}</option>`).join('')}
-            </select>
-          </div>
-          <button type="submit">Створити</button>
-        </form>
+        <h1>Назви та час тестів успішно оновлено</h1>
         <button onclick="window.location.href='/admin'">Повернутися до адмін-панелі</button>
       </body>
     </html>
   `);
+} catch (error) {
+  console.error('Ошибка при редактировании названий тестов:', error.message, error.stack);
+  res.status(500).send('Помилка при оновленні назв тестів');
+}
+});
+
+app.post('/admin/delete-test', checkAuth, checkAdmin, async (req, res) => {
+try {
+  const { testNumber } = req.body;
+  if (!testNames[testNumber]) {
+    return res.status(404).json({ success: false, message: 'Тест не знайдено' });
+  }
+  delete testNames[testNumber];
+  console.log(`Deleted test ${testNumber}, updated testNames:`, testNames);
+  res.json({ success: true });
+} catch (error) {
+  console.error('Ошибка при удалении теста:', error.message, error.stack);
+  res.status(500).json({ success: false, message: 'Помилка при видаленні тесту' });
+}
+});
+
+app.get('/admin/create-test', checkAuth, checkAdmin, (req, res) => {
+const excelFiles = fs.readdirSync(__dirname).filter(file => file.endsWith('.xlsx') && file.startsWith('questions'));
+console.log('Available Excel files:', excelFiles);
+res.send(`
+  <!DOCTYPE html>
+  <html lang="uk">
+    <head>
+      <meta charset="UTF-8">
+      <title>Створити новий тест</title>
+      <style>
+        body { font-size: 24px; margin: 20px; }
+        input { font-size: 24px; padding: 5px; margin: 5px; }
+        select { font-size: 24px; padding: 5px; margin: 5px; }
+        button { font-size: 24px; padding: 10px 20px; margin: 5px; }
+      </style>
+    </head>
+    <body>
+      <h1>Створити новий тест</h1>
+      <form method="POST" action="/admin/create-test">
+        <div>
+          <label for="testName">Назва нового тесту:</label>
+          <input type="text" id="testName" name="testName" required>
+        </div>
+        <div>
+          <label for="timeLimit">Час (сек):</label>
+          <input type="number" id="timeLimit" name="timeLimit" value="3600" required min="1">
+        </div>
+        <div>
+          <label for="excelFile">Оберіть файл Excel з питаннями:</label>
+          <select id="excelFile" name="excelFile" required>
+            ${excelFiles.map(file => `<option value="${file}">${file}</option>`).join('')}
+          </select>
+        </div>
+        <button type="submit">Створити</button>
+      </form>
+      <button onclick="window.location.href='/admin'">Повернутися до адмін-панелі</button>
+    </body>
+  </html>
+`);
 });
 
 app.post('/admin/create-test', checkAuth, checkAdmin, async (req, res) => {
-  try {
-    const { testName, excelFile, timeLimit } = req.body;
-    const match = excelFile.match(/^questions(\d+)\.xlsx$/);
-    if (!match) throw new Error('Невірний формат файлу Excel');
-    const testNumber = match[1];
-    if (testNames[testNumber]) throw new Error('Тест з таким номером вже існує');
+try {
+  const { testName, excelFile, timeLimit } = req.body;
+  const match = excelFile.match(/^questions(\d+)\.xlsx$/);
+  if (!match) throw new Error('Невірний формат файлу Excel');
+  const testNumber = match[1];
+  if (testNames[testNumber]) throw new Error('Тест з таким номером вже існує');
 
-    testNames[testNumber] = {
-      name: testName,
-      timeLimit: parseInt(timeLimit) || 3600
-    };
-    console.log('Created new test:', { testNumber, testName, timeLimit, excelFile });
-    res.send(`
-      <!DOCTYPE html>
-      <html lang="uk">
-        <head>
-          <meta charset="UTF-8">
-          <title>Тест створено</title>
-        </head>
-        <body>
-          <h1>Новий тест "${testName}" створено</h1>
-          <button onclick="window.location.href='/admin'">Повернутися до адмін-панелі</button>
-        </body>
-      </html>
-    `);
-  } catch (error) {
-    console.error('Ошибка при создании нового теста:', error.message, error.stack);
-    res.status(500).send(`Помилка при створенні тесту: ${error.message}`);
-  }
+  testNames[testNumber] = {
+    name: testName,
+    timeLimit: parseInt(timeLimit) || 3600
+  };
+  console.log('Created new test:', { testNumber, testName, timeLimit, excelFile });
+  res.send(`
+    <!DOCTYPE html>
+    <html lang="uk">
+      <head>
+        <meta charset="UTF-8">
+        <title>Тест створено</title>
+      </head>
+      <body>
+        <h1>Новий тест "${testName}" створено</h1>
+        <button onclick="window.location.href='/admin'">Повернутися до адмін-панелі</button>
+      </body>
+    </html>
+  `);
+} catch (error) {
+  console.error('Ошибка при создании нового теста:', error.message, error.stack);
+  res.status(500).send(`Помилка при створенні тесту: ${error.message}`);
+}
+});
+
+app.get('/admin/activity-log', checkAuth, checkAdmin, async (req, res) => {
+let activities = [];
+let errorMessage = '';
+try {
+  console.log('Fetching activity log from MongoDB...');
+  activities = await db.collection('activity_log').find({}).sort({ timestamp: -1 }).toArray();
+  console.log('Fetched activities from MongoDB:', activities);
+} catch (fetchError) {
+  console.error('Ошибка при получении данных из MongoDB:', fetchError.message, fetchError.stack);
+  errorMessage = `Ошибка MongoDB: ${fetchError.message}`;
+}
+
+let adminHtml = `
+  <!DOCTYPE html>
+  <html lang="uk">
+    <head>
+      <meta charset="UTF-8">
+      <title>Журнал дій</title>
+      <style>
+        body { font-family: Arial, sans-serif; padding: 20px; }
+        table { border-collapse: collapse; width: 100%; margin-top: 20px; }
+        th, td { border: 1px solid black; padding: 8px; text-align: left; }
+        th { background-color: #f2f2f2; }
+        .error { color: red; }
+        .nav-btn { padding: 10px 20px; margin: 10px 0; cursor: pointer; }
+      </style>
+    </head>
+    <body>
+      <h1>Журнал дій</h1>
+      <button class="nav-btn" onclick="window.location.href='/admin'">Повернутися до адмін-панелі</button>
+`;
+if (errorMessage) {
+  adminHtml += `<p class="error">${errorMessage}</p>`;
+}
+adminHtml += `
+      <table>
+        <tr>
+          <th>Користувач</th>
+          <th>Дія</th>
+          <th>Час</th>
+          <th>Дата</th>
+        </tr>
+`;
+if (!activities || activities.length === 0) {
+  adminHtml += '<tr><td colspan="4">Немає записів</td></tr>';
+  console.log('No activities found in activity_log');
+} else {
+  activities.forEach(activity => {
+    const timestamp = new Date(activity.timestamp);
+    const formattedTime = timestamp.toLocaleTimeString('uk-UA', { hour12: false });
+    const formattedDate = timestamp.toLocaleDateString('uk-UA');
+    adminHtml += `
+      <tr>
+        <td>${activity.user || 'N/A'}</td>
+        <td>${activity.action || 'N/A'}</td>
+        <td>${formattedTime}</td>
+        <td>${formattedDate}</td>
+      </tr>
+    `;
+  });
+}
+adminHtml += `
+      </table>
+      <button class="nav-btn" onclick="window.location.href='/admin'">Повернутися до адмін-панелі</button>
+    </body>
+  </html>
+`;
+res.send(adminHtml);
 });
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
-  console.log(`Server is running on port ${PORT}`);
+console.log(`Server is running on port ${PORT}`);
 });
 
 module.exports = app;
