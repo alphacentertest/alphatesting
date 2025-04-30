@@ -839,6 +839,8 @@ app.get('/test/question', checkAuth, (req, res) => {
           let switchCount = 0;
           let lastActivityTime = Date.now();
           let activityCount = 0;
+          let lastMouseMoveTime = 0;
+          const debounceDelay = 100; // 100 миллисекунд
           const questionStartTime = ${userTest.answerTimestamps[index] || Date.now()};
           let selectedOptions = ${selectedOptionsString};
 
@@ -869,11 +871,17 @@ app.get('/test/question', checkAuth, (req, res) => {
             }
           });
 
-          document.addEventListener('mousemove', () => {
-            lastActivityTime = Date.now();
-            activityCount++;
-            console.log('Mouse activity detected, count:', activityCount);
-          });
+          function debounceMouseMove() {
+            const now = Date.now();
+            if (now - lastMouseMoveTime >= debounceDelay) {
+              lastMouseMoveTime = now;
+              lastActivityTime = now;
+              activityCount++;
+              console.log('Mouse activity detected, count:', activityCount);
+            }
+          }
+
+          document.addEventListener('mousemove', debounceMouseMove);
 
           document.addEventListener('keydown', () => {
             lastActivityTime = Date.now();
@@ -1492,7 +1500,6 @@ app.get('/admin/results', checkAuth, checkAdmin, async (req, res) => {
     console.log('No results found in test_results');
   } else {
     results.forEach((r, index) => {
-      // Преобразуем r.answers из объекта в массив, чтобы индексы совпадали с scoresPerQuestion
       const answersArray = [];
       if (r.answers) {
         Object.keys(r.answers).sort((a, b) => parseInt(a) - parseInt(b)).forEach(key => {
@@ -1503,9 +1510,9 @@ app.get('/admin/results', checkAuth, checkAdmin, async (req, res) => {
 
       const answersDisplay = answersArray.length > 0 
         ? answersArray.map((a, i) => {
-            if (!a) return null; // Пропускаем вопросы без ответов
+            if (!a) return null;
             const userAnswer = Array.isArray(a) ? a.join(', ') : a;
-            const questionScore = r.scoresPerQuestion[i] || 0; // Используем сохранённые баллы
+            const questionScore = r.scoresPerQuestion[i] || 0;
             console.log(`Result ${index + 1}, Question ${i + 1}: userAnswer=${userAnswer}, savedScore=${questionScore}`);
             return `Питання ${i + 1}: ${userAnswer.replace(/\\'/g, "'")} (${questionScore} балів)`;
           }).filter(line => line !== null).join('\n')
@@ -1522,13 +1529,13 @@ app.get('/admin/results', checkAuth, checkAdmin, async (req, res) => {
       const switchCount = r.suspiciousActivity ? r.suspiciousActivity.switchCount || 0 : 0;
       const avgResponseTime = r.suspiciousActivity && r.suspiciousActivity.responseTimes ? 
         (r.suspiciousActivity.responseTimes.reduce((sum, time) => sum + (time || 0), 0) / r.suspiciousActivity.responseTimes.length / 1000).toFixed(2) : 0;
-      const avgActivityCount = r.suspiciousActivity && r.suspiciousActivity.activityCounts ? 
-        (r.suspiciousActivity.activityCounts.reduce((sum, count) => sum + (count || 0), 0) / r.suspiciousActivity.activityCounts.length).toFixed(2) : 0;
+      const totalActivityCount = r.suspiciousActivity && r.suspiciousActivity.activityCounts ? 
+        r.suspiciousActivity.activityCounts.reduce((sum, count) => sum + (count || 0), 0).toFixed(0) : 0;
       const activityDetails = `
 Время вне вкладки: ${timeAwayPercent}%
 Переключения вкладок: ${switchCount}
 Среднее время ответа (сек): ${avgResponseTime}
-Средняя активность (действий): ${avgActivityCount}
+Общее количество действий: ${totalActivityCount}
       `;
       adminHtml += `
         <tr>
