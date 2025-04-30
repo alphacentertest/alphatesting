@@ -633,8 +633,8 @@ app.get('/test/question', checkAuth, (req, res) => {
           img { max-width: 100%; margin-bottom: 10px; display: block; margin-left: auto; margin-right: auto; }
           .progress-bar { 
             display: flex; 
-            justify-content: space-between; 
-            gap: 2px; 
+            flex-direction: column; 
+            gap: 5px; 
             margin-bottom: 20px; 
             width: calc(100% - 40px); 
             margin-left: auto; 
@@ -646,7 +646,7 @@ app.get('/test/question', checkAuth, (req, res) => {
           .progress-circle.answered { background-color: green; color: white; }
           .progress-line { width: 5px; height: 2px; background-color: #ccc; margin: 0 2px; align-self: center; }
           .progress-line.answered { background-color: green; }
-          .progress-row { display: flex; align-items: center; justify-content: space-around; flex: 1 0 100%; }
+          .progress-row { display: flex; align-items: center; justify-content: space-between; }
           .option-box { border: 2px solid #ccc; padding: 10px; margin: 5px 0; border-radius: 5px; cursor: pointer; font-size: 16px; user-select: none; }
           .option-box.selected { background-color: #90ee90; }
           .button-container { position: fixed; bottom: 20px; left: 20px; right: 20px; display: flex; justify-content: space-between; }
@@ -666,18 +666,20 @@ app.get('/test/question', checkAuth, (req, res) => {
           #answers { margin-bottom: 20px; }
           @media (max-width: 600px) {
             h1 { font-size: 28px; }
-            .progress-bar { flex-wrap: wrap; justify-content: center; gap: 5px; }
+            .progress-bar { flex-direction: column; }
             .progress-circle { width: 20px; height: 20px; font-size: 10px; }
             .progress-line { width: 5px; }
+            .progress-row { justify-content: center; gap: 5px; }
             .option-box { font-size: 18px; padding: 15px; }
             button { font-size: 18px; padding: 15px; }
             #timer { font-size: 20px; }
             .question-box h2 { font-size: 20px; }
           }
           @media (min-width: 601px) {
-            .progress-bar { flex-wrap: nowrap; justify-content: space-between; }
+            .progress-bar { flex-direction: row; justify-content: space-between; }
             .progress-circle { width: 40px; height: 40px; font-size: 14px; }
             .progress-line { width: 5px; }
+            .progress-row { justify-content: space-between; }
           }
         </style>
       </head>
@@ -686,15 +688,29 @@ app.get('/test/question', checkAuth, (req, res) => {
         <div id="timer">Залишилось часу: ${minutes} мм ${seconds} с</div>
         <div class="progress-bar">
   `;
-  // Для полной версии — один ряд, для мобильной — ряды по 12 кругов
-  html += `
-    <div class="progress-row">
-      ${progress.map((p, j) => `
-        <div class="progress-circle ${p.answered ? 'answered' : 'unanswered'}">${p.number}</div>
-        ${j < progress.length - 1 ? '<div class="progress-line ' + (p.answered ? 'answered' : '') + '"></div>' : ''}
-      `).join('')}
-    </div>
-  `;
+  // Для мобильной версии — ряды по 12 кругов
+  if (progress.length <= 12) {
+    html += `
+      <div class="progress-row">
+        ${progress.map((p, j) => `
+          <div class="progress-circle ${p.answered ? 'answered' : 'unanswered'}">${p.number}</div>
+          ${j < progress.length - 1 ? '<div class="progress-line ' + (p.answered ? 'answered' : '') + '"></div>' : ''}
+        `).join('')}
+      </div>
+    `;
+  } else {
+    for (let i = 0; i < progress.length; i += 12) {
+      const rowCircles = progress.slice(i, i + 12);
+      html += `
+        <div class="progress-row">
+          ${rowCircles.map((p, j) => `
+            <div class="progress-circle ${p.answered ? 'answered' : 'unanswered'}">${p.number}</div>
+            ${j < rowCircles.length - 1 ? '<div class="progress-line ' + (p.answered ? 'answered' : '') + '"></div>' : ''}
+          `).join('')}
+        </div>
+      `;
+    }
+  }
   html += `
         </div>
         <div id="question-container">
