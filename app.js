@@ -345,6 +345,7 @@ app.get('/select-test', checkAuth, (req, res) => {
             font-family: Arial, sans-serif; 
             text-align: center; 
             padding: 20px; 
+            padding-bottom: 80px; /* Учитываем место для кнопки Вийти */
             margin: 0; 
           }
           h1 { 
@@ -373,6 +374,11 @@ app.get('/select-test', checkAuth, (req, res) => {
           #logout { 
             background-color: #ef5350; 
             color: white; 
+            position: fixed; 
+            bottom: 20px; 
+            left: 50%; 
+            transform: translateX(-50%); 
+            width: 200px; 
           }
           @media (max-width: 600px) {
             h1 { 
@@ -382,6 +388,9 @@ app.get('/select-test', checkAuth, (req, res) => {
               font-size: 20px; 
               width: 90%; 
               padding: 15px; 
+            }
+            #logout { 
+              width: 90%; 
             }
           }
         </style>
@@ -622,7 +631,7 @@ app.get('/test/question', checkAuth, (req, res) => {
           body { font-family: Arial, sans-serif; margin: 0; padding: 20px; padding-bottom: 80px; background-color: #f0f0f0; }
           h1 { font-size: 24px; text-align: center; }
           img { max-width: 300px; margin-bottom: 10px; display: block; margin-left: auto; margin-right: auto; }
-          .progress-bar { display: flex; flex-wrap: wrap; justify-content: center; gap: 5px; margin-bottom: 20px; }
+          .progress-bar { display: flex; justify-content: center; gap: 5px; margin-bottom: 20px; width: 100%; max-width: 100%; }
           .progress-circle { width: 30px; height: 30px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 14px; }
           .progress-circle.unanswered { background-color: red; color: white; }
           .progress-circle.answered { background-color: green; color: white; }
@@ -644,16 +653,20 @@ app.get('/test/question', checkAuth, (req, res) => {
           .instruction { font-style: italic; color: #555; margin-bottom: 10px; font-size: 18px; }
           .option-box.draggable { cursor: move; }
           .option-box.dragging { opacity: 0.5; }
-          #question-container { background-color: white; padding: 20px; border-radius: 8px; box-shadow: 0 0 10px rgba(0, 0, 0, 0.1); width: 100%; margin-bottom: 20px; }
+          #question-container { background-color: white; padding: 20px; border-radius: 8px; box-shadow: 0 0 10px rgba(0, 0, 0, 0.1); width: 100%; max-width: 600px; margin: 0 auto 20px auto; }
           #answers { margin-bottom: 20px; }
           @media (max-width: 600px) {
             h1 { font-size: 28px; }
+            .progress-bar { flex-wrap: wrap; }
             .progress-circle { width: 25px; height: 25px; font-size: 12px; }
             .progress-line { width: 5px; }
             .option-box { font-size: 18px; padding: 15px; }
             button { font-size: 18px; padding: 15px; }
             #timer { font-size: 20px; }
             .question-box h2 { font-size: 20px; }
+          }
+          @media (min-width: 601px) {
+            .progress-bar { flex-wrap: nowrap; overflow-x: auto; }
           }
         </style>
       </head>
@@ -662,17 +675,28 @@ app.get('/test/question', checkAuth, (req, res) => {
         <div id="timer">Залишилось часу: ${minutes} мм ${seconds} с</div>
         <div class="progress-bar">
   `;
-  // Разбиваем круги на ряды по 12
-  for (let i = 0; i < progress.length; i += 12) {
-    const rowCircles = progress.slice(i, i + 12);
+  // Для полной версии — один ряд, для мобильной — ряды по 12 кругов
+  if (progress.length <= 12) {
     html += `
       <div class="progress-row">
-        ${rowCircles.map((p, j) => `
+        ${progress.map((p, j) => `
           <div class="progress-circle ${p.answered ? 'answered' : 'unanswered'}">${p.number}</div>
-          ${j < rowCircles.length - 1 ? '<div class="progress-line ' + (p.answered ? 'answered' : '') + '"></div>' : ''}
+          ${j < progress.length - 1 ? '<div class="progress-line ' + (p.answered ? 'answered' : '') + '"></div>' : ''}
         `).join('')}
       </div>
     `;
+  } else {
+    for (let i = 0; i < progress.length; i += 12) {
+      const rowCircles = progress.slice(i, i + 12);
+      html += `
+        <div class="progress-row">
+          ${rowCircles.map((p, j) => `
+            <div class="progress-circle ${p.answered ? 'answered' : 'unanswered'}">${p.number}</div>
+            ${j < rowCircles.length - 1 ? '<div class="progress-line ' + (p.answered ? 'answered' : '') + '"></div>' : ''}
+          `).join('')}
+        </div>
+      `;
+    }
   }
   html += `
         </div>
