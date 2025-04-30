@@ -5,7 +5,7 @@ const { MongoClient } = require('mongodb');
 const path = require('path');
 const fs = require('fs');
 const ExcelJS = require('exceljs');
-const bcrypt = require('bcrypt');
+const bcrypt = require('bcryptjs');
 const rateLimit = require('express-rate-limit');
 const crypto = require('crypto');
 
@@ -16,10 +16,12 @@ const saltRounds = 10;
 // MongoDB подключение
 const mongoUrl = process.env.MONGODB_URI || 'mongodb://localhost:27017/alpha';
 let db;
+let mongoClient; // Сохраняем клиент для использования в MongoStore
 
-MongoClient.connect(mongoUrl, { useUnifiedTopology: true })
+MongoClient.connect(mongoUrl)
   .then(client => {
-    db = client.db();
+    mongoClient = client; // Сохраняем клиент
+    db = client.db('alpha'); // Указываем имя базы данных
     console.log('MongoDB connected');
   })
   .catch(err => {
@@ -34,7 +36,11 @@ app.use(express.static(path.join(__dirname, 'public')));
 
 // Конфигурация сессий
 app.use(session({
-  store: new MongoStore({ client: MongoClient }),
+  store: MongoStore.create({
+    client: mongoClient, // Передаём сохранённый клиент
+    dbName: 'alpha', // Указываем имя базы данных
+    collectionName: 'sessions' // Имя коллекции для хранения сессий
+  }),
   secret: process.env.SESSION_SECRET || 'your-secret-key',
   resave: false,
   saveUninitialized: false,
