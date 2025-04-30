@@ -475,7 +475,7 @@ app.get('/test/question', checkAuth, (req, res) => {
 
   const progress = Array.from({ length: questions.length }, (_, i) => ({
     number: i + 1,
-    answered: !!answers[i]
+    answered: answers[i] && (Array.isArray(answers[i]) ? answers[i].length > 0 : answers[i].trim() !== '')
   }));
 
   const elapsedTime = Math.floor((Date.now() - startTime) / 1000);
@@ -511,8 +511,7 @@ app.get('/test/question', checkAuth, (req, res) => {
           #timer { font-size: 24px; margin-bottom: 20px; }
           #confirm-modal { display: none; position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%); background: white; padding: 20px; border: 2px solid black; z-index: 1000; }
           #confirm-modal button { margin: 0 10px; }
-          .question-box { border: 2px solid #ccc; padding: 10px; margin: 5px 0; border-radius: 5px; cursor: pointer; }
-          .question-box.selected { background-color: #90ee90; }
+          .question-box { border: 2px solid #ccc; padding: 10px; margin: 5px 0; border-radius: 5px; }
           .instruction { font-style: italic; color: #555; margin-bottom: 10px; font-size: 18px; }
           .option-box.draggable { cursor: move; }
           .option-box.dragging { opacity: 0.5; }
@@ -539,7 +538,7 @@ app.get('/test/question', checkAuth, (req, res) => {
                          q.type === 'input' ? 'Введіть правильну відповідь' :
                          q.type === 'ordering' ? 'Розташуйте відповіді у правильній послідовності' : '';
   html += `
-          <div class="question-box ${answers[index] ? 'selected' : ''}" onclick="this.classList.toggle('selected')">
+          <div class="question-box">
             <h2 id="question-text">${index + 1}. ${q.text}</h2>
           </div>
           <p id="instruction" class="instruction">${instructionText}</p>
@@ -766,6 +765,7 @@ app.get('/result', checkAuth, async (req, res) => {
     imageBase64 = imageBuffer.toString('base64');
   } catch (error) {
     console.error('Error reading image A.png:', error.message, error.stack);
+    imageBase64 = ''; // Если файл отсутствует, используем пустую строку
   }
 
   const resultHtml = `
@@ -782,8 +782,8 @@ app.get('/result', checkAuth, async (req, res) => {
           #exportPDF { background-color: #ffeb3b; }
           #restart { background-color: #ef5350; }
         </style>
-        <script src="https://cdnjs.cloudflare.com/ajax/libs/pdfmake/0.2.7/pdfmake.min.js"></script>
-        <script src="https://cdnjs.cloudflare.com/ajax/libs/pdfmake/0.2.7/vfs_fonts.js"></script>
+        <script src="https://cdnjs.cloudflare.com/ajax/libs/pdfmake/0.2.7/pdfmake.min.js" onerror="console.error('Failed to load pdfmake.min.js')"></script>
+        <script src="https://cdnjs.cloudflare.com/ajax/libs/pdfmake/0.2.7/vfs_fonts.js" onerror="console.error('Failed to load vfs_fonts.js')"></script>
       </head>
       <body>
         <h1>Результат тесту</h1>
@@ -799,6 +799,13 @@ app.get('/result', checkAuth, async (req, res) => {
           <button id="restart">Вихід</button>
         </div>
         <script>
+          // Проверка загрузки pdfmake
+          if (typeof pdfMake === 'undefined') {
+            console.error('pdfMake is not loaded');
+            document.getElementById('exportPDF').disabled = true;
+            document.getElementById('exportPDF').textContent = 'PDF не доступно';
+          }
+
           const user = "${req.user}";
           const testName = "${testNames[testNumber].name}";
           const totalQuestions = ${totalQuestions};
@@ -811,35 +818,42 @@ app.get('/result', checkAuth, async (req, res) => {
           const imageBase64 = "${imageBase64}";
 
           document.getElementById('exportPDF').addEventListener('click', () => {
-            const docDefinition = {
-              content: [
-                {
-                  image: 'data:image/png;base64,' + imageBase64,
-                  width: 150,
-                  alignment: 'center',
-                  margin: [0, 0, 0, 20]
-                },
-                { text: 'Результат тесту користувача ' + user + ' з тесту ' + testName + ' складає ' + percentage + '%', style: 'header' },
-                { text: 'Кількість питань: ' + totalQuestions },
-                { text: 'Правильних відповідей: ' + correctClicks },
-                { text: 'Набрано балів: ' + score },
-                { text: 'Максимально можлива кількість балів: ' + totalPoints },
-                {
-                  columns: [
-                    { text: 'Час: ' + time, width: '50%' },
-                    { text: 'Дата: ' + date, width: '50%', alignment: 'right' }
-                  ],
-                  margin: [0, 10, 0, 0]
-Ss                }
-              ],
-              styles: {
-                header: { fontSize: 14, bold: true, margin: [0, 0, 0, 10] }
-              }
-            };
-            pdfMake.createPdf(docDefinition).download('result.pdf');
+            console.log('Export PDF button clicked');
+            try {
+              const docDefinition = {
+                content: [
+                  imageBase64 ? {
+                    image: 'data:image/png;base64,' + imageBase64,
+                    width: 150,
+                    alignment: 'center',
+                    margin: [0, 0, 0, 20]
+                  } : { text: 'Логотип відсутній', alignment: 'center', margin: [0, 0, 0, 20] },
+                  { text: 'Результат тесту користувача ' + user + ' з тесту ' + testName + ' складає ' + percentage + '%', style: 'header' },
+                  { text: 'Кількість питань: ' + totalQuestions },
+                  { text: 'Правильних відповідей: ' + correctClicks },
+                  { text: 'Набрано балів: ' + score },
+                  { text: 'Максимально можлива кількість балів: ' + totalPoints },
+                  {
+                    columns: [
+                      { text: 'Час: ' + time, width: '50%' },
+                      { text: 'Дата: ' + date, width: '50%', alignment: 'right' }
+                    ],
+                    margin: [0, 10, 0, 0]
+                  }
+                ],
+                styles: {
+                  header: { fontSize: 14, bold: true, margin: [0, 0, 0, 10] }
+                }
+              };
+              pdfMake.createPdf(docDefinition).download('result.pdf');
+              console.log('PDF generated successfully');
+            } catch (error) {
+              console.error('Error generating PDF:', error);
+            }
           });
 
           document.getElementById('restart').addEventListener('click', () => {
+            console.log('Restart button clicked');
             window.location.href = '/select-test';
           });
         </script>
