@@ -529,7 +529,7 @@ const saveResult = async (user, testNumber, score, totalPoints, startTime, endTi
         const allResponseTimes = allResults.flatMap(r => r.suspiciousActivity.responseTimes || []);
         typicalResponseTime = allResponseTimes.length > 0 ? 
           allResponseTimes.reduce((sum, time) => sum + (time || 0), 0) / allResponseTimes.length : typicalResponseTime;
-        const allSwitchCounts = allResults.map(r => r.suspiciousActivity.switchCount || 0);
+        const allSwitchCounts = allResults  allResults.map(r => r.suspiciousActivity.switchCount || 0);
         typicalSwitchCount = allSwitchCounts.length > 0 ? 
           allSwitchCounts.reduce((sum, count) => sum + count, 0) / allSwitchCounts.length : typicalSwitchCount;
       }
@@ -545,7 +545,6 @@ const saveResult = async (user, testNumber, score, totalPoints, startTime, endTi
 
     suspiciousScore = Math.min(suspiciousScore, 100);
 
-    // Корректируем время на +3 часа (UTC+3)
     const timeOffset = 3 * 60 * 60 * 1000; // 3 часа в миллисекундах
     const adjustedStartTime = new Date(startTime + timeOffset);
     const adjustedEndTime = new Date(endTime + timeOffset);
@@ -563,7 +562,10 @@ const saveResult = async (user, testNumber, score, totalPoints, startTime, endTi
       endTime: adjustedEndTime.toISOString(),
       duration,
       answers,
-      scoresPerQuestion,
+      scoresPerQuestion: scoresPerQuestion.map((score, idx) => {
+        console.log(`Saving score for question ${idx + 1}: ${score}`); // Логируем баллы
+        return score;
+      }),
       suspiciousActivity: {
         ...suspiciousActivity,
         suspiciousScore
