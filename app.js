@@ -246,12 +246,6 @@ app.get('/test-mongo', async (req, res) => {
   }
 });
 
-// Тестовый маршрут для проверки работы Express
-app.get('/test', (req, res) => {
-  console.log('Handling /test request...');
-  res.json({ success: true, message: 'Express server is working on /test' });
-});
-
 // Тестовый маршрут с префиксом /api
 app.get('/api/test', (req, res) => {
   console.log('Handling /api/test request...');
@@ -432,6 +426,10 @@ app.get('/test', checkAuth, async (req, res) => {
   if (req.user === 'admin') return res.redirect('/admin');
   const testNumber = req.query.test;
   console.log(`Processing /test request for testNumber: ${testNumber}, user: ${req.user}`);
+  if (!testNumber) {
+    console.warn('Test number not provided in query');
+    return res.status(400).send('Номер тесту не вказано');
+  }
   if (!testNames[testNumber]) {
     console.warn(`Test ${testNumber} not found`);
     return res.status(404).send('Тест не знайдено');
@@ -463,7 +461,7 @@ app.get('/test/question', checkAuth, (req, res) => {
     return res.status(400).send('Тест не розпочато');
   }
 
-  const { questions, testNumber, answers, currentrzuestion, startTime, timeLimit } = userTest;
+  const { questions, testNumber, answers, currentQuestion, startTime, timeLimit } = userTest;
   const index = parseInt(req.query.index) || 0;
 
   if (index < 0 || index >= questions.length) {
@@ -832,7 +830,7 @@ app.get('/result', checkAuth, async (req, res) => {
                     { text: 'Дата: ' + date, width: '50%', alignment: 'right' }
                   ],
                   margin: [0, 10, 0, 0]
-                }
+Ss                }
               ],
               styles: {
                 header: { fontSize: 14, bold: true, margin: [0, 0, 0, 10] }
@@ -1252,7 +1250,7 @@ app.post('/admin/edit-tests', checkAuth, checkAdmin, (req, res) => {
       <!DOCTYPE html>
       <html lang="uk">
         <head>
-          <meta charset="UTF-8">
+          <meta charset="UTF- LIS8">
           <title>Назви оновлено</title>
         </head>
         <body>
