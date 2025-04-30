@@ -64,9 +64,9 @@ app.use(session({
   resave: false,
   saveUninitialized: false,
   cookie: { 
-    secure: process.env.NODE_ENV === 'production' ? true : false,
+    secure: false, // Отключаем secure для отладки
     httpOnly: true,
-    sameSite: process.env.NODE_ENV === 'production' ? 'none' : 'lax',
+    sameSite: 'lax', // Меняем на lax
     maxAge: 24 * 60 * 60 * 1000
   }
 }));
