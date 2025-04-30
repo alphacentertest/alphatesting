@@ -529,7 +529,7 @@ const saveResult = async (user, testNumber, score, totalPoints, startTime, endTi
         const allResponseTimes = allResults.flatMap(r => r.suspiciousActivity.responseTimes || []);
         typicalResponseTime = allResponseTimes.length > 0 ? 
           allResponseTimes.reduce((sum, time) => sum + (time || 0), 0) / allResponseTimes.length : typicalResponseTime;
-        const allSwitchCounts = allResults  allResults.map(r => r.suspiciousActivity.switchCount || 0);
+        const allSwitchCounts = allResults.map(r => r.suspiciousActivity.switchCount || 0); // Исправлено: убрано лишнее 'allResults'
         typicalSwitchCount = allSwitchCounts.length > 0 ? 
           allSwitchCounts.reduce((sum, count) => sum + count, 0) / allSwitchCounts.length : typicalSwitchCount;
       }
