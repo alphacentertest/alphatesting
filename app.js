@@ -338,13 +338,52 @@ app.get('/select-test', checkAuth, (req, res) => {
     <html lang="uk">
       <head>
         <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
         <title>Вибір тесту</title>
         <style>
-          body { font-family: Arial, sans-serif; text-align: center; padding: 50px; }
-          .test-buttons { display: flex; flex-direction: column; align-items: center; }
-          button { padding: 10px 20px; margin: 10px 0; font-size: 18px; cursor: pointer; width: 200px; }
-          button:hover { background-color: #90ee90; }
-          #logout { background-color: #ef5350; color: white; }
+          body { 
+            font-family: Arial, sans-serif; 
+            text-align: center; 
+            padding: 20px; 
+            margin: 0; 
+          }
+          h1 { 
+            font-size: 24px; 
+            margin-bottom: 20px; 
+          }
+          .test-buttons { 
+            display: flex; 
+            flex-direction: column; 
+            align-items: center; 
+            gap: 10px; 
+          }
+          button { 
+            padding: 10px; 
+            font-size: 18px; 
+            cursor: pointer; 
+            width: 200px; 
+            border: none; 
+            border-radius: 5px; 
+            background-color: #4CAF50; 
+            color: white; 
+          }
+          button:hover { 
+            background-color: #45a049; 
+          }
+          #logout { 
+            background-color: #ef5350; 
+            color: white; 
+          }
+          @media (max-width: 600px) {
+            h1 { 
+              font-size: 28px; 
+            }
+            button { 
+              font-size: 20px; 
+              width: 90%; 
+              padding: 15px; 
+            }
+          }
         </style>
       </head>
       <body>
@@ -557,7 +596,7 @@ app.get('/test/question', checkAuth, (req, res) => {
 
   userTest.currentQuestion = index;
   userTest.answerTimestamps = userTest.answerTimestamps || {};
-  userTest.answerTimestamps[index] = userTest.answerTimestamps[index] || Date.now(); // Записываем время начала ответа
+  userTest.answerTimestamps[index] = userTest.answerTimestamps[index] || Date.now();
   const q = questions[index];
   console.log('Rendering question:', { index, picture: q.picture, text: q.text, options: q.options });
 
@@ -581,13 +620,15 @@ app.get('/test/question', checkAuth, (req, res) => {
         <script src="https://cdnjs.cloudflare.com/ajax/libs/Sortable/1.15.0/Sortable.min.js" onerror="console.error('Failed to load Sortable.js')"></script>
         <style>
           body { font-family: Arial, sans-serif; margin: 0; padding: 20px; padding-bottom: 80px; background-color: #f0f0f0; }
-          img { max-width: 300px; margin-bottom: 10px; }
-          .progress-bar { display: flex; align-items: center; margin-bottom: 20px; }
-          .progress-line { flex-grow: 1; height: 2px; background-color: #ccc; }
-          .progress-circle { width: 30px; height: 30px; border-radius: 50%; display: flex; align-items: center; justify-content: center; margin: 0 5px; }
+          h1 { font-size: 24px; text-align: center; }
+          img { max-width: 300px; margin-bottom: 10px; display: block; margin-left: auto; margin-right: auto; }
+          .progress-bar { display: flex; flex-wrap: wrap; justify-content: center; gap: 5px; margin-bottom: 20px; }
+          .progress-circle { width: 30px; height: 30px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 14px; }
           .progress-circle.unanswered { background-color: red; color: white; }
           .progress-circle.answered { background-color: green; color: white; }
+          .progress-line { width: 10px; height: 2px; background-color: #ccc; margin: 0 5px; align-self: center; }
           .progress-line.answered { background-color: green; }
+          .progress-row { display: flex; align-items: center; justify-content: center; flex: 1 0 100%; }
           .option-box { border: 2px solid #ccc; padding: 10px; margin: 5px 0; border-radius: 5px; cursor: pointer; font-size: 16px; user-select: none; }
           .option-box.selected { background-color: #90ee90; }
           .button-container { position: fixed; bottom: 20px; left: 20px; right: 20px; display: flex; justify-content: space-between; }
@@ -596,25 +637,44 @@ app.get('/test/question', checkAuth, (req, res) => {
           .next-btn { background-color: blue; color: white; }
           .finish-btn { background-color: green; color: white; }
           button:disabled { background-color: grey; cursor: not-allowed; }
-          #timer { font-size: 24px; margin-bottom: 20px; }
+          #timer { font-size: 24px; margin-bottom: 20px; text-align: center; }
           #confirm-modal { display: none; position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%); background: white; padding: 20px; border: 2px solid black; z-index: 1000; }
           #confirm-modal button { margin: 0 10px; }
-          .question-box { border: 2px solid #ccc; padding: 10px; margin: 5px 0; border-radius: 5px; }
+          .question-box { padding: 10px; margin: 5px 0; }
           .instruction { font-style: italic; color: #555; margin-bottom: 10px; font-size: 18px; }
           .option-box.draggable { cursor: move; }
           .option-box.dragging { opacity: 0.5; }
           #question-container { background-color: white; padding: 20px; border-radius: 8px; box-shadow: 0 0 10px rgba(0, 0, 0, 0.1); width: 100%; margin-bottom: 20px; }
           #answers { margin-bottom: 20px; }
+          @media (max-width: 600px) {
+            h1 { font-size: 28px; }
+            .progress-circle { width: 25px; height: 25px; font-size: 12px; }
+            .progress-line { width: 5px; }
+            .option-box { font-size: 18px; padding: 15px; }
+            button { font-size: 18px; padding: 15px; }
+            #timer { font-size: 20px; }
+            .question-box h2 { font-size: 20px; }
+          }
         </style>
       </head>
       <body>
         <h1>${testNames[testNumber].name}</h1>
         <div id="timer">Залишилось часу: ${minutes} мм ${seconds} с</div>
         <div class="progress-bar">
-          ${progress.map((p, i) => `
-            <div class="progress-circle ${p.answered ? 'answered' : 'unanswered'}">${p.number}</div>
-            ${i < progress.length - 1 ? '<div class="progress-line ' + (p.answered ? 'answered' : '') + '"></div>' : ''}
-          `).join('')}
+  `;
+  // Разбиваем круги на ряды по 12
+  for (let i = 0; i < progress.length; i += 12) {
+    const rowCircles = progress.slice(i, i + 12);
+    html += `
+      <div class="progress-row">
+        ${rowCircles.map((p, j) => `
+          <div class="progress-circle ${p.answered ? 'answered' : 'unanswered'}">${p.number}</div>
+          ${j < rowCircles.length - 1 ? '<div class="progress-line ' + (p.answered ? 'answered' : '') + '"></div>' : ''}
+        `).join('')}
+      </div>
+    `;
+  }
+  html += `
         </div>
         <div id="question-container">
   `;
@@ -651,11 +711,10 @@ app.get('/test/question', checkAuth, (req, res) => {
       `;
     } else {
       q.options.forEach((option, optIndex) => {
-        const checked = answers[index]?.includes(option) ? 'checked' : '';
+        const selected = answers[index]?.includes(option) ? 'selected' : '';
         html += `
-          <div class="option-box ${checked ? 'selected' : ''}">
-            <input type="checkbox" name="q${index}" value="${option}" id="q${index}_${optIndex}" ${checked}>
-            <label for="q${index}_${optIndex}">${option}</label>
+          <div class="option-box ${selected}" data-value="${option}" onclick="toggleOption(this, ${index}, '${option}')">
+            ${option}
           </div>
         `;
       });
@@ -685,6 +744,7 @@ app.get('/test/question', checkAuth, (req, res) => {
           let lastActivityTime = Date.now();
           let activityCount = 0;
           const questionStartTime = ${userTest.answerTimestamps[index] || Date.now()};
+          let selectedOptions = ${JSON.stringify(answers[index] || [])};
 
           function updateTimer() {
             const elapsedTime = Math.floor((Date.now() - startTime) / 1000);
@@ -725,27 +785,26 @@ app.get('/test/question', checkAuth, (req, res) => {
             console.log('Keyboard activity detected, count:', activityCount);
           });
 
-          document.querySelectorAll('.option-box').forEach(box => {
-            box.addEventListener('click', (e) => {
-              const checkbox = box.querySelector('input[type="checkbox"]');
-              if (checkbox && !e.target.classList.contains('draggable')) {
-                checkbox.checked = !checkbox.checked;
-                box.classList.toggle('selected', checkbox.checked);
-              }
-            });
-          });
+          function toggleOption(element, index, option) {
+            const idx = selectedOptions.indexOf(option);
+            if (idx === -1) {
+              selectedOptions.push(option);
+              element.classList.add('selected');
+            } else {
+              selectedOptions.splice(idx, 1);
+              element.classList.remove('selected');
+            }
+            console.log('Selected options for question', index, ':', selectedOptions);
+          }
 
           async function saveAndNext(index) {
             console.log('Save and Next button clicked for index:', index);
             try {
-              let answers;
-              if (document.querySelector('input[type="text"][name="q' + index + '"]')) {
+              let answers = selectedOptions;
+              if (document.querySelector('input[name="q' + index + '"]')) {
                 answers = document.getElementById('q' + index + '_input').value;
               } else if (document.getElementById('sortable-options')) {
                 answers = Array.from(document.querySelectorAll('#sortable-options .option-box')).map(el => el.dataset.value);
-              } else {
-                const checked = document.querySelectorAll('input[name="q' + index + '"]:checked');
-                answers = Array.from(checked).map(input => input.value);
               }
               const responseTime = Date.now() - questionStartTime;
               console.log('Sending answer with data:', { index, answers, timeAway, switchCount, responseTime, activityCount });
@@ -777,14 +836,11 @@ app.get('/test/question', checkAuth, (req, res) => {
           async function finishTest(index) {
             console.log('Finish Test button clicked for index:', index);
             try {
-              let answers;
-              if (document.querySelector('input[type="text"][name="q' + index + '"]')) {
+              let answers = selectedOptions;
+              if (document.querySelector('input[name="q' + index + '"]')) {
                 answers = document.getElementById('q' + index + '_input').value;
               } else if (document.getElementById('sortable-options')) {
                 answers = Array.from(document.querySelectorAll('#sortable-options .option-box')).map(el => el.dataset.value);
-              } else {
-                const checked = document.querySelectorAll('input[name="q' + index + '"]:checked');
-                answers = Array.from(checked).map(input => input.value);
               }
               const responseTime = Date.now() - questionStartTime;
               console.log('Finishing test with data:', { index, answers, timeAway, switchCount, responseTime, activityCount });
