@@ -641,12 +641,12 @@ app.get('/test/question', checkAuth, (req, res) => {
             margin-right: auto; 
             box-sizing: border-box; 
           }
-          .progress-circle { width: 20px; height: 20px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 10px; }
+          .progress-circle { width: 40px; height: 40px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 14px; }
           .progress-circle.unanswered { background-color: red; color: white; }
           .progress-circle.answered { background-color: green; color: white; }
           .progress-line { width: 5px; height: 2px; background-color: #ccc; margin: 0 2px; align-self: center; }
           .progress-line.answered { background-color: green; }
-          .progress-row { display: flex; align-items: center; justify-content: space-between; flex: 1 0 100%; }
+          .progress-row { display: flex; align-items: center; justify-content: space-around; flex: 1 0 100%; }
           .option-box { border: 2px solid #ccc; padding: 10px; margin: 5px 0; border-radius: 5px; cursor: pointer; font-size: 16px; user-select: none; }
           .option-box.selected { background-color: #90ee90; }
           .button-container { position: fixed; bottom: 20px; left: 20px; right: 20px; display: flex; justify-content: space-between; }
@@ -676,7 +676,7 @@ app.get('/test/question', checkAuth, (req, res) => {
           }
           @media (min-width: 601px) {
             .progress-bar { flex-wrap: nowrap; justify-content: space-between; }
-            .progress-circle { width: 20px; height: 20px; font-size: 10px; }
+            .progress-circle { width: 40px; height: 40px; font-size: 14px; }
             .progress-line { width: 5px; }
           }
         </style>
@@ -686,7 +686,7 @@ app.get('/test/question', checkAuth, (req, res) => {
         <div id="timer">Залишилось часу: ${minutes} мм ${seconds} с</div>
         <div class="progress-bar">
   `;
-  // Для полной версии — один ряд, для мобильной — ряды по 15 кругов
+  // Для полной версии — один ряд, для мобильной — ряды по 12 кругов
   html += `
     <div class="progress-row">
       ${progress.map((p, j) => `
