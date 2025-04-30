@@ -7,11 +7,11 @@ const fs = require('fs');
 const ExcelJS = require('exceljs');
 const bcrypt = require('bcrypt');
 const rateLimit = require('express-rate-limit');
-const csurf = require('csurf');
+const crypto = require('crypto');
 
 const app = express();
 const port = process.env.PORT || 3000;
-const saltRounds = 10; // Для bcrypt
+const saltRounds = 10;
 
 // MongoDB подключение
 const mongoUrl = process.env.MONGODB_URI || 'mongodb://localhost:27017/alpha';
@@ -46,8 +46,28 @@ app.use(session({
   }
 }));
 
-// CSRF защита
-app.use(csurf());
+// Генерация CSRF-токена
+function generateCsrfToken() {
+  return crypto.randomBytes(16).toString('hex');
+}
+
+// Middleware для добавления CSRF-токена в сессию
+app.use((req, res, next) => {
+  if (!req.session.csrfToken) {
+    req.session.csrfToken = generateCsrfToken();
+  }
+  res.locals.csrfToken = req.session.csrfToken;
+  next();
+});
+
+// Middleware для проверки CSRF-токена
+function verifyCsrfToken(req, res, next) {
+  const csrfToken = req.body._csrf || req.headers['x-csrf-token'];
+  if (!csrfToken || csrfToken !== req.session.csrfToken) {
+    return res.status(403).json({ success: false, message: 'Недійсний CSRF-токен' });
+  }
+  next();
+}
 
 // Rate limiting для маршрута /login
 const loginLimiter = rateLimit({
@@ -343,7 +363,7 @@ app.get('/', (req, res) => {
       <body>
         <h1>Вхід</h1>
         <form method="POST" action="/login">
-          <input type="hidden" name="_csrf" value="${req.csrfToken()}">
+          <input type="hidden" name="_csrf" value="${res.locals.csrfToken}">
           <input type="password" name="password" placeholder="Введіть пароль">
           <button type="submit">Увійти</button>
         </form>
@@ -353,7 +373,7 @@ app.get('/', (req, res) => {
 });
 
 // Маршрут логина
-app.post('/login', loginLimiter, async (req, res) => {
+app.post('/login', loginLimiter, verifyCsrfToken, async (req, res) => {
   try {
     console.log('Handling /login request...');
     const { password } = req.body;
@@ -383,6 +403,8 @@ app.post('/login', loginLimiter, async (req, res) => {
     console.log('Session ID after setting user:', req.sessionID);
     console.log('Cookies after setting session:', req.cookies);
 
+    req.session.csrfToken = generateCsrfToken(); // Обновляем токен после успешного входа
+
     req.session.save(err => {
       if (err) {
         console.error('Error saving session in /login:', err.message, err.stack);
@@ -404,7 +426,7 @@ app.post('/login', loginLimiter, async (req, res) => {
 });
 
 // Маршрут выхода
-app.post('/logout', (req, res) => {
+app.post('/logout', verifyCsrfToken, (req, res) => {
   if (req.session.user) {
     const user = req.session.user;
     req.session.destroy(async err => {
@@ -422,7 +444,7 @@ app.post('/logout', (req, res) => {
 
 // Админ-панель
 app.get('/admin', checkAuth, checkAdmin, (req, res) => {
-  console.log('Serving /admin for user:', req.user);
+  console.log('Serving /admin for user:', req.session.user);
   res.send(`
     <!DOCTYPE html>
     <html lang="uk">
@@ -454,8 +476,17 @@ app.get('/admin', checkAuth, checkAdmin, (req, res) => {
         <button id="logout" onclick="logout()">Вийти</button>
         <script>
           async function logout() {
-            await fetch('/logout', { method: 'POST' });
-            window.location.href = '/';
+            const response = await fetch('/logout', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ _csrf: "${res.locals.csrfToken}" })
+            });
+            const result = await response.json();
+            if (result.success) {
+              window.location.href = result.redirect;
+            } else {
+              alert('Помилка при виході');
+            }
           }
         </script>
       </body>
@@ -465,7 +496,7 @@ app.get('/admin', checkAuth, checkAdmin, (req, res) => {
 
 // Выбор теста
 app.get('/select-test', checkAuth, (req, res) => {
-  if (req.user === 'admin') return res.redirect('/admin');
+  if (req.session.user === 'admin') return res.redirect('/admin');
   res.send(`
     <!DOCTYPE html>
     <html lang="uk">
@@ -498,7 +529,7 @@ app.get('/select-test', checkAuth, (req, res) => {
             const response = await fetch('/start-test', {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ testNumber })
+              body: JSON.stringify({ testNumber, _csrf: "${res.locals.csrfToken}" })
             });
             const result = await response.json();
             if (result.success) {
@@ -508,8 +539,17 @@ app.get('/select-test', checkAuth, (req, res) => {
             }
           }
           async function logout() {
-            await fetch('/logout', { method: 'POST' });
-            window.location.href = '/';
+            const response = await fetch('/logout', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ _csrf: "${res.locals.csrfToken}" })
+            });
+            const result = await response.json();
+            if (result.success) {
+              window.location.href = result.redirect;
+            } else {
+              alert('Помилка при виході');
+            }
           }
         </script>
       </body>
@@ -518,8 +558,8 @@ app.get('/select-test', checkAuth, (req, res) => {
 });
 
 // Запуск теста
-app.post('/start-test', checkAuth, async (req, res) => {
-  if (req.user === 'admin') return res.status(403).send('Доступ заборонено');
+app.post('/start-test', checkAuth, verifyCsrfToken, async (req, res) => {
+  if (req.session.user === 'admin') return res.status(403).send('Доступ заборонено');
   const { testNumber } = req.body;
   if (!testNames[testNumber]) {
     return res.status(400).json({ success: false, message: 'Невірний номер тесту' });
@@ -555,7 +595,7 @@ app.post('/start-test', checkAuth, async (req, res) => {
     }
   });
 
-  userTests.set(req.user, {
+  userTests.set(req.session.user, {
     questions,
     answers: {},
     testNumber,
@@ -564,16 +604,17 @@ app.post('/start-test', checkAuth, async (req, res) => {
     suspiciousActivity: { timeAway: 0, switchCount: 0, responseTimes: [], activityCounts: [] }
   });
 
-  await logActivity(req.user, `розпочав тест ${testNames[testNumber].name}`);
+  await logActivity(req.session.user, `розпочав тест ${testNames[testNumber].name}`);
+  req.session.csrfToken = generateCsrfToken(); // Обновляем токен
   res.json({ success: true, redirect: '/test/question?index=0' });
 });
 
 // Отображение вопроса
 app.get('/test/question', checkAuth, (req, res) => {
-  if (req.user === 'admin') return res.redirect('/admin');
-  const userTest = userTests.get(req.user);
+  if (req.session.user === 'admin') return res.redirect('/admin');
+  const userTest = userTests.get(req.session.user);
   if (!userTest) {
-    console.warn(`Test not started for user ${req.user}`);
+    console.warn(`Test not started for user ${req.session.user}`);
     return res.status(400).send('Тест не розпочато');
   }
 
@@ -581,7 +622,7 @@ app.get('/test/question', checkAuth, (req, res) => {
   const index = parseInt(req.query.index) || 0;
 
   if (index < 0 || index >= questions.length) {
-    console.warn(`Invalid question index ${index} for user ${req.user}`);
+    console.warn(`Invalid question index ${index} for user ${req.session.user}`);
     return res.status(400).send('Невірний номер питання');
   }
 
@@ -726,7 +767,7 @@ app.get('/test/question', checkAuth, (req, res) => {
   }
 
   const instructionText = q.type === 'multiple' ? 'Виберіть усі правильні відповіді' :
-                         q.type === 'input' ? 'В舉іть правильну відповідь' :
+                         q.type === 'input' ? 'Введіть правильну відповідь' :
                          q.type === 'ordering' ? 'Розташуйте відповіді у правильній послідовності' : '';
   html += `
           <div class="question-box">
@@ -879,7 +920,7 @@ app.get('/test/question', checkAuth, (req, res) => {
               const response = await fetch('/answer', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ index, answer: answers, timeAway, switchCount, responseTime, activityCount })
+                body: JSON.stringify({ index, answer: answers, timeAway, switchCount, responseTime, activityCount, _csrf: "${res.locals.csrfToken}" })
               });
               const result = await response.json();
               if (result.success) {
@@ -915,7 +956,7 @@ app.get('/test/question', checkAuth, (req, res) => {
               const response = await fetch('/answer', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ index, answer: answers, timeAway, switchCount, responseTime, activityCount })
+                body: JSON.stringify({ index, answer: answers, timeAway, switchCount, responseTime, activityCount, _csrf: "${res.locals.csrfToken}" })
               });
               const result = await response.json();
               if (result.success) {
@@ -956,10 +997,10 @@ app.get('/test/question', checkAuth, (req, res) => {
 });
 
 // Сохранение ответа
-app.post('/answer', checkAuth, async (req, res) => {
-  if (req.user === 'admin') return res.status(403).send('Доступ заборонено');
+app.post('/answer', checkAuth, verifyCsrfToken, async (req, res) => {
+  if (req.session.user === 'admin') return res.status(403).send('Доступ заборонено');
   const { index, answer, timeAway, switchCount, responseTime, activityCount } = req.body;
-  const userTest = userTests.get(req.user);
+  const userTest = userTests.get(req.session.user);
   if (!userTest) {
     return res.status(400).json({ success: false, message: 'Тест не розпочато' });
   }
@@ -970,16 +1011,17 @@ app.post('/answer', checkAuth, async (req, res) => {
   userTest.suspiciousActivity.responseTimes[index] = responseTime;
   userTest.suspiciousActivity.activityCounts[index] = activityCount;
 
-  await logActivity(req.user, `відповів на питання ${parseInt(index) + 1} тесту ${testNames[userTest.testNumber].name}`);
+  await logActivity(req.session.user, `відповів на питання ${parseInt(index) + 1} тесту ${testNames[userTest.testNumber].name}`);
+  req.session.csrfToken = generateCsrfToken(); // Обновляем токен
   res.json({ success: true });
 });
 
 // Результат теста
 app.get('/result', checkAuth, async (req, res) => {
-  if (req.user === 'admin') return res.redirect('/admin');
-  const userTest = userTests.get(req.user);
+  if (req.session.user === 'admin') return res.redirect('/admin');
+  const userTest = userTests.get(req.session.user);
   if (!userTest) {
-    console.warn(`Test not started for user ${req.user} in /result`);
+    console.warn(`Test not started for user ${req.session.user} in /result`);
     return res.status(400).json({ error: 'Тест не розпочато' });
   }
 
@@ -1028,7 +1070,7 @@ app.get('/result', checkAuth, async (req, res) => {
   const totalQuestions = questions.length;
 
   try {
-    await saveResult(req.user, testNumber, score, totalPoints, startTime, endTime, totalClicks, correctClicks, totalQuestions, percentage);
+    await saveResult(req.session.user, testNumber, score, totalPoints, startTime, endTime, totalClicks, correctClicks, totalQuestions, percentage);
   } catch (error) {
     console.error('Error saving result in /result:', error.message, error.stack);
     return res.status(500).send('Помилка при збереженні результату');
@@ -1085,7 +1127,7 @@ app.get('/result', checkAuth, async (req, res) => {
             document.getElementById('exportPDF').textContent = 'PDF не доступно';
           }
 
-          const user = "${req.user}";
+          const user = "${req.session.user}";
           const testName = "${testNames[testNumber].name}";
           const totalQuestions = ${totalQuestions};
           const correctClicks = ${correctClicks};
@@ -1214,7 +1256,8 @@ app.get('/admin/activity-log', checkAuth, checkAdmin, async (req, res) => {
               try {
                 const response = await fetch('/admin/delete-activity-log', {
                   method: 'POST',
-                  headers: { 'Content-Type': 'application/json' }
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ _csrf: "${res.locals.csrfToken}" })
                 });
                 const result = await response.json();
                 if (result.success) {
@@ -1238,11 +1281,12 @@ app.get('/admin/activity-log', checkAuth, checkAdmin, async (req, res) => {
 });
 
 // Очистка журнала действий
-app.post('/admin/delete-activity-log', checkAuth, checkAdmin, async (req, res) => {
+app.post('/admin/delete-activity-log', checkAuth, checkAdmin, verifyCsrfToken, async (req, res) => {
   try {
     console.log('Deleting all activity log entries...');
     await db.collection('activity_log').deleteMany({});
     console.log('Activity log cleared from MongoDB');
+    req.session.csrfToken = generateCsrfToken(); // Обновляем токен
     res.json({ success: true });
   } catch (error) {
     console.error('Ошибка при удалении записей журнала действий:', error.message, error.stack);
@@ -1373,7 +1417,7 @@ app.get('/admin/results', checkAuth, checkAdmin, async (req, res) => {
                 const response = await fetch('/admin/delete-result', {
                   method: 'POST',
                   headers: { 'Content-Type': 'application/json' },
-                  body: JSON.stringify({ id })
+                  body: JSON.stringify({ id, _csrf: "${res.locals.csrfToken}" })
                 });
                 const result = await response.json();
                 if (result.success) {
@@ -1397,13 +1441,14 @@ app.get('/admin/results', checkAuth, checkAdmin, async (req, res) => {
 });
 
 // Удаление результата
-app.post('/admin/delete-result', checkAuth, checkAdmin, async (req, res) => {
+app.post('/admin/delete-result', checkAuth, checkAdmin, verifyCsrfToken, async (req, res) => {
   try {
     const { id } = req.body;
     console.log(`Deleting result with id ${id}...`);
     const { ObjectId } = require('mongodb');
     await db.collection('test_results').deleteOne({ _id: new ObjectId(id) });
     console.log(`Result with id ${id} deleted from MongoDB`);
+    req.session.csrfToken = generateCsrfToken(); // Обновляем токен
     res.json({ success: true });
   } catch (error) {
     console.error('Ошибка при удалении результата:', error.message, error.stack);
@@ -1499,7 +1544,7 @@ app.get('/admin/create-test', checkAuth, checkAdmin, (req, res) => {
         <h1>Створити новий тест</h1>
         <button class="nav-btn" onclick="window.location.href='/admin'">Повернутися до адмін-панелі</button>
         <form id="createTestForm">
-          <input type="hidden" name="_csrf" value="${req.csrfToken()}">
+          <input type="hidden" name="_csrf" value="${res.locals.csrfToken}">
           <label>Назва тесту:</label>
           <input type="text" id="testName" required><br>
           <div id="questions">
@@ -1623,7 +1668,7 @@ app.get('/admin/create-test', checkAuth, checkAdmin, (req, res) => {
 });
 
 // Сохранение нового теста
-app.post('/admin/save-test', checkAuth, checkAdmin, async (req, res) => {
+app.post('/admin/save-test', checkAuth, checkAdmin, verifyCsrfToken, async (req, res) => {
   const { testName, questions } = req.body;
   if (!testName || !questions || !Array.isArray(questions) || questions.length === 0) {
     return res.status(400).json({ success: false, message: 'Невірні дані тесту' });
@@ -1677,6 +1722,7 @@ app.post('/admin/save-test', checkAuth, checkAdmin, async (req, res) => {
   try {
     await workbook.xlsx.writeFile(path.join(__dirname, `test${testNumber}.xlsx`));
     await logActivity(req.session.user, `створив тест ${testName}`);
+    req.session.csrfToken = generateCsrfToken(); // Обновляем токен после успешного действия
     res.json({ success: true });
   } catch (error) {
     console.error('Error saving test:', error);
@@ -1703,7 +1749,7 @@ app.get('/admin/edit-tests', checkAuth, checkAdmin, (req, res) => {
         <h1>Редагувати назви тестів</h1>
         <button class="nav-btn" onclick="window.location.href='/admin'">Повернутися до адмін-панелі</button>
         <form id="editTestsForm">
-          <input type="hidden" name="_csrf" value="${req.csrfToken()}">
+          <input type="hidden" name="_csrf" value="${res.locals.csrfToken}">
   `;
   Object.keys(testNames).forEach(num => {
     html += `
@@ -1751,7 +1797,7 @@ app.get('/admin/edit-tests', checkAuth, checkAdmin, (req, res) => {
 });
 
 // Сохранение названий тестов
-app.post('/admin/save-test-names', checkAuth, checkAdmin, async (req, res) => {
+app.post('/admin/save-test-names', checkAuth, checkAdmin, verifyCsrfToken, async (req, res) => {
   const newTestNames = req.body;
   Object.keys(newTestNames).forEach(num => {
     if (testNames[num]) {
@@ -1759,6 +1805,7 @@ app.post('/admin/save-test-names', checkAuth, checkAdmin, async (req, res) => {
     }
   });
   await logActivity(req.session.user, 'оновив назви тестів');
+  req.session.csrfToken = generateCsrfToken(); // Обновляем токен после успешного действия
   res.json({ success: true });
 });
 
