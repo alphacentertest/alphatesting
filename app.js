@@ -491,6 +491,10 @@ const saveResult = async (user, testNumber, score, totalPoints, startTime, endTi
       return questionScore;
     });
 
+    // Пересчитываем общий счёт для проверки
+    const calculatedScore = scoresPerQuestion.reduce((sum, s) => sum + s, 0);
+    console.log(`Calculated score: ${calculatedScore}, Provided score: ${score}`);
+
     let suspiciousScore = 0;
     const timeAwayPercent = suspiciousActivity.timeAway ? 
       Math.round((suspiciousActivity.timeAway / (duration * 1000)) * 100) : 0;
@@ -552,7 +556,7 @@ const saveResult = async (user, testNumber, score, totalPoints, startTime, endTi
     const result = {
       user,
       testNumber,
-      score,
+      score: calculatedScore, // Используем пересчитанный score
       totalPoints,
       totalClicks,
       correctClicks,
@@ -563,7 +567,7 @@ const saveResult = async (user, testNumber, score, totalPoints, startTime, endTi
       duration,
       answers,
       scoresPerQuestion: scoresPerQuestion.map((score, idx) => {
-        console.log(`Saving score for question ${idx + 1}: ${score}`); // Логируем баллы
+        console.log(`Saving score for question ${idx + 1}: ${score}`);
         return score;
       }),
       suspiciousActivity: {
@@ -1519,9 +1523,9 @@ app.get('/admin/results', checkAuth, checkAdmin, async (req, res) => {
         Math.round((r.suspiciousActivity.timeAway / (r.duration * 1000)) * 100) : 0;
       const switchCount = r.suspiciousActivity ? r.suspiciousActivity.switchCount || 0 : 0;
       const avgResponseTime = r.suspiciousActivity && r.suspiciousActivity.responseTimes ? 
-        (r.suspiciousActivity.responseTimes.reduce((sum, time) => sum + (time || 0), 0) / r.suspiciousActivity.responseTimes.length / 1000).toFixed(2) : 0;
+        (r.suspiciousActivity.responseTimes.reduce((sum, time) => sum + (time || 0), 0) / r.suspiciousActivity.responseTimes.length).toFixed(2) : 0;
       const avgActivityCount = r.suspiciousActivity && r.suspiciousActivity.activityCounts ? 
-        (r.suspiciousActivity.activityCounts.reduce((sum, count) => sum + (time || 0), 0) / r.suspiciousActivity.activityCounts.length).toFixed(2) : 0;
+        (r.suspiciousActivity.activityCounts.reduce((sum, count) => sum + (count || 0), 0) / r.suspiciousActivity.activityCounts.length).toFixed(2) : 0;
       const activityDetails = `
 Время вне вкладки: ${timeAwayPercent}%
 Переключения вкладок: ${switchCount}
