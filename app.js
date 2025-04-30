@@ -28,6 +28,17 @@ MongoClient.connect(mongoUrl)
     process.exit(1);
   });
 
+// Проверка подключения к MongoDB перед обработкой запросов
+app.use((req, res, next) => {
+  if (!db) {
+    return res.status(503).send('Сервер тимчасово недоступний: проблема з підключенням до бази даних');
+  }
+  next();
+});
+
+// Включаем доверие к прокси для корректной работы express-rate-limit на Heroku
+app.set('trust proxy', 1);
+
 // Middleware
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
