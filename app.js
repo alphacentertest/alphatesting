@@ -666,7 +666,7 @@ app.get('/test/question', checkAuth, (req, res) => {
           #answers { margin-bottom: 20px; }
           @media (max-width: 600px) {
             h1 { font-size: 28px; }
-            .progress-bar { flex-wrap: wrap; justify-content: space-around; }
+            .progress-bar { flex-wrap: wrap; justify-content: center; gap: 5px; }
             .progress-circle { width: 20px; height: 20px; font-size: 10px; }
             .progress-line { width: 5px; }
             .option-box { font-size: 18px; padding: 15px; }
