@@ -1219,6 +1219,7 @@ app.get('/admin/results', checkAuth, checkAdmin, async (req, res) => {
           .answers { white-space: pre-wrap; max-width: 300px; overflow-wrap: break-word; line-height: 1.8; }
           .delete-btn { background-color: #ff4d4d; color: white; padding: 5px 10px; border: none; cursor: pointer; }
           .nav-btn { padding: 10px 20px; margin: 10px 0; cursor: pointer; }
+          .details { white-space: pre-wrap; max-width: 300px; line-height: 1.8; }
         </style>
       </head>
       <body>
@@ -1239,12 +1240,13 @@ app.get('/admin/results', checkAuth, checkAdmin, async (req, res) => {
             <th>Кінець</th>
             <th>Тривалість (сек)</th>
             <th>Підозріла активність (%)</th>
+            <th>Деталі активності</th>
             <th>Відповіді та бали</th>
             <th>Дія</th>
           </tr>
   `;
   if (!results || results.length === 0) {
-    adminHtml += '<tr><td colspan="10">Немає результатів</td></tr>';
+    adminHtml += '<tr><td colspan="11">Немає результатів</td></tr>';
     console.log('No results found in test_results');
   } else {
     results.forEach((r, index) => {
@@ -1260,6 +1262,19 @@ app.get('/admin/results', checkAuth, checkAdmin, async (req, res) => {
       };
       const suspiciousActivityPercent = r.suspiciousActivity && r.suspiciousActivity.suspiciousScore ? 
         Math.round(r.suspiciousActivity.suspiciousScore) : 0;
+      const timeAwayPercent = r.suspiciousActivity && r.suspiciousActivity.timeAway ? 
+        Math.round((r.suspiciousActivity.timeAway / (r.duration * 1000)) * 100) : 0;
+      const switchCount = r.suspiciousActivity ? r.suspiciousActivity.switchCount || 0 : 0;
+      const avgResponseTime = r.suspiciousActivity && r.suspiciousActivity.responseTimes ? 
+        (r.suspiciousActivity.responseTimes.reduce((sum, time) => sum + (time || 0), 0) / r.suspiciousActivity.responseTimes.length / 1000).toFixed(2) : 0;
+      const avgActivityCount = r.suspiciousActivity && r.suspiciousActivity.activityCounts ? 
+        (r.suspiciousActivity.activityCounts.reduce((sum, count) => sum + (count || 0), 0) / r.suspiciousActivity.activityCounts.length).toFixed(2) : 0;
+      const activityDetails = `
+Время вне вкладки: ${timeAwayPercent}%
+Переключения вкладок: ${switchCount}
+Среднее время ответа (сек): ${avgResponseTime}
+Средняя активность (действий): ${avgActivityCount}
+      `;
       adminHtml += `
         <tr>
           <td>${r.user || 'N/A'}</td>
@@ -1270,6 +1285,7 @@ app.get('/admin/results', checkAuth, checkAdmin, async (req, res) => {
           <td>${formatDateTime(r.endTime)}</td>
           <td>${r.duration || 'N/A'}</td>
           <td>${suspiciousActivityPercent}%</td>
+          <td class="details">${activityDetails}</td>
           <td class="answers">${answersDisplay}</td>
           <td><button class="delete-btn" onclick="deleteResult('${r._id}')">🗑️ Видалити</button></td>
         </tr>
@@ -1346,32 +1362,37 @@ app.get('/admin/edit-tests', checkAuth, checkAdmin, (req, res) => {
           body { font-size: 24px; margin: 20px; }
           input { font-size: 24px; padding: 5px; margin: 5px; }
           button { font-size: 24px; padding: 10px 20px; margin: 5px; }
+          .delete-btn { background-color: #ff4d4d; color: white; }
+          .test-row { display: flex; align-items: center; margin-bottom: 10px; }
         </style>
       </head>
       <body>
         <h1>Редагувати назви та час тестів</h1>
         <form method="POST" action="/admin/edit-tests">
-          <div>
-            <label for="test1">Назва Тесту 1:</label>
-            <input type="text" id="test1" name="test1" value="${testNames['1'].name}" required>
-            <label for="time1">Час (сек):</label>
-            <input type="number" id="time1" name="time1" value="${testNames['1'].timeLimit}" required min="1">
-          </div>
-          <div>
-            <label for="test2">Назва Тесту 2:</label>
-            <input type="text" id="test2" name="test2" value="${testNames['2'].name}" required>
-            <label for="time2">Час (сек):</label>
-            <input type="number" id="time2" name="time2" value="${testNames['2'].timeLimit}" required min="1">
-          </div>
-          <div>
-            <label for="test3">Назва Тесту 3:</label>
-            <input type="text" id="test3" name="test3" value="${testNames['3'].name}" required>
-            <label for="time3">Час (сек):</label>
-            <input type="number" id="time3" name="time3" value="${testNames['3'].timeLimit}" required min="1">
-          </div>
+          ${Object.entries(testNames).map(([num, data]) => `
+            <div class="test-row">
+              <label for="test${num}">Назва Тесту ${num}:</label>
+              <input type="text" id="test${num}" name="test${num}" value="${data.name}" required>
+              <label for="time${num}">Час (сек):</label>
+              <input type="number" id="time${num}" name="time${num}" value="${data.timeLimit}" required min="1">
+              <button type="button" class="delete-btn" onclick="deleteTest('${num}')">Видалити</button>
+            </div>
+          `).join('')}
           <button type="submit">Зберегти</button>
         </form>
         <button onclick="window.location.href='/admin'">Повернутися до адмін-панелі</button>
+        <script>
+          async function deleteTest(testNumber) {
+            if (confirm('Ви впевнені, що хочете видалити Тест ' + testNumber + '?')) {
+              await fetch('/admin/delete-test', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ testNumber })
+              });
+              window.location.reload();
+            }
+          }
+        </script>
       </body>
     </html>
   `);
@@ -1380,25 +1401,22 @@ app.get('/admin/edit-tests', checkAuth, checkAdmin, (req, res) => {
 app.post('/admin/edit-tests', checkAuth, checkAdmin, (req, res) => {
   try {
     console.log('Updating test names and time limits...');
-    const { test1, test2, test3, time1, time2, time3 } = req.body;
-    testNames['1'] = {
-      name: test1 || testNames['1'].name,
-      timeLimit: parseInt(time1) || testNames['1'].timeLimit
-    };
-    testNames['2'] = {
-      name: test2 || testNames['2'].name,
-      timeLimit: parseInt(time2) || testNames['2'].timeLimit
-    };
-    testNames['3'] = {
-      name: test3 || testNames['3'].name,
-      timeLimit: parseInt(time3) || testNames['3'].timeLimit
-    };
+    Object.keys(testNames).forEach(num => {
+      const testName = req.body[`test${num}`];
+      const timeLimit = req.body[`time${num}`];
+      if (testName && timeLimit) {
+        testNames[num] = {
+          name: testName,
+          timeLimit: parseInt(timeLimit) || testNames[num].timeLimit
+        };
+      }
+    });
     console.log('Updated test names and time limits:', testNames);
     res.send(`
       <!DOCTYPE html>
       <html lang="uk">
         <head>
-          <meta charset="UTF- LIS8">
+          <meta charset="UTF-8">
           <title>Назви оновлено</title>
         </head>
         <body>
@@ -1410,6 +1428,21 @@ app.post('/admin/edit-tests', checkAuth, checkAdmin, (req, res) => {
   } catch (error) {
     console.error('Ошибка при редактировании названий тестов:', error.message, error.stack);
     res.status(500).send('Помилка при оновленні назв тестів');
+  }
+});
+
+app.post('/admin/delete-test', checkAuth, checkAdmin, async (req, res) => {
+  try {
+    const { testNumber } = req.body;
+    if (!testNames[testNumber]) {
+      return res.status(404).json({ success: false, message: 'Тест не знайдено' });
+    }
+    delete testNames[testNumber];
+    console.log(`Deleted test ${testNumber}, updated testNames:`, testNames);
+    res.json({ success: true });
+  } catch (error) {
+    console.error('Ошибка при удалении теста:', error.message, error.stack);
+    res.status(500).json({ success: false, message: 'Помилка при видаленні тесту' });
   }
 });
 
