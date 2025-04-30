@@ -459,21 +459,29 @@ const saveResult = async (user, testNumber, score, totalPoints, startTime, endTi
       const userAnswer = answers[index];
       let questionScore = 0;
       if (q.type === 'multiple' && userAnswer && Array.isArray(userAnswer)) {
-        const correctAnswers = q.correctAnswers.map(String).map(val => val.trim().toLowerCase());
-        const userAnswers = userAnswer.map(String).map(val => val.trim().toLowerCase());
-        if (correctAnswers.length === userAnswers.length && 
-            correctAnswers.every(val => userAnswers.includes(val)) && 
-            userAnswers.every(val => correctAnswers.includes(val))) {
+        const correctAnswers = q.correctAnswers.map(val => String(val).trim().toLowerCase());
+        const userAnswers = userAnswer.map(val => String(val).trim().toLowerCase().replace(/\\'/g, "'"));
+        const isCorrect = correctAnswers.length === userAnswers.length &&
+          correctAnswers.every(val => userAnswers.includes(val)) &&
+          userAnswers.every(val => correctAnswers.includes(val));
+        console.log(`Question ${index + 1} (multiple): userAnswer=${userAnswers}, correctAnswer=${correctAnswers}, isCorrect=${isCorrect}`);
+        if (isCorrect) {
           questionScore = q.points;
         }
       } else if (q.type === 'input' && userAnswer) {
-        if (String(userAnswer).trim().toLowerCase() === String(q.correctAnswers[0]).trim().toLowerCase()) {
+        const normalizedUserAnswer = String(userAnswer).trim().toLowerCase().replace(/\s+/g, '').replace(',', '.');
+        const normalizedCorrectAnswer = String(q.correctAnswers[0]).trim().toLowerCase().replace(/\s+/g, '');
+        const isCorrect = normalizedUserAnswer === normalizedCorrectAnswer;
+        console.log(`Question ${index + 1} (input): userAnswer=${normalizedUserAnswer}, correctAnswer=${normalizedCorrectAnswer}, isCorrect=${isCorrect}`);
+        if (isCorrect) {
           questionScore = q.points;
         }
       } else if (q.type === 'ordering' && userAnswer && Array.isArray(userAnswer)) {
-        const userAnswers = userAnswer.map(String).map(val => val.trim().toLowerCase());
-        const correctAnswers = q.correctAnswers.map(String).map(val => val.trim().toLowerCase());
-        if (userAnswers.join(',') === correctAnswers.join(',')) {
+        const userAnswers = userAnswer.map(val => String(val).trim().toLowerCase());
+        const correctAnswers = q.correctAnswers.map(val => String(val).trim().toLowerCase());
+        const isCorrect = userAnswers.join(',') === correctAnswers.join(',');
+        console.log(`Question ${index + 1} (ordering): userAnswer=${userAnswers}, correctAnswer=${correctAnswers}, isCorrect=${isCorrect}`);
+        if (isCorrect) {
           questionScore = q.points;
         }
       }
@@ -534,6 +542,11 @@ const saveResult = async (user, testNumber, score, totalPoints, startTime, endTi
 
     suspiciousScore = Math.min(suspiciousScore, 100);
 
+    // Корректируем время на +3 часа (UTC+3)
+    const timeOffset = 3 * 60 * 60 * 1000; // 3 часа в миллисекундах
+    const adjustedStartTime = new Date(startTime + timeOffset);
+    const adjustedEndTime = new Date(endTime + timeOffset);
+
     const result = {
       user,
       testNumber,
@@ -543,8 +556,8 @@ const saveResult = async (user, testNumber, score, totalPoints, startTime, endTi
       correctClicks,
       totalQuestions,
       percentage,
-      startTime: new Date(startTime).toISOString(),
-      endTime: new Date(endTime).toISOString(),
+      startTime: adjustedStartTime.toISOString(),
+      endTime: adjustedEndTime.toISOString(),
       duration,
       answers,
       scoresPerQuestion,
@@ -627,6 +640,10 @@ app.get('/test/question', checkAuth, (req, res) => {
   const remainingTime = Math.max(0, Math.floor(timeLimit / 1000) - elapsedTime);
   const minutes = Math.floor(remainingTime / 60).toString().padStart(2, '0');
   const seconds = (remainingTime % 60).toString().padStart(2, '0');
+
+  // Нормализуем selectedOptions, чтобы избежать экранирования
+  const selectedOptions = answers[index] || [];
+  const selectedOptionsString = JSON.stringify(selectedOptions).replace(/'/g, "\\'");
 
   let html = `
     <!DOCTYPE html>
@@ -719,7 +736,6 @@ app.get('/test/question', checkAuth, (req, res) => {
         <div id="timer">Залишилось часу: ${minutes} мм ${seconds} с</div>
         <div class="progress-bar">
   `;
-  // Для полной версии — один ряд с равномерным распределением, для мобильной — ряды по 10 кругов
   if (progress.length <= 10) {
     html += `
       <div class="progress-row">
@@ -770,16 +786,19 @@ app.get('/test/question', checkAuth, (req, res) => {
     if (q.type === 'ordering') {
       html += `
         <div id="sortable-options">
-          ${(answers[index] || q.options).map((option, optIndex) => `
-            <div class="option-box draggable" data-index="${optIndex}" data-value="${option}">
-              ${option}
-            </div>
-          `).join('')}
+          ${(answers[index] || q.options).map((option, optIndex) => {
+            const escapedOption = option.replace(/'/g, "\\'").replace(/"/g, '\\"');
+            return `
+              <div class="option-box draggable" data-index="${optIndex}" data-value="${escapedOption}">
+                ${option}
+              </div>
+            `;
+          }).join('')}
         </div>
       `;
     } else {
       q.options.forEach((option, optIndex) => {
-        const selected = answers[index]?.includes(option) ? 'selected' : '';
+        const selected = selectedOptions.includes(option) ? 'selected' : '';
         const escapedOption = option.replace(/'/g, "\\'").replace(/"/g, '\\"');
         html += `
           <div class="option-box ${selected}" data-value="${escapedOption}">
@@ -813,7 +832,7 @@ app.get('/test/question', checkAuth, (req, res) => {
           let lastActivityTime = Date.now();
           let activityCount = 0;
           const questionStartTime = ${userTest.answerTimestamps[index] || Date.now()};
-          let selectedOptions = ${JSON.stringify(answers[index] || [])};
+          let selectedOptions = ${selectedOptionsString};
 
           function updateTimer() {
             const elapsedTime = Math.floor((Date.now() - startTime) / 1000);
@@ -1424,13 +1443,15 @@ app.get('/admin/results', checkAuth, checkAdmin, async (req, res) => {
             const userAnswer = Array.isArray(a) ? a.join(', ') : a;
             const questionScore = r.scoresPerQuestion[i] || 0;
             console.log(`Result ${index + 1}, Question ${parseInt(q) + 1}: userAnswer=${userAnswer}, score=${questionScore}`);
-            return `Питання ${parseInt(q) + 1}: ${userAnswer.replace(/'/g, "'")} (${questionScore} балів)`;
+            return `Питання ${parseInt(q) + 1}: ${userAnswer.replace(/\\'/g, "'")} (${questionScore} балів)`;
           }).join('\n')
         : 'Немає відповідей';
       const formatDateTime = (isoString) => {
         if (!isoString) return 'N/A';
         const date = new Date(isoString);
-        return `${date.toLocaleTimeString('uk-UA', { hour12: false })} ${date.toLocaleDateString('uk-UA')}`;
+        // Добавляем смещение +3 часа
+        const adjustedDate = new Date(date.getTime());
+        return `${adjustedDate.toLocaleTimeString('uk-UA', { hour12: false })} ${adjustedDate.toLocaleDateString('uk-UA')}`;
       };
       const suspiciousActivityPercent = r.suspiciousActivity && r.suspiciousActivity.suspiciousScore ? 
         Math.round(r.suspiciousActivity.suspiciousScore) : 0;
