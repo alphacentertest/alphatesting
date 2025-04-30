@@ -631,7 +631,7 @@ app.get('/test/question', checkAuth, (req, res) => {
           body { font-family: Arial, sans-serif; margin: 0; padding: 20px; padding-bottom: 80px; background-color: #f0f0f0; }
           h1 { font-size: 24px; text-align: center; }
           img { max-width: 300px; margin-bottom: 10px; display: block; margin-left: auto; margin-right: auto; }
-          .progress-bar { display: flex; justify-content: center; gap: 5px; margin-bottom: 20px; width: 100%; max-width: 100%; }
+          .progress-bar { display: flex; justify-content: center; gap: 5px; margin-bottom: 20px; width: 100%; max-width: 600px; margin-left: auto; margin-right: auto; }
           .progress-circle { width: 30px; height: 30px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 14px; }
           .progress-circle.unanswered { background-color: red; color: white; }
           .progress-circle.answered { background-color: green; color: white; }
@@ -666,7 +666,9 @@ app.get('/test/question', checkAuth, (req, res) => {
             .question-box h2 { font-size: 20px; }
           }
           @media (min-width: 601px) {
-            .progress-bar { flex-wrap: nowrap; overflow-x: auto; }
+            .progress-bar { flex-wrap: nowrap; }
+            .progress-circle { width: 20px; height: 20px; font-size: 10px; }
+            .progress-line { width: 5px; }
           }
         </style>
       </head>
@@ -676,28 +678,14 @@ app.get('/test/question', checkAuth, (req, res) => {
         <div class="progress-bar">
   `;
   // Для полной версии — один ряд, для мобильной — ряды по 12 кругов
-  if (progress.length <= 12) {
-    html += `
-      <div class="progress-row">
-        ${progress.map((p, j) => `
-          <div class="progress-circle ${p.answered ? 'answered' : 'unanswered'}">${p.number}</div>
-          ${j < progress.length - 1 ? '<div class="progress-line ' + (p.answered ? 'answered' : '') + '"></div>' : ''}
-        `).join('')}
-      </div>
-    `;
-  } else {
-    for (let i = 0; i < progress.length; i += 12) {
-      const rowCircles = progress.slice(i, i + 12);
-      html += `
-        <div class="progress-row">
-          ${rowCircles.map((p, j) => `
-            <div class="progress-circle ${p.answered ? 'answered' : 'unanswered'}">${p.number}</div>
-            ${j < rowCircles.length - 1 ? '<div class="progress-line ' + (p.answered ? 'answered' : '') + '"></div>' : ''}
-          `).join('')}
-        </div>
-      `;
-    }
-  }
+  html += `
+    <div class="progress-row">
+      ${progress.map((p, j) => `
+        <div class="progress-circle ${p.answered ? 'answered' : 'unanswered'}">${p.number}</div>
+        ${j < progress.length - 1 ? '<div class="progress-line ' + (p.answered ? 'answered' : '') + '"></div>' : ''}
+      `).join('')}
+    </div>
+  `;
   html += `
         </div>
         <div id="question-container">
