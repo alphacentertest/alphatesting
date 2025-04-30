@@ -297,7 +297,7 @@ app.post('/login', async (req, res) => {
     }
 
     req.session.user = user;
-    await logActivity(user, 'увійшов на сайт');
+    await logActivity(user, 'увійшов на сайт'); // Ждём завершения логирования
     console.log('Session after setting user:', req.session);
     console.log('Session ID after setting user:', req.sessionID);
     console.log('Cookies after setting session:', req.cookies);
@@ -1000,21 +1000,29 @@ app.get('/result', checkAuth, async (req, res) => {
     const userAnswer = answers[index];
     let questionScore = 0;
     if (q.type === 'multiple' && userAnswer && Array.isArray(userAnswer)) {
-      const correctAnswers = q.correctAnswers.map(String).map(val => val.trim().toLowerCase());
-      const userAnswers = userAnswer.map(String).map(val => val.trim().toLowerCase());
-      if (correctAnswers.length === userAnswers.length && 
-          correctAnswers.every(val => userAnswers.includes(val)) && 
-          userAnswers.every(val => correctAnswers.includes(val))) {
+      const correctAnswers = q.correctAnswers.map(val => String(val).trim().toLowerCase());
+      const userAnswers = userAnswer.map(val => String(val).trim().toLowerCase());
+      const isCorrect = correctAnswers.length === userAnswers.length &&
+        correctAnswers.every(val => userAnswers.includes(val)) &&
+        userAnswers.every(val => correctAnswers.includes(val));
+      console.log(`Question ${index + 1} (multiple): userAnswer=${userAnswers}, correctAnswer=${correctAnswers}, isCorrect=${isCorrect}`);
+      if (isCorrect) {
         questionScore = q.points;
       }
     } else if (q.type === 'input' && userAnswer) {
-      if (String(userAnswer).trim().toLowerCase() === String(q.correctAnswers[0]).trim().toLowerCase()) {
+      const normalizedUserAnswer = String(userAnswer).trim().toLowerCase().replace(/\s+/g, '');
+      const normalizedCorrectAnswer = String(q.correctAnswers[0]).trim().toLowerCase().replace(/\s+/g, '');
+      const isCorrect = normalizedUserAnswer === normalizedCorrectAnswer;
+      console.log(`Question ${index + 1} (input): userAnswer=${normalizedUserAnswer}, correctAnswer=${normalizedCorrectAnswer}, isCorrect=${isCorrect}`);
+      if (isCorrect) {
         questionScore = q.points;
       }
     } else if (q.type === 'ordering' && userAnswer && Array.isArray(userAnswer)) {
-      const userAnswers = userAnswer.map(String).map(val => val.trim().toLowerCase());
-      const correctAnswers = q.correctAnswers.map(String).map(val => val.trim().toLowerCase());
-      if (userAnswers.join(',') === correctAnswers.join(',')) {
+      const userAnswers = userAnswer.map(val => String(val).trim().toLowerCase());
+      const correctAnswers = q.correctAnswers.map(val => String(val).trim().toLowerCase());
+      const isCorrect = userAnswers.join(',') === correctAnswers.join(',');
+      console.log(`Question ${index + 1} (ordering): userAnswer=${userAnswers}, correctAnswer=${correctAnswers}, isCorrect=${isCorrect}`);
+      if (isCorrect) {
         questionScore = q.points;
       }
     }
@@ -1411,9 +1419,12 @@ app.get('/admin/results', checkAuth, checkAdmin, async (req, res) => {
   } else {
     results.forEach((r, index) => {
       const answersDisplay = r.answers 
-        ? Object.entries(r.answers).map(([q, a], i) => 
-            `Питання ${parseInt(q) + 1}: ${Array.isArray(a) ? a.join(', ') : a} (${r.scoresPerQuestion[i] || 0} балів)`
-          ).join('\n')
+        ? Object.entries(r.answers).map(([q, a], i) => {
+            const userAnswer = Array.isArray(a) ? a.join(', ') : a;
+            const questionScore = r.scoresPerQuestion[i] || 0;
+            console.log(`Result ${index + 1}, Question ${parseInt(q) + 1}: userAnswer=${userAnswer}, score=${questionScore}`);
+            return `Питання ${parseInt(q) + 1}: ${userAnswer} (${questionScore} балів)`;
+          }).join('\n')
         : 'Немає відповідей';
       const formatDateTime = (isoString) => {
         if (!isoString) return 'N/A';
@@ -1442,8 +1453,8 @@ app.get('/admin/results', checkAuth, checkAdmin, async (req, res) => {
           <td>${r.score || '0'}</td>
           <td>${r.totalPoints || '0'}</td>
           <td>${formatDateTime(r.startTime)}</td>
-          <td>${formatDateTime(r.endTime)}</td
-                    <td>${r.duration || 'N/A'}</td>
+          <td>${formatDateTime(r.endTime)}</td>
+          <td>${r.duration || 'N/A'}</td>
           <td>${suspiciousActivityPercent}%</td>
           <td class="details">${activityDetails}</td>
           <td class="answers">${answersDisplay}</td>
@@ -1458,12 +1469,24 @@ app.get('/admin/results', checkAuth, checkAdmin, async (req, res) => {
         <script>
           async function deleteResult(id) {
             if (confirm('Ви впевнені, що хочете видалити цей результат?')) {
-              await fetch('/admin/delete-result', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ id })
-              });
-              window.location.reload();
+              try {
+                const response = await fetch('/admin/delete-result', {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ id })
+                });
+                const result = await response.json();
+                if (result.success) {
+                  console.log('Result deleted successfully');
+                  window.location.reload();
+                } else {
+                  console.error('Failed to delete result:', result.message);
+                  alert('Помилка при видаленні результату: ' + result.message);
+                }
+              } catch (error) {
+                console.error('Error deleting result:', error);
+                alert('Помилка при видаленні результату');
+              }
             }
           }
         </script>
@@ -1477,7 +1500,8 @@ app.post('/admin/delete-result', checkAuth, checkAdmin, async (req, res) => {
   try {
     const { id } = req.body;
     console.log(`Deleting result with id ${id}...`);
-    await db.collection('test_results').deleteOne({ _id: new require('mongodb').ObjectId(id) });
+    const { ObjectId } = MongoClient; // Используем ObjectId из MongoClient
+    await db.collection('test_results').deleteOne({ _id: new ObjectId(id) });
     console.log(`Result with id ${id} deleted from MongoDB`);
     res.json({ success: true });
   } catch (error) {
