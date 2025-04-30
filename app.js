@@ -473,7 +473,7 @@ const saveResult = async (user, testNumber, score, totalPoints, startTime, endTi
         }
       } else if (q.type === 'input' && userAnswer) {
         const normalizedUserAnswer = String(userAnswer).trim().toLowerCase().replace(/\s+/g, '').replace(',', '.');
-        const normalizedCorrectAnswer = String(q.correctAnswers[0]).trim().toLowerCase().replace(/\s+/g, '');
+        const normalizedCorrectAnswer = String(q.correctAnswers[0]).trim().toLowerCase().replace(/\s+/g, '').replace(',', '.');
         const isCorrect = normalizedUserAnswer === normalizedCorrectAnswer;
         console.log(`Question ${index + 1} (input): userAnswer=${normalizedUserAnswer}, correctAnswer=${normalizedCorrectAnswer}, isCorrect=${isCorrect}`);
         if (isCorrect) {
@@ -529,7 +529,7 @@ const saveResult = async (user, testNumber, score, totalPoints, startTime, endTi
         const allResponseTimes = allResults.flatMap(r => r.suspiciousActivity.responseTimes || []);
         typicalResponseTime = allResponseTimes.length > 0 ? 
           allResponseTimes.reduce((sum, time) => sum + (time || 0), 0) / allResponseTimes.length : typicalResponseTime;
-        const allSwitchCounts = allResults.map(r => r.suspiciousActivity.switchCount || 0); // Исправлено: убрано лишнее 'allResults'
+        const allSwitchCounts = allResults.map(r => r.suspiciousActivity.switchCount || 0);
         typicalSwitchCount = allSwitchCounts.length > 0 ? 
           allSwitchCounts.reduce((sum, count) => sum + count, 0) / allSwitchCounts.length : typicalSwitchCount;
       }
@@ -1504,7 +1504,7 @@ app.get('/admin/results', checkAuth, checkAdmin, async (req, res) => {
             if (!a) return null; // Пропускаем вопросы без ответов
             const userAnswer = Array.isArray(a) ? a.join(', ') : a;
             const questionScore = r.scoresPerQuestion[i] || 0; // Используем сохранённые баллы
-            console.log(`Result ${index + 1}, Question ${i + 1}: userAnswer=${userAnswer}, score=${questionScore}`);
+            console.log(`Result ${index + 1}, Question ${i + 1}: userAnswer=${userAnswer}, savedScore=${questionScore}`);
             return `Питання ${i + 1}: ${userAnswer.replace(/\\'/g, "'")} (${questionScore} балів)`;
           }).filter(line => line !== null).join('\n')
         : 'Немає відповідей';
@@ -1521,7 +1521,7 @@ app.get('/admin/results', checkAuth, checkAdmin, async (req, res) => {
       const avgResponseTime = r.suspiciousActivity && r.suspiciousActivity.responseTimes ? 
         (r.suspiciousActivity.responseTimes.reduce((sum, time) => sum + (time || 0), 0) / r.suspiciousActivity.responseTimes.length / 1000).toFixed(2) : 0;
       const avgActivityCount = r.suspiciousActivity && r.suspiciousActivity.activityCounts ? 
-        (r.suspiciousActivity.activityCounts.reduce((sum, count) => sum + (count || 0), 0) / r.suspiciousActivity.activityCounts.length).toFixed(2) : 0;
+        (r.suspiciousActivity.activityCounts.reduce((sum, count) => sum + (time || 0), 0) / r.suspiciousActivity.activityCounts.length).toFixed(2) : 0;
       const activityDetails = `
 Время вне вкладки: ${timeAwayPercent}%
 Переключения вкладок: ${switchCount}
