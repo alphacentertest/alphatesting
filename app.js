@@ -5,7 +5,6 @@ const path = require('path');
 const ExcelJS = require('exceljs');
 const session = require('express-session');
 const MongoStore = require('connect-mongo');
-const MemoryStore = require('express-session').MemoryStore; // Для отладки
 const { MongoClient } = require('mongodb');
 const fs = require('fs');
 
@@ -13,13 +12,13 @@ const app = express();
 
 // Подключение к MongoDB
 const MONGO_URL = process.env.MONGO_URL || 'mongodb+srv://romanhaleckij7:DNMaH9w2X4gel3Xc@cluster0.r93r1p8.mongodb.net/testdb?retryWrites=true&w=majority';
-const client = new MongoClient(MONGO_URL, { connectTimeoutMS: 5000, serverSelectionTimeoutMS: 5000 });
+const client = new MongoClient(MONGO_URL, { connectTimeoutMS: 2000, serverSelectionTimeoutMS: 2000 });
 let db;
 
 // Синхронная инициализация MongoDB
 const connectToMongoDB = async () => {
   try {
-    console.log('Attempting to connect to MongoDB...');
+    console.log('Attempting to connect to MongoDB with URL:', MONGO_URL);
     await client.connect();
     console.log('Connected to MongoDB successfully');
     db = client.db('testdb');
@@ -43,16 +42,27 @@ app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
 app.use(cookieParser());
 
-// Временно используем MemoryStore для отладки
+// Используем MongoStore для сессий
 app.use(session({
-  store: new MemoryStore(),
+  store: MongoStore.create({ 
+    mongoUrl: MONGO_URL,
+    collectionName: 'sessions',
+    ttl: 24 * 60 * 60,
+    clientPromise: client.connect().then(() => {
+      console.log('MongoStore client connected successfully');
+      return client;
+    }).catch(err => {
+      console.error('MongoStore client connection error:', err.message, err.stack);
+      throw err;
+    })
+  }),
   secret: process.env.SESSION_SECRET || 'a1b2c3d4e5f6g7h8i9j0k1l2m3n4o5p6q7r8s9t0',
   resave: false,
   saveUninitialized: false,
   cookie: { 
-    secure: process.env.NODE_ENV === 'production' ? true : false,
+    secure: false, // Временно отключаем secure для отладки
     httpOnly: true,
-    sameSite: process.env.NODE_ENV === 'production' ? 'none' : 'lax',
+    sameSite: 'lax', // Меняем на lax
     maxAge: 24 * 60 * 60 * 1000
   }
 }));
@@ -101,43 +111,6 @@ const loadUsers = async () => {
     return users;
   } catch (error) {
     console.error('Error loading users from users.xlsx:', error.message, error.stack);
-    throw error;
-  }
-};
-
-const saveUsersToMongo = async (users) => {
-  try {
-    if (!db) {
-      throw new Error('MongoDB connection not established');
-    }
-    console.log('Saving users to MongoDB...');
-    await db.collection('users').deleteMany({});
-    const userDocs = Object.entries(users).map(([username, password]) => ({ username, password }));
-    if (userDocs.length > 0) {
-      await db.collection('users').insertMany(userDocs);
-      console.log('Users saved to MongoDB:', userDocs);
-    }
-  } catch (error) {
-    console.error('Error saving users to MongoDB:', error.message, error.stack);
-    throw error;
-  }
-};
-
-const loadUsersFromMongo = async () => {
-  try {
-    if (!db) {
-      throw new Error('MongoDB connection not established');
-    }
-    console.log('Loading users from MongoDB...');
-    const userDocs = await db.collection('users').find({}).toArray();
-    const users = {};
-    userDocs.forEach(doc => {
-      users[doc.username] = doc.password;
-    });
-    console.log('Loaded users from MongoDB:', users);
-    return users;
-  } catch (error) {
-    console.error('Error loading users from MongoDB:', error.message, error.stack);
     throw error;
   }
 };
@@ -200,7 +173,7 @@ const initializeServer = async () => {
   let attempt = 1;
   const maxAttempts = 5;
 
-  // Ждем завершения подключения к MongoDB
+  // Инициализация MongoDB
   try {
     await connectToMongoDB();
   } catch (error) {
@@ -211,9 +184,8 @@ const initializeServer = async () => {
   while (attempt <= maxAttempts) {
     try {
       console.log(`Starting server initialization (Attempt ${attempt} of ${maxAttempts})...`);
-      const users = await loadUsers();
-      await saveUsersToMongo(users);
-      console.log('Users initialized successfully');
+      await loadUsers(); // Проверяем, что файл users.xlsx доступен
+      console.log('Users initialized successfully from Excel');
       isInitialized = true;
       initializationError = null;
       break;
@@ -257,6 +229,18 @@ app.get('/test-mongo', async (req, res) => {
   }
 });
 
+// Тестовый маршрут для проверки работы Express
+app.get('/test', (req, res) => {
+  console.log('Handling /test request...');
+  res.json({ success: true, message: 'Express server is working on /test' });
+});
+
+// Тестовый маршрут с префиксом /api
+app.get('/api/test', (req, res) => {
+  console.log('Handling /api/test request...');
+  res.json({ success: true, message: 'Express server is working on /api/test' });
+});
+
 app.get('/', (req, res) => {
   console.log('Serving index.html');
   res.sendFile(path.join(__dirname, 'public', 'index.html'));
@@ -271,8 +255,8 @@ app.post('/login', async (req, res) => {
       return res.status(400).json({ success: false, message: 'Пароль не вказано' });
     }
 
-    console.log('Loading users from MongoDB for authentication...');
-    const validPasswords = await loadUsersFromMongo();
+    console.log('Loading users from Excel for authentication...');
+    const validPasswords = await loadUsers();
     console.log('Checking password:', password, 'against validPasswords:', validPasswords);
     
     const user = Object.keys(validPasswords).find(u => {
@@ -415,12 +399,7 @@ const saveResult = async (user, testNumber, score, totalPoints, startTime, endTi
       answers,
       scoresPerQuestion
     };
-    console.log('Saving result to MongoDB:', result);
-    if (!db) {
-      throw new Error('MongoDB connection not established');
-    }
-    const insertResult = await db.collection('test_results').insertOne(result);
-    console.log(`Successfully saved result for ${user} in MongoDB with ID:`, insertResult.insertedId);
+    console.log('Skipping MongoDB save for now:', result);
   } catch (error) {
     console.error('Ошибка сохранения в MongoDB:', error.message, error.stack);
     throw error;
@@ -1052,15 +1031,8 @@ app.get('/admin', checkAuth, checkAdmin, (req, res) => {
 
 app.get('/admin/results', checkAuth, checkAdmin, async (req, res) => {
   let results = [];
-  let errorMessage = '';
-  try {
-    console.log('Fetching test results from MongoDB...');
-    results = await db.collection('test_results').find({}).sort({ endTime: -1 }).toArray();
-    console.log('Fetched results from MongoDB:', results);
-  } catch (fetchError) {
-    console.error('Ошибка при получении данных из MongoDB:', fetchError.message, fetchError.stack);
-    errorMessage = `Ошибка MongoDB: ${fetchError.message}`;
-  }
+  let errorMessage = 'MongoDB is temporarily disabled for this route';
+  console.log('MongoDB is temporarily disabled for /admin/results');
 
   let adminHtml = `
     <!DOCTYPE html>
@@ -1080,11 +1052,7 @@ app.get('/admin/results', checkAuth, checkAdmin, async (req, res) => {
       </head>
       <body>
         <h1>Результати всіх користувачів</h1>
-  `;
-  if (errorMessage) {
-    adminHtml += `<p class="error">${errorMessage}</p>`;
-  }
-  adminHtml += `
+        <p class="error">${errorMessage}</p>
         <table>
           <tr>
             <th>Користувач</th>
@@ -1097,51 +1065,9 @@ app.get('/admin/results', checkAuth, checkAdmin, async (req, res) => {
             <th>Відповіді та бали</th>
             <th>Дія</th>
           </tr>
-  `;
-  if (!results || results.length === 0) {
-    adminHtml += '<tr><td colspan="9">Немає результатів</td></tr>';
-    console.log('No results found in test_results');
-  } else {
-    results.forEach((r, index) => {
-      const answersDisplay = r.answers 
-        ? Object.entries(r.answers).map(([q, a], i) => 
-            `Питання ${parseInt(q) + 1}: ${Array.isArray(a) ? a.join(', ') : a} (${r.scoresPerQuestion[i] || 0} балів)`
-          ).join('\n')
-        : 'Немає відповідей';
-      const formatDateTime = (isoString) => {
-        if (!isoString) return 'N/A';
-        const date = new Date(isoString);
-        return `${date.toLocaleTimeString('uk-UA', { hour12: false })} ${date.toLocaleDateString('uk-UA')}`;
-      };
-      adminHtml += `
-        <tr>
-          <td>${r.user || 'N/A'}</td>
-          <td>${testNames[r.testNumber]?.name || 'N/A'}</td>
-          <td>${r.score || '0'}</td>
-          <td>${r.totalPoints || '0'}</td>
-          <td>${formatDateTime(r.startTime)}</td>
-          <td>${formatDateTime(r.endTime)}</td>
-          <td>${r.duration || 'N/A'}</td>
-          <td class="answers">${answersDisplay}</td>
-          <td><button class="delete-btn" onclick="deleteResult('${r._id}')">🗑️ Видалити</button></td>
-        </tr>
-      `;
-    });
-  }
-  adminHtml += `
+          <tr><td colspan="9">Немає результатів</td></tr>
+        </table>
         <button onclick="window.location.href='/admin'">Повернутися до адмін-панелі</button>
-        <script>
-          async function deleteResult(id) {
-            if (confirm('Ви впевнені, що хочете видалити цей результат?')) {
-              await fetch('/admin/delete-result', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ id })
-              });
-              window.location.reload();
-            }
-          }
-        </script>
       </body>
     </html>
   `;
@@ -1150,11 +1076,8 @@ app.get('/admin/results', checkAuth, checkAdmin, async (req, res) => {
 
 app.post('/admin/delete-result', checkAuth, checkAdmin, async (req, res) => {
   try {
-    const { id } = req.body;
-    console.log(`Deleting result with id ${id}...`);
-    await db.collection('test_results').deleteOne({ _id: new require('mongodb').ObjectId(id) });
-    console.log(`Result with id ${id} deleted from MongoDB`);
-    res.json({ success: true });
+    console.log('MongoDB is temporarily disabled for /admin/delete-result');
+    res.status(500).json({ success: false, message: 'MongoDB is temporarily disabled for this route' });
   } catch (error) {
     console.error('Ошибка при удалении результата:', error.message, error.stack);
     res.status(500).json({ success: false, message: 'Помилка при видаленні результату' });
@@ -1163,9 +1086,7 @@ app.post('/admin/delete-result', checkAuth, checkAdmin, async (req, res) => {
 
 app.get('/admin/delete-results', checkAuth, checkAdmin, async (req, res) => {
   try {
-    console.log('Deleting all test results...');
-    await db.collection('test_results').deleteMany({});
-    console.log('Test results deleted from MongoDB');
+    console.log('MongoDB is temporarily disabled for /admin/delete-results');
     res.send(`
       <!DOCTYPE html>
       <html lang="uk">
@@ -1174,7 +1095,7 @@ app.get('/admin/delete-results', checkAuth, checkAdmin, async (req, res) => {
           <title>Видалено результати</title>
         </head>
         <body>
-          <h1>Результати успішно видалено</h1>
+          <h1>MongoDB is temporarily disabled for this route</h1>
           <button onclick="window.location.href='/admin'">Повернутися до адмін-панелі</button>
         </body>
       </html>
