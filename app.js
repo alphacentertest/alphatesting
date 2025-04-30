@@ -666,7 +666,7 @@ app.get('/test/question', checkAuth, (req, res) => {
             display: flex; 
             align-items: center; 
             justify-content: space-between; 
-            gap: 5px; 
+            gap: 2px; 
           }
           .option-box { border: 2px solid #ccc; padding: 10px; margin: 5px 0; border-radius: 5px; cursor: pointer; font-size: 16px; user-select: none; }
           .option-box.selected { background-color: #90ee90; }
@@ -690,7 +690,7 @@ app.get('/test/question', checkAuth, (req, res) => {
             .progress-bar { flex-direction: column; }
             .progress-circle { width: 20px; height: 20px; font-size: 10px; }
             .progress-line { width: 5px; }
-            .progress-row { justify-content: center; gap: 5px; }
+            .progress-row { justify-content: center; gap: 2px; }
             .option-box { font-size: 18px; padding: 15px; }
             button { font-size: 18px; padding: 15px; }
             #timer { font-size: 20px; }
@@ -709,8 +709,8 @@ app.get('/test/question', checkAuth, (req, res) => {
         <div id="timer">Залишилось часу: ${minutes} мм ${seconds} с</div>
         <div class="progress-bar">
   `;
-  // Для мобильной версии — ряды по 12 кругов
-  if (progress.length <= 12) {
+  // Для мобильной версии — ряды по 10 кругов
+  if (progress.length <= 10) {
     html += `
       <div class="progress-row">
         ${progress.map((p, j) => `
@@ -720,8 +720,8 @@ app.get('/test/question', checkAuth, (req, res) => {
       </div>
     `;
   } else {
-    for (let i = 0; i < progress.length; i += 12) {
-      const rowCircles = progress.slice(i, i + 12);
+    for (let i = 0; i < progress.length; i += 10) {
+      const rowCircles = progress.slice(i, i + 10);
       html += `
         <div class="progress-row">
           ${rowCircles.map((p, j) => `
