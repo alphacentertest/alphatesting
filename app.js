@@ -387,7 +387,7 @@ const saveResult = async (user, testNumber, score, totalPoints, startTime, endTi
     console.log('User test data:', userTest);
     const answers = userTest ? userTest.answers : {};
     const questions = userTest ? userTest.questions : [];
-    const suspiciousActivity = userTest ? userTest.suspiciousActivity : { timeAway: 0, switchCount: 0 };
+    const suspiciousActivity = userTest ? userTest.suspiciousActivity : { timeAway: 0, switchCount: 0, responseTimes: [], activityCounts: [] };
     console.log('Answers:', answers, 'Questions:', questions);
     console.log('Suspicious activity:', suspiciousActivity);
 
@@ -416,6 +416,67 @@ const saveResult = async (user, testNumber, score, totalPoints, startTime, endTi
       return questionScore;
     });
 
+    // Рассчитываем подозрительную активность
+    let suspiciousScore = 0;
+
+    // 1. Время вне вкладки
+    const timeAwayPercent = suspiciousActivity.timeAway ? 
+      Math.round((suspiciousActivity.timeAway / (duration * 1000)) * 100) : 0;
+    suspiciousScore += timeAwayPercent;
+
+    // 2. Частота переключений
+    const switchCount = suspiciousActivity.switchCount || 0;
+    if (switchCount > totalQuestions * 2) { // Если переключений больше, чем 2 на вопрос
+      suspiciousScore += 20;
+    }
+
+    // 3. Время ответа на вопрос
+    const responseTimes = suspiciousActivity.responseTimes || [];
+    const avgResponseTime = responseTimes.length > 0 ? 
+      responseTimes.reduce((sum, time) => sum + (time || 0), 0) / responseTimes.length : 0;
+    responseTimes.forEach(time => {
+      if (time < 5000) { // < 5 секунд
+        suspiciousScore += 10;
+      } else if (time > 5 * 60 * 1000) { // > 5 минут
+        suspiciousScore += 10;
+      }
+    });
+
+    // 4. Активность мыши/клавиатуры
+    const activityCounts = suspiciousActivity.activityCounts || [];
+    const avgActivityCount = activityCounts.length > 0 ? 
+      activityCounts.reduce((sum, count) => sum + (count || 0), 0) / activityCounts.length : 0;
+    activityCounts.forEach((count, idx) => {
+      if (count < 5 && responseTimes[idx] > 30 * 1000) { // Меньше 5 действий за 30 секунд
+        suspiciousScore += 10;
+      }
+    });
+
+    // 5. Сравнение с типичным поведением
+    let typicalResponseTime = 30 * 1000; // Среднее время ответа (по умолчанию 30 секунд)
+    let typicalSwitchCount = totalQuestions; // Среднее количество переключений (по умолчанию 1 на вопрос)
+    try {
+      const allResults = await db.collection('test_results').find({}).toArray();
+      if (allResults.length > 0) {
+        const allResponseTimes = allResults.flatMap(r => r.suspiciousActivity.responseTimes || []);
+        typicalResponseTime = allResponseTimes.length > 0 ? 
+          allResponseTimes.reduce((sum, time) => sum + (time || 0), 0) / allResponseTimes.length : typicalResponseTime;
+        const allSwitchCounts = allResults.map(r => r.suspiciousActivity.switchCount || 0);
+        typicalSwitchCount = allSwitchCounts.length > 0 ? 
+          allSwitchCounts.reduce((sum, count) => sum + count, 0) / allSwitchCounts.length : typicalSwitchCount;
+      }
+    } catch (error) {
+      console.error('Error calculating typical behavior:', error);
+    }
+    if (avgResponseTime < typicalResponseTime * 0.5 || avgResponseTime > typicalResponseTime * 1.5) {
+      suspiciousScore += 15;
+    }
+    if (switchCount > typicalSwitchCount * 1.5) {
+      suspiciousScore += 15;
+    }
+
+    suspiciousScore = Math.min(suspiciousScore, 100); // Ограничиваем максимальный процент
+
     const result = {
       user,
       testNumber,
@@ -430,7 +491,10 @@ const saveResult = async (user, testNumber, score, totalPoints, startTime, endTi
       duration,
       answers,
       scoresPerQuestion,
-      suspiciousActivity // Сохраняем данные о подозрительной активности
+      suspiciousActivity: {
+        ...suspiciousActivity,
+        suspiciousScore
+      }
     };
     console.log('Saving result to MongoDB:', result);
     if (!db) {
@@ -492,6 +556,8 @@ app.get('/test/question', checkAuth, (req, res) => {
   }
 
   userTest.currentQuestion = index;
+  userTest.answerTimestamps = userTest.answerTimestamps || {};
+  userTest.answerTimestamps[index] = userTest.answerTimestamps[index] || Date.now(); // Записываем время начала ответа
   const q = questions[index];
   console.log('Rendering question:', { index, picture: q.picture, text: q.text, options: q.options });
 
@@ -616,6 +682,9 @@ app.get('/test/question', checkAuth, (req, res) => {
           let timeAway = 0;
           let lastBlurTime = 0;
           let switchCount = 0;
+          let lastActivityTime = Date.now();
+          let activityCount = 0;
+          const questionStartTime = ${userTest.answerTimestamps[index]};
 
           function updateTimer() {
             const elapsedTime = Math.floor((Date.now() - startTime) / 1000);
@@ -644,6 +713,18 @@ app.get('/test/question', checkAuth, (req, res) => {
             }
           });
 
+          document.addEventListener('mousemove', () => {
+            lastActivityTime = Date.now();
+            activityCount++;
+            console.log('Mouse activity detected, count:', activityCount);
+          });
+
+          document.addEventListener('keydown', () => {
+            lastActivityTime = Date.now();
+            activityCount++;
+            console.log('Keyboard activity detected, count:', activityCount);
+          });
+
           document.querySelectorAll('.option-box').forEach(box => {
             box.addEventListener('click', (e) => {
               const checkbox = box.querySelector('input[type="checkbox"]');
@@ -665,10 +746,11 @@ app.get('/test/question', checkAuth, (req, res) => {
               const checked = document.querySelectorAll('input[name="q' + index + '"]:checked');
               answers = Array.from(checked).map(input => input.value);
             }
+            const responseTime = Date.now() - questionStartTime;
             await fetch('/answer', {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ index, answer: answers })
+              body: JSON.stringify({ index, answer, timeAway, switchCount, responseTime, activityCount })
             });
             window.location.href = '/test/question?index=' + (index + 1);
           }
@@ -691,10 +773,11 @@ app.get('/test/question', checkAuth, (req, res) => {
               const checked = document.querySelectorAll('input[name="q' + index + '"]:checked');
               answers = Array.from(checked).map(input => input.value);
             }
+            const responseTime = Date.now() - questionStartTime;
             await fetch('/answer', {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ index, answer: answers, timeAway, switchCount })
+              body: JSON.stringify({ index, answer, timeAway, switchCount, responseTime, activityCount })
             });
             hideConfirm();
             window.location.href = '/result';
@@ -728,17 +811,18 @@ app.get('/test/question', checkAuth, (req, res) => {
 app.post('/answer', checkAuth, (req, res) => {
   if (req.user === 'admin') return res.redirect('/admin');
   try {
-    const { index, answer, timeAway, switchCount } = req.body;
+    const { index, answer, timeAway, switchCount, responseTime, activityCount } = req.body;
     const userTest = userTests.get(req.user);
     if (!userTest) {
       console.warn(`Test not started for user ${req.user} in /answer`);
       return res.status(400).json({ error: 'Тест не розпочато' });
     }
     userTest.answers[index] = answer;
-    // Сохраняем данные о подозрительной активности
-    userTest.suspiciousActivity = userTest.suspiciousActivity || { timeAway: 0, switchCount: 0 };
+    userTest.suspiciousActivity = userTest.suspiciousActivity || { timeAway: 0, switchCount: 0, responseTimes: [], activityCounts: [] };
     userTest.suspiciousActivity.timeAway = (userTest.suspiciousActivity.timeAway || 0) + (timeAway || 0);
     userTest.suspiciousActivity.switchCount = (userTest.suspiciousActivity.switchCount || 0) + (switchCount || 0);
+    userTest.suspiciousActivity.responseTimes[index] = responseTime || 0;
+    userTest.suspiciousActivity.activityCounts[index] = activityCount || 0;
     console.log(`Saved answer for user ${req.user}, question ${index}:`, answer);
     console.log(`Updated suspicious activity for user ${req.user}:`, userTest.suspiciousActivity);
     res.json({ success: true });
@@ -1174,9 +1258,8 @@ app.get('/admin/results', checkAuth, checkAdmin, async (req, res) => {
         const date = new Date(isoString);
         return `${date.toLocaleTimeString('uk-UA', { hour12: false })} ${date.toLocaleDateString('uk-UA')}`;
       };
-      // Рассчитываем процент подозрительной активности
-      const suspiciousActivityPercent = r.suspiciousActivity ? 
-        Math.round((r.suspiciousActivity.timeAway / (r.duration * 1000)) * 100) : 0;
+      const suspiciousActivityPercent = r.suspiciousActivity && r.suspiciousActivity.suspiciousScore ? 
+        Math.round(r.suspiciousActivity.suspiciousScore) : 0;
       adminHtml += `
         <tr>
           <td>${r.user || 'N/A'}</td>
