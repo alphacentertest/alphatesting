@@ -630,8 +630,8 @@ app.get('/test/question', checkAuth, (req, res) => {
         <style>
           body { font-family: Arial, sans-serif; margin: 0; padding: 20px; padding-bottom: 80px; background-color: #f0f0f0; }
           h1 { font-size: 24px; text-align: center; }
-          img { max-width: 300px; margin-bottom: 10px; display: block; margin-left: auto; margin-right: auto; }
-          .progress-bar { display: flex; justify-content: center; gap: 5px; margin-bottom: 20px; width: 100%; max-width: 600px; margin-left: auto; margin-right: auto; }
+          img { max-width: 100%; margin-bottom: 10px; display: block; margin-left: auto; margin-right: auto; }
+          .progress-bar { display: flex; justify-content: center; gap: 5px; margin-bottom: 20px; width: calc(100% - 40px); margin-left: auto; margin-right: auto; }
           .progress-circle { width: 30px; height: 30px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 14px; }
           .progress-circle.unanswered { background-color: red; color: white; }
           .progress-circle.answered { background-color: green; color: white; }
@@ -653,12 +653,12 @@ app.get('/test/question', checkAuth, (req, res) => {
           .instruction { font-style: italic; color: #555; margin-bottom: 10px; font-size: 18px; }
           .option-box.draggable { cursor: move; }
           .option-box.dragging { opacity: 0.5; }
-          #question-container { background-color: white; padding: 20px; border-radius: 8px; box-shadow: 0 0 10px rgba(0, 0, 0, 0.1); width: 100%; max-width: 600px; margin: 0 auto 20px auto; }
+          #question-container { background-color: white; padding: 20px; border-radius: 8px; box-shadow: 0 0 10px rgba(0, 0, 0, 0.1); width: calc(100% - 40px); margin: 0 auto 20px auto; }
           #answers { margin-bottom: 20px; }
           @media (max-width: 600px) {
             h1 { font-size: 28px; }
             .progress-bar { flex-wrap: wrap; }
-            .progress-circle { width: 25px; height: 25px; font-size: 12px; }
+            .progress-circle { width: 20px; height: 20px; font-size: 10px; }
             .progress-line { width: 5px; }
             .option-box { font-size: 18px; padding: 15px; }
             button { font-size: 18px; padding: 15px; }
@@ -677,7 +677,7 @@ app.get('/test/question', checkAuth, (req, res) => {
         <div id="timer">Залишилось часу: ${minutes} мм ${seconds} с</div>
         <div class="progress-bar">
   `;
-  // Для полной версии — один ряд, для мобильной — ряды по 12 кругов
+  // Для полной версии — один ряд, для мобильной — ряды по 15 кругов
   html += `
     <div class="progress-row">
       ${progress.map((p, j) => `
@@ -845,8 +845,7 @@ app.get('/test/question', checkAuth, (req, res) => {
             document.getElementById('confirm-modal').style.display = 'none';
           }
 
-          async function finishTest(index) {
-            console.log('Finish Test button clicked for index:', index);
+          async function finishTest(index gobiernos            console.log('Finish Test button clicked for index:', index);
             try {
               let answers = selectedOptions;
               if (document.querySelector('input[name="q' + index + '"]')) {
