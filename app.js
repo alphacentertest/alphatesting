@@ -491,7 +491,6 @@ const saveResult = async (user, testNumber, score, totalPoints, startTime, endTi
       return questionScore;
     });
 
-    // Пересчитываем общий счёт для проверки
     const calculatedScore = scoresPerQuestion.reduce((sum, s) => sum + s, 0);
     console.log(`Calculated score: ${calculatedScore}, Provided score: ${score}`);
 
@@ -507,7 +506,7 @@ const saveResult = async (user, testNumber, score, totalPoints, startTime, endTi
 
     const responseTimes = suspiciousActivity.responseTimes || [];
     const avgResponseTime = responseTimes.length > 0 ? 
-      responseTimes.reduce((sum, time) => sum + (time || 0), 0) / responseTimes.length : 0;
+      (responseTimes.reduce((sum, time) => sum + (time || 0), 0) / responseTimes.length / 1000).toFixed(2) : 0;
     responseTimes.forEach(time => {
       if (time < 5000) {
         suspiciousScore += 10;
@@ -518,7 +517,7 @@ const saveResult = async (user, testNumber, score, totalPoints, startTime, endTi
 
     const activityCounts = suspiciousActivity.activityCounts || [];
     const avgActivityCount = activityCounts.length > 0 ? 
-      activityCounts.reduce((sum, count) => sum + (count || 0), 0) / activityCounts.length : 0;
+      (activityCounts.reduce((sum, count) => sum + (count || 0), 0) / activityCounts.length).toFixed(2) : 0;
     activityCounts.forEach((count, idx) => {
       if (count < 5 && responseTimes[idx] > 30 * 1000) {
         suspiciousScore += 10;
@@ -556,7 +555,7 @@ const saveResult = async (user, testNumber, score, totalPoints, startTime, endTi
     const result = {
       user,
       testNumber,
-      score: calculatedScore, // Используем пересчитанный score
+      score: calculatedScore,
       totalPoints,
       totalClicks,
       correctClicks,
@@ -565,14 +564,15 @@ const saveResult = async (user, testNumber, score, totalPoints, startTime, endTi
       startTime: adjustedStartTime.toISOString(),
       endTime: adjustedEndTime.toISOString(),
       duration,
-      answers,
+      answers: Object.fromEntries(Object.entries(answers).sort((a, b) => parseInt(a[0]) - parseInt(b[0]))), // Сортируем ключи
       scoresPerQuestion: scoresPerQuestion.map((score, idx) => {
         console.log(`Saving score for question ${idx + 1}: ${score}`);
         return score;
       }),
       suspiciousActivity: {
         ...suspiciousActivity,
-        suspiciousScore
+        suspiciousScore,
+        responseTimes: responseTimes.map(time => Math.min(time, 5 * 60 * 1000)) // Ограничиваем время ответа 5 минутами
       }
     };
     console.log('Saving result to MongoDB:', result);
@@ -650,7 +650,6 @@ app.get('/test/question', checkAuth, (req, res) => {
   const minutes = Math.floor(remainingTime / 60).toString().padStart(2, '0');
   const seconds = (remainingTime % 60).toString().padStart(2, '0');
 
-  // Нормализуем selectedOptions, чтобы избежать экранирования
   const selectedOptions = answers[index] || [];
   const selectedOptionsString = JSON.stringify(selectedOptions).replace(/'/g, "\\'");
 
@@ -1029,7 +1028,7 @@ app.get('/result', checkAuth, async (req, res) => {
     let questionScore = 0;
     if (q.type === 'multiple' && userAnswer && Array.isArray(userAnswer)) {
       const correctAnswers = q.correctAnswers.map(val => String(val).trim().toLowerCase());
-      const userAnswers = userAnswer.map(val => String(val).trim().toLowerCase().replace(/\\'/g, "'")); // Убираем экранирование
+      const userAnswers = userAnswer.map(val => String(val).trim().toLowerCase().replace(/\\'/g, "'"));
       const isCorrect = correctAnswers.length === userAnswers.length &&
         correctAnswers.every(val => userAnswers.includes(val)) &&
         userAnswers.every(val => correctAnswers.includes(val));
@@ -1038,9 +1037,8 @@ app.get('/result', checkAuth, async (req, res) => {
         questionScore = q.points;
       }
     } else if (q.type === 'input' && userAnswer) {
-      // Нормализуем числовой ввод: заменяем запятую на точку
       const normalizedUserAnswer = String(userAnswer).trim().toLowerCase().replace(/\s+/g, '').replace(',', '.');
-      const normalizedCorrectAnswer = String(q.correctAnswers[0]).trim().toLowerCase().replace(/\s+/g, '');
+      const normalizedCorrectAnswer = String(q.correctAnswers[0]).trim().toLowerCase().replace(/\s+/g, '').replace(',', '.');
       const isCorrect = normalizedUserAnswer === normalizedCorrectAnswer;
       console.log(`Question ${index + 1} (input): userAnswer=${normalizedUserAnswer}, correctAnswer=${normalizedCorrectAnswer}, isCorrect=${isCorrect}`);
       if (isCorrect) {
@@ -1497,7 +1495,7 @@ app.get('/admin/results', checkAuth, checkAdmin, async (req, res) => {
       // Преобразуем r.answers из объекта в массив, чтобы индексы совпадали с scoresPerQuestion
       const answersArray = [];
       if (r.answers) {
-        Object.keys(r.answers).forEach(key => {
+        Object.keys(r.answers).sort((a, b) => parseInt(a) - parseInt(b)).forEach(key => {
           const idx = parseInt(key);
           answersArray[idx] = r.answers[key];
         });
@@ -1523,7 +1521,7 @@ app.get('/admin/results', checkAuth, checkAdmin, async (req, res) => {
         Math.round((r.suspiciousActivity.timeAway / (r.duration * 1000)) * 100) : 0;
       const switchCount = r.suspiciousActivity ? r.suspiciousActivity.switchCount || 0 : 0;
       const avgResponseTime = r.suspiciousActivity && r.suspiciousActivity.responseTimes ? 
-        (r.suspiciousActivity.responseTimes.reduce((sum, time) => sum + (time || 0), 0) / r.suspiciousActivity.responseTimes.length).toFixed(2) : 0;
+        (r.suspiciousActivity.responseTimes.reduce((sum, time) => sum + (time || 0), 0) / r.suspiciousActivity.responseTimes.length / 1000).toFixed(2) : 0;
       const avgActivityCount = r.suspiciousActivity && r.suspiciousActivity.activityCounts ? 
         (r.suspiciousActivity.activityCounts.reduce((sum, count) => sum + (count || 0), 0) / r.suspiciousActivity.activityCounts.length).toFixed(2) : 0;
       const activityDetails = `
