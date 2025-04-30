@@ -6,15 +6,20 @@
     <title>Авторизація</title>
     <style>
       body { font-family: Arial, sans-serif; text-align: center; padding: 50px; }
-      input[type="password"] { padding: 10px; font-size: 16px; width: 200px; }
+      input[type="password"], input[type="text"] { padding: 10px; font-size: 16px; width: 200px; }
       button { padding: 10px 20px; font-size: 16px; cursor: pointer; }
       .error { color: red; }
+      .show-password { margin-top: 10px; }
     </style>
   </head>
   <body>
     <h1>Введіть пароль</h1>
     <form id="loginForm">
-      <input type="password" id="password" name="password" placeholder="Пароль" required><br><br>
+      <input type="password" id="password" name="password" placeholder="Пароль" required><br>
+      <div class="show-password">
+        <input type="checkbox" id="showPassword" onchange="togglePassword()">
+        <label for="showPassword">Показати пароль</label>
+      </div><br>
       <button type="submit">Увійти</button>
     </form>
     <p id="error" class="error"></p>
@@ -43,6 +48,12 @@
           console.error('Login error:', error);
         }
       });
+
+      function togglePassword() {
+        const passwordField = document.getElementById('password');
+        const showPassword = document.getElementById('showPassword');
+        passwordField.type = showPassword.checked ? 'text' : 'password';
+      }
     </script>
   </body>
 </html>

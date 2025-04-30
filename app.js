@@ -344,6 +344,7 @@ app.get('/select-test', checkAuth, (req, res) => {
           .test-buttons { display: flex; flex-direction: column; align-items: center; }
           button { padding: 10px 20px; margin: 10px 0; font-size: 18px; cursor: pointer; width: 200px; }
           button:hover { background-color: #90ee90; }
+          #logout { background-color: #ef5350; color: white; }
         </style>
       </head>
       <body>
@@ -353,9 +354,27 @@ app.get('/select-test', checkAuth, (req, res) => {
             <button onclick="window.location.href='/test?test=${num}'">${data.name}</button>
           `).join('')}
         </div>
+        <button id="logout" onclick="logout()">Вийти</button>
+        <script>
+          async function logout() {
+            await fetch('/logout', { method: 'POST' });
+            window.location.href = '/';
+          }
+        </script>
       </body>
     </html>
   `);
+});
+
+// Добавим маршрут для выхода
+app.post('/logout', (req, res) => {
+  req.session.destroy(err => {
+    if (err) {
+      console.error('Error destroying session:', err);
+      return res.status(500).json({ success: false, message: 'Помилка при виході' });
+    }
+    res.json({ success: true });
+  });
 });
 
 const userTests = new Map();
@@ -368,7 +387,9 @@ const saveResult = async (user, testNumber, score, totalPoints, startTime, endTi
     console.log('User test data:', userTest);
     const answers = userTest ? userTest.answers : {};
     const questions = userTest ? userTest.questions : [];
+    const suspiciousActivity = userTest ? userTest.suspiciousActivity : { timeAway: 0, switchCount: 0 };
     console.log('Answers:', answers, 'Questions:', questions);
+    console.log('Suspicious activity:', suspiciousActivity);
 
     const scoresPerQuestion = questions.map((q, index) => {
       const userAnswer = answers[index];
@@ -408,7 +429,8 @@ const saveResult = async (user, testNumber, score, totalPoints, startTime, endTi
       endTime: new Date(endTime).toISOString(),
       duration,
       answers,
-      scoresPerQuestion
+      scoresPerQuestion,
+      suspiciousActivity // Сохраняем данные о подозрительной активности
     };
     console.log('Saving result to MongoDB:', result);
     if (!db) {
@@ -591,6 +613,10 @@ app.get('/test/question', checkAuth, (req, res) => {
           let startTime = ${startTime};
           let timeLimit = ${timeLimit};
           const timerElement = document.getElementById('timer');
+          let timeAway = 0;
+          let lastBlurTime = 0;
+          let switchCount = 0;
+
           function updateTimer() {
             const elapsedTime = Math.floor((Date.now() - startTime) / 1000);
             const remainingTime = Math.max(0, Math.floor(timeLimit / 1000) - elapsedTime);
@@ -603,6 +629,20 @@ app.get('/test/question', checkAuth, (req, res) => {
           }
           updateTimer();
           setInterval(updateTimer, 1000);
+
+          window.addEventListener('blur', () => {
+            lastBlurTime = Date.now();
+            switchCount++;
+            console.log('Tab blurred, switch count:', switchCount);
+          });
+
+          window.addEventListener('focus', () => {
+            if (lastBlurTime) {
+              const timeSpentAway = Date.now() - lastBlurTime;
+              timeAway += timeSpentAway;
+              console.log('Tab focused, time away:', timeAway);
+            }
+          });
 
           document.querySelectorAll('.option-box').forEach(box => {
             box.addEventListener('click', (e) => {
@@ -654,7 +694,7 @@ app.get('/test/question', checkAuth, (req, res) => {
             await fetch('/answer', {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ index, answer: answers })
+              body: JSON.stringify({ index, answer: answers, timeAway, switchCount })
             });
             hideConfirm();
             window.location.href = '/result';
@@ -688,14 +728,19 @@ app.get('/test/question', checkAuth, (req, res) => {
 app.post('/answer', checkAuth, (req, res) => {
   if (req.user === 'admin') return res.redirect('/admin');
   try {
-    const { index, answer } = req.body;
+    const { index, answer, timeAway, switchCount } = req.body;
     const userTest = userTests.get(req.user);
     if (!userTest) {
       console.warn(`Test not started for user ${req.user} in /answer`);
       return res.status(400).json({ error: 'Тест не розпочато' });
     }
     userTest.answers[index] = answer;
+    // Сохраняем данные о подозрительной активности
+    userTest.suspiciousActivity = userTest.suspiciousActivity || { timeAway: 0, switchCount: 0 };
+    userTest.suspiciousActivity.timeAway = (userTest.suspiciousActivity.timeAway || 0) + (timeAway || 0);
+    userTest.suspiciousActivity.switchCount = (userTest.suspiciousActivity.switchCount || 0) + (switchCount || 0);
     console.log(`Saved answer for user ${req.user}, question ${index}:`, answer);
+    console.log(`Updated suspicious activity for user ${req.user}:`, userTest.suspiciousActivity);
     res.json({ success: true });
   } catch (error) {
     console.error('Ошибка в /answer:', error.message, error.stack);
@@ -765,7 +810,7 @@ app.get('/result', checkAuth, async (req, res) => {
     imageBase64 = imageBuffer.toString('base64');
   } catch (error) {
     console.error('Error reading image A.png:', error.message, error.stack);
-    imageBase64 = ''; // Если файл отсутствует, используем пустую строку
+    imageBase64 = '';
   }
 
   const resultHtml = `
@@ -799,7 +844,6 @@ app.get('/result', checkAuth, async (req, res) => {
           <button id="restart">Вихід</button>
         </div>
         <script>
-          // Проверка загрузки pdfmake
           if (typeof pdfMake === 'undefined') {
             console.error('pdfMake is not loaded');
             document.getElementById('exportPDF').disabled = true;
@@ -824,25 +868,25 @@ app.get('/result', checkAuth, async (req, res) => {
                 content: [
                   imageBase64 ? {
                     image: 'data:image/png;base64,' + imageBase64,
-                    width: 150,
+                    width: 50, // Уменьшаем логотип в 3 раза
                     alignment: 'center',
                     margin: [0, 0, 0, 20]
-                  } : { text: 'Логотип відсутній', alignment: 'center', margin: [0, 0, 0, 20] },
+                  } : { text: 'Логотип відсутній', alignment: 'center', margin: [0, 0, 0, 20], lineHeight: 2 },
                   { text: 'Результат тесту користувача ' + user + ' з тесту ' + testName + ' складає ' + percentage + '%', style: 'header' },
-                  { text: 'Кількість питань: ' + totalQuestions },
-                  { text: 'Правильних відповідей: ' + correctClicks },
-                  { text: 'Набрано балів: ' + score },
-                  { text: 'Максимально можлива кількість балів: ' + totalPoints },
+                  { text: 'Кількість питань: ' + totalQuestions, lineHeight: 2 },
+                  { text: 'Правильних відповідей: ' + correctClicks, lineHeight: 2 },
+                  { text: 'Набрано балів: ' + score, lineHeight: 2 },
+                  { text: 'Максимально можлива кількість балів: ' + totalPoints, lineHeight: 2 },
                   {
                     columns: [
-                      { text: 'Час: ' + time, width: '50%' },
-                      { text: 'Дата: ' + date, width: '50%', alignment: 'right' }
+                      { text: 'Час: ' + time, width: '50%', lineHeight: 2 },
+                      { text: 'Дата: ' + date, width: '50%', alignment: 'right', lineHeight: 2 }
                     ],
                     margin: [0, 10, 0, 0]
                   }
                 ],
                 styles: {
-                  header: { fontSize: 14, bold: true, margin: [0, 0, 0, 10] }
+                  header: { fontSize: 14, bold: true, margin: [0, 0, 0, 10], lineHeight: 2 }
                 }
               };
               pdfMake.createPdf(docDefinition).download('result.pdf');
@@ -1090,10 +1134,12 @@ app.get('/admin/results', checkAuth, checkAdmin, async (req, res) => {
           .error { color: red; }
           .answers { white-space: pre-wrap; max-width: 300px; overflow-wrap: break-word; line-height: 1.8; }
           .delete-btn { background-color: #ff4d4d; color: white; padding: 5px 10px; border: none; cursor: pointer; }
+          .nav-btn { padding: 10px 20px; margin: 10px 0; cursor: pointer; }
         </style>
       </head>
       <body>
         <h1>Результати всіх користувачів</h1>
+        <button class="nav-btn" onclick="window.location.href='/admin'">Повернутися до адмін-панелі</button>
   `;
   if (errorMessage) {
     adminHtml += `<p class="error">${errorMessage}</p>`;
@@ -1108,12 +1154,13 @@ app.get('/admin/results', checkAuth, checkAdmin, async (req, res) => {
             <th>Початок</th>
             <th>Кінець</th>
             <th>Тривалість (сек)</th>
+            <th>Підозріла активність (%)</th>
             <th>Відповіді та бали</th>
             <th>Дія</th>
           </tr>
   `;
   if (!results || results.length === 0) {
-    adminHtml += '<tr><td colspan="9">Немає результатів</td></tr>';
+    adminHtml += '<tr><td colspan="10">Немає результатів</td></tr>';
     console.log('No results found in test_results');
   } else {
     results.forEach((r, index) => {
@@ -1127,6 +1174,9 @@ app.get('/admin/results', checkAuth, checkAdmin, async (req, res) => {
         const date = new Date(isoString);
         return `${date.toLocaleTimeString('uk-UA', { hour12: false })} ${date.toLocaleDateString('uk-UA')}`;
       };
+      // Рассчитываем процент подозрительной активности
+      const suspiciousActivityPercent = r.suspiciousActivity ? 
+        Math.round((r.suspiciousActivity.timeAway / (r.duration * 1000)) * 100) : 0;
       adminHtml += `
         <tr>
           <td>${r.user || 'N/A'}</td>
@@ -1136,6 +1186,7 @@ app.get('/admin/results', checkAuth, checkAdmin, async (req, res) => {
           <td>${formatDateTime(r.startTime)}</td>
           <td>${formatDateTime(r.endTime)}</td>
           <td>${r.duration || 'N/A'}</td>
+          <td>${suspiciousActivityPercent}%</td>
           <td class="answers">${answersDisplay}</td>
           <td><button class="delete-btn" onclick="deleteResult('${r._id}')">🗑️ Видалити</button></td>
         </tr>
@@ -1144,7 +1195,7 @@ app.get('/admin/results', checkAuth, checkAdmin, async (req, res) => {
   }
   adminHtml += `
         </table>
-        <button onclick="window.location.href='/admin'">Повернутися до адмін-панелі</button>
+        <button class="nav-btn" onclick="window.location.href='/admin'">Повернутися до адмін-панелі</button>
         <script>
           async function deleteResult(id) {
             if (confirm('Ви впевнені, що хочете видалити цей результат?')) {
