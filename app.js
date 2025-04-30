@@ -261,12 +261,15 @@ app.get('/', (req, res) => {
 const logActivity = async (user, action) => {
   try {
     const timestamp = new Date();
+    // Добавляем смещение +3 часа (UTC+3)
+    const timeOffset = 3 * 60 * 60 * 1000; // 3 часа в миллисекундах
+    const adjustedTimestamp = new Date(timestamp.getTime() + timeOffset);
     await db.collection('activity_log').insertOne({
       user,
       action,
-      timestamp: timestamp.toISOString()
+      timestamp: adjustedTimestamp.toISOString()
     });
-    console.log(`Logged activity: ${user} - ${action} at ${timestamp}`);
+    console.log(`Logged activity: ${user} - ${action} at ${adjustedTimestamp}`);
   } catch (error) {
     console.error('Error logging activity:', error.message, error.stack);
   }
@@ -1488,7 +1491,7 @@ app.get('/admin/results', checkAuth, checkAdmin, async (req, res) => {
       const answersDisplay = r.answers 
         ? Object.entries(r.answers).map(([q, a], i) => {
             const userAnswer = Array.isArray(a) ? a.join(', ') : a;
-            const questionScore = r.scoresPerQuestion[i] || 0;
+            const questionScore = r.scoresPerQuestion[i] || 0; // Используем сохранённые баллы
             console.log(`Result ${index + 1}, Question ${parseInt(q) + 1}: userAnswer=${userAnswer}, score=${questionScore}`);
             return `Питання ${parseInt(q) + 1}: ${userAnswer.replace(/\\'/g, "'")} (${questionScore} балів)`;
           }).join('\n')
@@ -1496,9 +1499,7 @@ app.get('/admin/results', checkAuth, checkAdmin, async (req, res) => {
       const formatDateTime = (isoString) => {
         if (!isoString) return 'N/A';
         const date = new Date(isoString);
-        // Добавляем смещение +3 часа
-        const adjustedDate = new Date(date.getTime());
-        return `${adjustedDate.toLocaleTimeString('uk-UA', { hour12: false })} ${adjustedDate.toLocaleDateString('uk-UA')}`;
+        return `${date.toLocaleTimeString('uk-UA', { hour12: false })} ${date.toLocaleDateString('uk-UA')}`;
       };
       const suspiciousActivityPercent = r.suspiciousActivity && r.suspiciousActivity.suspiciousScore ? 
         Math.round(r.suspiciousActivity.suspiciousScore) : 0;
@@ -1821,10 +1822,8 @@ app.get('/admin/activity-log', checkAuth, checkAdmin, async (req, res) => {
   } else {
     activities.forEach(activity => {
       const timestamp = new Date(activity.timestamp);
-      // Добавляем смещение +3 часа
-      const adjustedTimestamp = new Date(timestamp.getTime());
-      const formattedTime = adjustedTimestamp.toLocaleTimeString('uk-UA', { hour12: false });
-      const formattedDate = adjustedTimestamp.toLocaleDateString('uk-UA');
+      const formattedTime = timestamp.toLocaleTimeString('uk-UA', { hour12: false });
+      const formattedDate = timestamp.toLocaleDateString('uk-UA');
       adminHtml += `
         <tr>
           <td>${activity.user || 'N/A'}</td>
