@@ -641,12 +641,33 @@ app.get('/test/question', checkAuth, (req, res) => {
             margin-right: auto; 
             box-sizing: border-box; 
           }
-          .progress-circle { width: 40px; height: 40px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 14px; }
+          .progress-circle { 
+            width: 40px; 
+            height: 40px; 
+            border-radius: 50%; 
+            display: flex; 
+            align-items: center; 
+            justify-content: center; 
+            font-size: 14px; 
+            flex-shrink: 0; 
+          }
           .progress-circle.unanswered { background-color: red; color: white; }
           .progress-circle.answered { background-color: green; color: white; }
-          .progress-line { width: 5px; height: 2px; background-color: #ccc; margin: 0 2px; align-self: center; }
+          .progress-line { 
+            width: 5px; 
+            height: 2px; 
+            background-color: #ccc; 
+            margin: 0 2px; 
+            align-self: center; 
+            flex-shrink: 0; 
+          }
           .progress-line.answered { background-color: green; }
-          .progress-row { display: flex; align-items: center; justify-content: space-between; }
+          .progress-row { 
+            display: flex; 
+            align-items: center; 
+            justify-content: space-between; 
+            gap: 5px; 
+          }
           .option-box { border: 2px solid #ccc; padding: 10px; margin: 5px 0; border-radius: 5px; cursor: pointer; font-size: 16px; user-select: none; }
           .option-box.selected { background-color: #90ee90; }
           .button-container { position: fixed; bottom: 20px; left: 20px; right: 20px; display: flex; justify-content: space-between; }
