@@ -435,6 +435,17 @@ app.get('/select-test', checkAuth, (req, res) => {
 
 // Добавим маршрут для выхода
 app.post('/logout', (req, res) => {
+  const user = req.session.user;
+  const userTest = userTests.get(user);
+  if (userTest) {
+    // Якщо є незавершений тест, логуємо це
+    logActivity(user, `завершив сесію не закінчивши тест`);
+    userTests.delete(user); // Видаляємо незавершений тест
+  } else {
+    // Якщо тесту немає, просто логуємо вихід
+    logActivity(user, `завершив сесію`);
+  }
+
   req.session.destroy(err => {
     if (err) {
       console.error('Error destroying session:', err);
@@ -610,6 +621,8 @@ app.get('/test', checkAuth, async (req, res) => {
       startTime: Date.now(),
       timeLimit: testNames[testNumber].timeLimit * 1000
     });
+    // Логування початку тесту
+    await logActivity(req.user, `розпочав тест ${testNames[testNumber].name}`);
     console.log(`Redirecting to first question for user ${req.user}`);
     res.redirect(`/test/question?index=0`);
   } catch (error) {
@@ -1073,6 +1086,8 @@ app.get('/result', checkAuth, async (req, res) => {
 
   try {
     await saveResult(req.user, testNumber, score, totalPoints, startTime, endTime, totalClicks, correctClicks, totalQuestions, percentage);
+    // Логування завершення тесту з результатом
+    await logActivity(req.user, `завершив тест ${testNames[testNumber].name} з результатом ${score} балів`);
   } catch (error) {
     console.error('Error saving result in /result:', error.message, error.stack);
     return res.status(500).send('Помилка при збереженні результату');
