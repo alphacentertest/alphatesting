@@ -258,18 +258,24 @@ app.get('/', (req, res) => {
 });
 
 // Функция для логирования действий
-const logActivity = async (user, action) => {
+const logActivity = async (req, user, action) => {
   try {
     const timestamp = new Date();
     // Добавляем смещение +3 часа (UTC+3)
     const timeOffset = 3 * 60 * 60 * 1000; // 3 часа в миллисекундах
     const adjustedTimestamp = new Date(timestamp.getTime() + timeOffset);
+    // Отримуємо IP-адресу
+    const ipAddress = req.headers['x-forwarded-for'] || req.ip || 'N/A';
+    // Отримуємо ідентифікатор сесії
+    const sessionId = req.sessionID || 'N/A';
     await db.collection('activity_log').insertOne({
       user,
       action,
+      ipAddress,  // Додаємо IP-адресу
+      sessionId,  // Додаємо ідентифікатор сесії
       timestamp: adjustedTimestamp.toISOString()
     });
-    console.log(`Logged activity: ${user} - ${action} at ${adjustedTimestamp}`);
+    console.log(`Logged activity: ${user} - ${action} at ${adjustedTimestamp}, IP: ${ipAddress}, SessionID: ${sessionId}`);
   } catch (error) {
     console.error('Error logging activity:', error.message, error.stack);
   }
@@ -300,7 +306,7 @@ app.post('/login', async (req, res) => {
     }
 
     req.session.user = user;
-    await logActivity(user, 'увійшов на сайт'); // Ждём завершения логирования
+    await logActivity(req, user, 'увійшов на сайт'); // Передаємо req
     console.log('Session after setting user:', req.session);
     console.log('Session ID after setting user:', req.sessionID);
     console.log('Cookies after setting session:', req.cookies);
@@ -439,11 +445,11 @@ app.post('/logout', (req, res) => {
   const userTest = userTests.get(user);
   if (userTest) {
     // Якщо є незавершений тест, логуємо це
-    logActivity(user, `завершив сесію не закінчивши тест`);
+    logActivity(req, user, `завершив сесію не закінчивши тест`); // Передаємо req
     userTests.delete(user); // Видаляємо незавершений тест
   } else {
     // Якщо тесту немає, просто логуємо вихід
-    logActivity(user, `завершив сесію`);
+    logActivity(req, user, `завершив сесію`); // Передаємо req
   }
 
   req.session.destroy(err => {
@@ -622,7 +628,7 @@ app.get('/test', checkAuth, async (req, res) => {
       timeLimit: testNames[testNumber].timeLimit * 1000
     });
     // Логування початку тесту
-    await logActivity(req.user, `розпочав тест ${testNames[testNumber].name}`);
+    await logActivity(req, req.user, `розпочав тест ${testNames[testNumber].name}`); // Передаємо req
     console.log(`Redirecting to first question for user ${req.user}`);
     res.redirect(`/test/question?index=0`);
   } catch (error) {
@@ -1087,7 +1093,7 @@ app.get('/result', checkAuth, async (req, res) => {
   try {
     await saveResult(req.user, testNumber, score, totalPoints, startTime, endTime, totalClicks, correctClicks, totalQuestions, percentage);
     // Логування завершення тесту з результатом
-    await logActivity(req.user, `завершив тест ${testNames[testNumber].name} з результатом ${score} балів`);
+    await logActivity(req, req.user, `завершив тест ${testNames[testNumber].name} з результатом ${score} балів`); // Передаємо req
   } catch (error) {
     console.error('Error saving result in /result:', error.message, error.stack);
     return res.status(500).send('Помилка при збереженні результату');
@@ -1848,12 +1854,14 @@ app.get('/admin/activity-log', checkAuth, checkAdmin, async (req, res) => {
           <tr>
             <th>Користувач</th>
             <th>Дія</th>
+            <th>IP-адреса</th>
+            <th>Ідентифікатор сесії</th>
             <th>Час</th>
             <th>Дата</th>
           </tr>
   `;
   if (!activities || activities.length === 0) {
-    adminHtml += '<tr><td colspan="4">Немає записів</td></tr>';
+    adminHtml += '<tr><td colspan="6">Немає записів</td></tr>';
     console.log('No activities found in activity_log');
   } else {
     activities.forEach(activity => {
@@ -1864,6 +1872,8 @@ app.get('/admin/activity-log', checkAuth, checkAdmin, async (req, res) => {
         <tr>
           <td>${activity.user || 'N/A'}</td>
           <td>${activity.action || 'N/A'}</td>
+          <td>${activity.ipAddress || 'N/A'}</td>
+          <td>${activity.sessionId || 'N/A'}</td>
           <td>${formattedTime}</td>
           <td>${formattedDate}</td>
         </tr>
