@@ -22,6 +22,9 @@ const connectToMongoDB = async (attempt = 1, maxAttempts = 3) => {
     console.log('Connected to MongoDB successfully');
     db = client.db('testdb');
     console.log('Database initialized:', db.databaseName);
+    // Перевіряємо, чи MongoStore готовий
+    await sessionStore.ready;
+    console.log('MongoStore is ready');
   } catch (error) {
     console.error('Failed to connect to MongoDB:', error.message, error.stack);
     if (attempt < maxAttempts) {
@@ -46,47 +49,23 @@ app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
 app.use(cookieParser());
 
+// Створюємо окремий екземпляр MongoStore
+const sessionStore = MongoStore.create({
+  mongoUrl: MONGO_URL,
+  collectionName: 'sessions',
+  ttl: 24 * 60 * 60,
+  clientPromise: client.connect().then(() => {
+    console.log('MongoStore client connected successfully');
+    return client;
+  }).catch(err => {
+    console.error('MongoStore client connection error:', err.message, err.stack);
+    throw err;
+  })
+});
+
 // Налаштування сесій із MongoStore
 app.use(session({
-  store: MongoStore.create({ 
-    mongoUrl: MONGO_URL,
-    collectionName: 'sessions',
-    ttl: 24 * 60 * 60,
-    clientPromise: client.connect().then(() => {
-      console.log('MongoStore client connected successfully');
-      return client;
-    }).catch(err => {
-      console.error('MongoStore client connection error:', err.message, err.stack);
-      throw err;
-    }),
-    // Додаємо дебаг-логування
-    onError: (err) => {
-      console.error('MongoStore error:', err.message, err.stack);
-    },
-    // Логуємо успішне збереження сесії
-    set: (sid, session, callback) => {
-      console.log(`MongoStore: Saving session ${sid} with data:`, session);
-      MongoStore.create({ mongoUrl: MONGO_URL }).set(sid, session, (err) => {
-        if (err) {
-          console.error(`MongoStore: Failed to save session ${sid}:`, err.message);
-        } else {
-          console.log(`MongoStore: Session ${sid} saved successfully`);
-        }
-        callback(err);
-      });
-    },
-    get: (sid, callback) => {
-      console.log(`MongoStore: Retrieving session ${sid}`);
-      MongoStore.create({ mongoUrl: MONGO_URL }).get(sid, (err, session) => {
-        if (err) {
-          console.error(`MongoStore: Failed to retrieve session ${sid}:`, err.message);
-        } else {
-          console.log(`MongoStore: Session ${sid} retrieved:`, session);
-        }
-        callback(err, session);
-      });
-    }
-  }),
+  store: sessionStore,
   secret: process.env.SESSION_SECRET || 'a1b2c3d4e5f6g7h8i9j0k1l2m3n4o5p6q7r8s9t0',
   resave: false,
   saveUninitialized: false,
@@ -97,6 +76,24 @@ app.use(session({
     maxAge: 24 * 60 * 60 * 1000
   }
 }));
+
+// Додаємо middleware для дебаг-логування сесій
+app.use((req, res, next) => {
+  console.log(`Session ID: ${req.sessionID}, Session data before request:`, req.session);
+  const originalSave = req.session.save;
+  req.session.save = function (callback) {
+    console.log(`Saving session ${req.sessionID} with data:`, req.session);
+    originalSave.call(this, (err) => {
+      if (err) {
+        console.error(`Failed to save session ${req.sessionID}:`, err.message);
+      } else {
+        console.log(`Session ${req.sessionID} saved successfully`);
+      }
+      callback(err);
+    });
+  };
+  next();
+});
 
 const loadUsers = async () => {
   try {
@@ -298,8 +295,8 @@ const logActivity = async (req, user, action) => {
     await db.collection('activity_log').insertOne({
       user,
       action,
-      ipAddress,  // Додаємо IP-адресу
-      sessionId,  // Додаємо ідентифікатор сесії
+      ipAddress,
+      sessionId,
       timestamp: adjustedTimestamp.toISOString()
     });
     console.log(`Logged activity: ${user} - ${action} at ${adjustedTimestamp}, IP: ${ipAddress}, SessionID: ${sessionId}`);
@@ -367,6 +364,7 @@ const checkAuth = (req, res, next) => {
   console.log('checkAuth: Session data:', req.session);
   console.log('checkAuth: Cookies:', req.cookies);
   console.log('checkAuth: Session ID:', req.sessionID);
+  console.log('checkAuth: Cookie connect.sid:', req.cookies['connect.sid']);
   const user = req.session.user;
   console.log('checkAuth: user from session:', user);
   if (!user) {
