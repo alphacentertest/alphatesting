@@ -1,10 +1,19 @@
 const request = require('supertest');
 const app = require('./app');
+const { MongoClient } = require('mongodb');
+
+const MONGO_URL = process.env.MONGO_URL || 'mongodb+srv://romanhaleckij7:DNMaH9w2X4gel3Xc@cluster0.r93r1p8.mongodb.net/testdb?retryWrites=true&w=majority';
+const client = new MongoClient(MONGO_URL);
 
 // Налаштування перед тестами
 beforeAll(async () => {
   // Переконайтеся, що сервер ініціалізовано перед тестами
-  await new Promise(resolve => setTimeout(resolve, 5000));
+  await new Promise(resolve => setTimeout(resolve, 15000));
+}, 15000);
+
+// Закриваємо з’єднання після тестів
+afterAll(async () => {
+  await client.close();
 });
 
 // Тести для маршруту /api/test

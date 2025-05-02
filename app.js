@@ -1229,7 +1229,11 @@ app.get('/results', checkAuth, async (req, res) => {
           questionScore = q.points;
         }
       } else if (q.type === 'input' && userAnswer) {
-        if (String(userAnswer).trim().toLowerCase() === String(q.correctAnswers[0]).trim().toLowerCase()) {
+        const normalizedUserAnswer = String(userAnswer).trim().toLowerCase().replace(/\s+/g, '').replace(',', '.');
+        const normalizedCorrectAnswer = String(q.correctAnswers[0]).trim().toLowerCase().replace(/\s+/g, '').replace(',', '.');
+        const isCorrect = normalizedUserAnswer === normalizedCorrectAnswer;
+        console.log(`Question ${index + 1} (input): userAnswer=${normalizedUserAnswer}, correctAnswer=${normalizedCorrectAnswer}, isCorrect=${isCorrect}`);
+        if (isCorrect) {
           questionScore = q.points;
         }
       } else if (q.type === 'ordering' && userAnswer && Array.isArray(userAnswer)) {
