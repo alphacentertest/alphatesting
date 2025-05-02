@@ -40,6 +40,8 @@ const connectToMongoDB = async (attempt = 1, maxAttempts = 3) => {
   }
 };
 
+app.set('trust proxy', 1);
+
 // Ініціалізація сервера
 let isInitialized = false;
 let initializationError = null;
@@ -81,7 +83,7 @@ app.use(session({
   resave: false,
   saveUninitialized: false,
   cookie: { 
-    secure: true, // Для продакшену
+    secure: process.env.NODE_ENV === 'production', // true на Heroku
     httpOnly: true,
     sameSite: 'lax',
     maxAge: 24 * 60 * 60 * 1000
@@ -312,33 +314,54 @@ app.get('/api/test', (req, res) => {
 
 // Головна сторінка (форма входу)
 app.get('/', (req, res) => {
-  console.log('Serving login page');
-  console.log('CSRF Token in session:', req.session.csrfToken);
-  console.log('CSRF Token in res.locals:', res.locals.csrfToken);
-  if (!req.session.csrfToken) {
-    req.session.csrfToken = generateCsrfToken();
-    res.locals.csrfToken = req.session.csrfToken;
-  }
   res.send(`
     <!DOCTYPE html>
     <html lang="uk">
       <head>
         <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
         <title>Вхід</title>
         <style>
-          body { font-family: Arial, sans-serif; text-align: center; padding: 50px; }
-          input, button { padding: 10px; margin: 10px; font-size: 16px; }
-          button { cursor: pointer; background-color: #4CAF50; color: white; border: none; border-radius: 5px; }
+          body { font-family: Arial, sans-serif; text-align: center; padding: 20px; }
+          h1 { font-size: 24px; margin-bottom: 20px; }
+          input { padding: 10px; font-size: 18px; width: 200px; margin-bottom: 10px; }
+          button { padding: 10px 20px; font-size: 18px; cursor: pointer; background-color: #4CAF50; color: white; border: none; border-radius: 5px; }
           button:hover { background-color: #45a049; }
+          @media (max-width: 600px) {
+            h1 { font-size: 20px; }
+            input, button { font-size: 16px; width: 90%; padding: 8px; }
+          }
         </style>
       </head>
       <body>
-        <h1>Вхід</h1>
-        <form method="POST" action="/login">
-          <input type="hidden" name="_csrf" value="${res.locals.csrfToken || 'undefined'}">
-          <input type="password" name="password" placeholder="Введіть пароль">
-          <button type="submit">Увійти</button>
-        </form>
+        <h1>Введіть пароль для входу</h1>
+        <input type="password" id="password" placeholder="Пароль">
+        <br>
+        <input type="hidden" id="csrfToken" value="${res.locals.csrfToken || 'undefined'}">
+        <button onclick="login()">Увійти</button>
+
+        <script>
+          async function login() {
+            const password = document.getElementById('password').value;
+            const csrfToken = document.getElementById('csrfToken').value;
+            console.log('CSRF Token being sent:', csrfToken);
+            const response = await fetch('/login', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ password, _csrf: csrfToken })
+            });
+            const result = await response.json();
+            if (result.success) {
+              window.location.href = result.redirect;
+            } else {
+              alert('Помилка: ' + result.message);
+            }
+          }
+
+          document.getElementById('password').addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') login();
+          });
+        </script>
       </body>
     </html>
   `);
