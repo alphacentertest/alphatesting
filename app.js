@@ -15,6 +15,9 @@ const { body, validationResult } = require('express-validator');
 // Ініціалізація додатка
 const app = express();
 
+// Налаштування trust proxy для Heroku
+app.set('trust proxy', 1);
+
 // Налаштування шаблонізатора
 app.set('view engine', 'ejs');
 app.set('views', path.join(__dirname, 'public'));
@@ -98,9 +101,9 @@ app.use(session({
   resave: false,
   saveUninitialized: false,
   cookie: { 
-    secure: process.env.NODE_ENV === 'production', // Увімкнути secure лише у продакшені
+    secure: process.env.NODE_ENV === 'production',
     httpOnly: true,
-    sameSite: 'lax',
+    sameSite: process.env.NODE_ENV === 'production' ? 'none' : 'lax',
     maxAge: 24 * 60 * 60 * 1000
   }
 }));
@@ -390,13 +393,9 @@ app.post('/login', checkCsrfToken, validateLogin, (req, res) => {
   console.log('Handling /login request...');
   console.log('Request body:', req.body);
   console.log('Session CSRF token:', req.session.csrfToken);
+  console.log('Session ID:', req.sessionID);
+  console.log('Cookies:', req.cookies);
   
-  // Перевірка валідації введення
-  const errors = validationResult(req);
-  if (!errors.isEmpty()) {
-    return res.status(400).json({ success: false, message: errors.array()[0].msg });
-  }
-
   const { password } = req.body;
 
   return loadUsers()
