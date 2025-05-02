@@ -5,12 +5,12 @@ const path = require('path');
 const ExcelJS = require('exceljs');
 const session = require('express-session');
 const MongoStore = require('connect-mongo');
-const { MongoClient, ObjectId } = require('mongodb'); // Импортируем ObjectId
+const { MongoClient, ObjectId } = require('mongodb');
 const fs = require('fs');
 
 const app = express();
 
-// Подключение к MongoDB с повторными попытками
+// Підключення до MongoDB з повторними спробами
 const MONGO_URL = process.env.MONGO_URL || 'mongodb+srv://romanhaleckij7:DNMaH9w2X4gel3Xc@cluster0.r93r1p8.mongodb.net/testdb?retryWrites=true&w=majority';
 const client = new MongoClient(MONGO_URL, { connectTimeoutMS: 5000, serverSelectionTimeoutMS: 5000 });
 let db;
@@ -46,7 +46,7 @@ app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
 app.use(cookieParser());
 
-// Используем MongoStore для сессий
+// Налаштування сесій із MongoStore
 app.use(session({
   store: MongoStore.create({ 
     mongoUrl: MONGO_URL,
@@ -58,7 +58,11 @@ app.use(session({
     }).catch(err => {
       console.error('MongoStore client connection error:', err.message, err.stack);
       throw err;
-    })
+    }),
+    // Додаємо логування для дебагінгу
+    onError: (err) => {
+      console.error('MongoStore error:', err.message, err.stack);
+    }
   }),
   secret: process.env.SESSION_SECRET || 'a1b2c3d4e5f6g7h8i9j0k1l2m3n4o5p6q7r8s9t0',
   resave: false,
@@ -190,7 +194,7 @@ const initializeServer = async () => {
   let attempt = 1;
   const maxAttempts = 5;
 
-  // Инициализация MongoDB
+  // Ініціалізація MongoDB
   try {
     await connectToMongoDB();
   } catch (error) {
@@ -230,7 +234,7 @@ const initializeServer = async () => {
   }
 })();
 
-// Тестовый маршрут для проверки MongoDB
+// Тестовий маршрут для перевірки MongoDB
 app.get('/test-mongo', async (req, res) => {
   try {
     console.log('Testing MongoDB connection...');
@@ -246,7 +250,7 @@ app.get('/test-mongo', async (req, res) => {
   }
 });
 
-// Тестовый маршрут с префиксом /api
+// Тестовий маршрут з префіксом /api
 app.get('/api/test', (req, res) => {
   console.log('Handling /api/test request...');
   res.json({ success: true, message: 'Express server is working on /api/test' });
@@ -257,7 +261,7 @@ app.get('/', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
 
-// Функция для логирования действий
+// Функція для логування дій
 const logActivity = async (req, user, action) => {
   try {
     const timestamp = new Date();
@@ -306,7 +310,7 @@ app.post('/login', async (req, res) => {
     }
 
     req.session.user = user;
-    await logActivity(req, user, 'увійшов на сайт'); // Переконаємося, що подія логуватиметься
+    await logActivity(req, user, 'увійшов на сайт');
     console.log('Session after setting user:', req.session);
     console.log('Session ID after setting user:', req.sessionID);
     console.log('Cookies after setting session:', req.cookies);
@@ -430,7 +434,10 @@ app.get('/select-test', checkAuth, (req, res) => {
         <button id="logout" onclick="logout()">Вийти</button>
         <script>
           async function logout() {
-            await fetch('/logout', { method: 'POST' });
+            await fetch('/logout', { 
+              method: 'POST',
+              credentials: 'same-origin'
+            });
             window.location.href = '/';
           }
 
@@ -439,7 +446,8 @@ app.get('/select-test', checkAuth, (req, res) => {
             try {
               await fetch('/logout', { 
                 method: 'POST',
-                keepalive: true // Дозволяє відправити запит навіть при закритті сторінки
+                keepalive: true,
+                credentials: 'same-origin'
               });
             } catch (error) {
               console.error('Error during unload logout:', error);
@@ -451,7 +459,7 @@ app.get('/select-test', checkAuth, (req, res) => {
   `);
 });
 
-// Добавим маршрут для выхода
+// Маршрут для виходу з системи
 app.post('/logout', (req, res) => {
   const user = req.session.user;
   const userTest = userTests.get(user);
@@ -591,7 +599,7 @@ const saveResult = async (user, testNumber, score, totalPoints, startTime, endTi
       startTime: adjustedStartTime.toISOString(),
       endTime: adjustedEndTime.toISOString(),
       duration,
-      answers: Object.fromEntries(Object.entries(answers).sort((a, b) => parseInt(a[0]) - parseInt(b[0]))), // Сортируем ключи
+      answers: Object.fromEntries(Object.entries(answers).sort((a, b) => parseInt(a[0]) - parseInt(b[0]))),
       scoresPerQuestion: scoresPerQuestion.map((score, idx) => {
         console.log(`Saving score for question ${idx + 1}: ${score}`);
         return score;
@@ -599,7 +607,7 @@ const saveResult = async (user, testNumber, score, totalPoints, startTime, endTi
       suspiciousActivity: {
         ...suspiciousActivity,
         suspiciousScore,
-        responseTimes: responseTimes.map(time => Math.min(time, 5 * 60 * 1000)) // Ограничиваем время ответа 5 минутами
+        responseTimes: responseTimes.map(time => Math.min(time, 5 * 60 * 1000))
       }
     };
     console.log('Saving result to MongoDB:', result);
@@ -949,13 +957,14 @@ app.get('/test/question', checkAuth, (req, res) => {
               const response = await fetch('/answer', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ index, answer: answers, timeAway, switchCount, responseTime, activityCount })
+                body: JSON.stringify({ index, answer: answers, timeAway, switchCount, responseTime, activityCount }),
+                credentials: 'same-origin'
               });
               console.log('Response status:', response.status);
               if (response.status === 302 || response.redirected) {
-                 console.warn('Session expired, redirecting to login');
-                 window.location.href = '/';
-                 return;
+                console.warn('Session expired, redirecting to login');
+                window.location.href = '/';
+                return;
               }
               const result = await response.json();
               console.log('Response result:', result);
@@ -997,13 +1006,14 @@ app.get('/test/question', checkAuth, (req, res) => {
               const response = await fetch('/answer', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ index, answer: answers, timeAway, switchCount, responseTime, activityCount })
+                body: JSON.stringify({ index, answer: answers, timeAway, switchCount, responseTime, activityCount }),
+                credentials: 'same-origin'
               });
               console.log('Response status:', response.status);
               if (response.status === 302 || response.redirected) {
-                 console.warn('Session expired, redirecting to login');
-                 window.location.href = '/';
-                 return;
+                console.warn('Session expired, redirecting to login');
+                window.location.href = '/';
+                return;
               }
               const result = await response.json();
               console.log('Response result:', result);
@@ -1045,7 +1055,8 @@ app.get('/test/question', checkAuth, (req, res) => {
             try {
               await fetch('/logout', { 
                 method: 'POST',
-                keepalive: true // Дозволяє відправити запит навіть при закритті сторінки
+                keepalive: true,
+                credentials: 'same-origin'
               });
             } catch (error) {
               console.error('Error during unload logout:', error);
@@ -1250,7 +1261,8 @@ app.get('/result', checkAuth, async (req, res) => {
             try {
               await fetch('/logout', { 
                 method: 'POST',
-                keepalive: true // Дозволяє відправити запит навіть при закритті сторінки
+                keepalive: true,
+                credentials: 'same-origin'
               });
             } catch (error) {
               console.error('Error during unload logout:', error);
@@ -1514,7 +1526,10 @@ app.get('/admin', checkAuth, checkAdmin, (req, res) => {
         <button id="logout" onclick="logout()">Вийти</button>
         <script>
           async function logout() {
-            await fetch('/logout', { method: 'POST' });
+            await fetch('/logout', { 
+              method: 'POST',
+              credentials: 'same-origin'
+            });
             window.location.href = '/';
           }
         </script>
@@ -1645,7 +1660,8 @@ app.get('/admin/results', checkAuth, checkAdmin, async (req, res) => {
                 const response = await fetch('/admin/delete-result', {
                   method: 'POST',
                   headers: { 'Content-Type': 'application/json' },
-                  body: JSON.stringify({ id })
+                  body: JSON.stringify({ id }),
+                  credentials: 'same-origin'
                 });
                 const result = await response.json();
                 if (result.success) {
@@ -1742,7 +1758,8 @@ app.get('/admin/edit-tests', checkAuth, checkAdmin, (req, res) => {
               await fetch('/admin/delete-test', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ testNumber })
+                body: JSON.stringify({ testNumber }),
+                credentials: 'same-origin'
               });
               window.location.reload();
             }
@@ -1949,7 +1966,8 @@ app.get('/admin/activity-log', checkAuth, checkAdmin, async (req, res) => {
               try {
                 const response = await fetch('/admin/delete-activity-log', {
                   method: 'POST',
-                  headers: { 'Content-Type': 'application/json' }
+                  headers: { 'Content-Type': 'application/json' },
+                  credentials: 'same-origin'
                 });
                 const result = await response.json();
                 if (result.success) {
