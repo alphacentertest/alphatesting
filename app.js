@@ -306,7 +306,7 @@ app.post('/login', async (req, res) => {
     }
 
     req.session.user = user;
-    await logActivity(user, 'увійшов на сайт'); // Ждём завершения логирования
+    await logActivity(req, user, 'увійшов на сайт'); // Переконаємося, що подія логуватиметься
     console.log('Session after setting user:', req.session);
     console.log('Session ID after setting user:', req.sessionID);
     console.log('Cookies after setting session:', req.cookies);
@@ -433,6 +433,18 @@ app.get('/select-test', checkAuth, (req, res) => {
             await fetch('/logout', { method: 'POST' });
             window.location.href = '/';
           }
+
+          // Логування при закритті вкладки
+          window.addEventListener('unload', async () => {
+            try {
+              await fetch('/logout', { 
+                method: 'POST',
+                keepalive: true // Дозволяє відправити запит навіть при закритті сторінки
+              });
+            } catch (error) {
+              console.error('Error during unload logout:', error);
+            }
+          });
         </script>
       </body>
     </html>
@@ -441,6 +453,15 @@ app.get('/select-test', checkAuth, (req, res) => {
 
 // Добавим маршрут для выхода
 app.post('/logout', (req, res) => {
+  const user = req.session.user;
+  const userTest = userTests.get(user);
+  if (userTest) {
+    logActivity(req, user, `покинув сайт не завершивши тест ${testNames[userTest.testNumber].name}`);
+    userTests.delete(user);
+  } else {
+    logActivity(req, user, `покинув сайт`);
+  }
+
   req.session.destroy(err => {
     if (err) {
       console.error('Error destroying session:', err);
@@ -994,6 +1015,18 @@ app.get('/test/question', checkAuth, (req, res) => {
           } else {
             console.log('Sortable options not found');
           }
+
+          // Логування при закритті вкладки
+          window.addEventListener('unload', async () => {
+            try {
+              await fetch('/logout', { 
+                method: 'POST',
+                keepalive: true // Дозволяє відправити запит навіть при закритті сторінки
+              });
+            } catch (error) {
+              console.error('Error during unload logout:', error);
+            }
+          });
         </script>
       </body>
     </html>
@@ -1186,6 +1219,18 @@ app.get('/result', checkAuth, async (req, res) => {
           document.getElementById('restart').addEventListener('click', () => {
             console.log('Restart button clicked');
             window.location.href = '/select-test';
+          });
+
+          // Логування при закритті вкладки
+          window.addEventListener('unload', async () => {
+            try {
+              await fetch('/logout', { 
+                method: 'POST',
+                keepalive: true // Дозволяє відправити запит навіть при закритті сторінки
+              });
+            } catch (error) {
+              console.error('Error during unload logout:', error);
+            }
           });
         </script>
       </body>
