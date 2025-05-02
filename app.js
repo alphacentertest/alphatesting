@@ -346,6 +346,10 @@ app.get('/', (req, res) => {
         <script>
           console.log('Login page loaded with CSRF token:', document.getElementById('csrfToken').value);
           async function login() {
+            console.log('Login function called');
+            const password = document.getElementById('password').value;
+            const csrfToken = document.getElementById('csrfToken').value;
+            console.log('CSRF Token being sent:', csrfToken);
             const password = document.getElementById('password').value;
             const csrfToken = document.getElementById('csrfToken').value;
             console.log('CSRF Token being sent:', csrfToken);
