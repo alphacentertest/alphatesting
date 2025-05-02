@@ -14,7 +14,7 @@
         font-size: 24px;
         margin-bottom: 20px;
       }
-      input[type="password"] {
+      input[type="password"], input[type="text"] {
         padding: 10px;
         font-size: 16px;
         margin-bottom: 10px;
@@ -36,12 +36,18 @@
         color: red;
         margin-top: 10px;
       }
+      .show-password {
+        margin-bottom: 10px;
+      }
     </style>
   </head>
   <body>
     <h1>Введіть пароль</h1>
     <form id="login-form" method="POST" action="/login">
-      <input type="password" name="password" placeholder="Введіть пароль" required><br>
+      <input type="password" id="password" name="password" placeholder="Введіть пароль" required><br>
+      <label class="show-password">
+        <input type="checkbox" id="show-password"> Показати пароль
+      </label><br>
       <input type="hidden" name="csrfToken" value="<%= csrfToken %>">
       <button type="submit">Увійти</button>
     </form>
@@ -69,6 +75,12 @@
         } catch (error) {
           document.getElementById('error').textContent = 'Помилка: ' + error.message;
         }
+      });
+
+      // Додаємо логіку для галочки "Показати пароль"
+      document.getElementById('show-password').addEventListener('change', (e) => {
+        const passwordInput = document.getElementById('password');
+        passwordInput.type = e.target.checked ? 'text' : 'password';
       });
     </script>
   </body>

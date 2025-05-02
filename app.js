@@ -107,8 +107,12 @@ app.use(session({
 
 // Middleware для генерації CSRF-токена
 app.use((req, res, next) => {
+  console.log('Session before CSRF middleware:', req.session);
   if (!req.session.csrfToken) {
     req.session.csrfToken = uuidv4();
+    console.log('Generated new CSRF token:', req.session.csrfToken);
+  } else {
+    console.log('Using existing CSRF token:', req.session.csrfToken);
   }
   res.locals.csrfToken = req.session.csrfToken;
   next();
@@ -345,6 +349,7 @@ app.get('/api/test', (req, res) => {
 // Головна сторінка
 app.get('/', (req, res) => {
   console.log('Serving index.html');
+  console.log('CSRF token for rendering:', res.locals.csrfToken);
   res.render('index', { csrfToken: res.locals.csrfToken });
 });
 
@@ -383,6 +388,8 @@ const validateLogin = [
 // Маршрут для логіну
 app.post('/login', checkCsrfToken, validateLogin, (req, res) => {
   console.log('Handling /login request...');
+  console.log('Request body:', req.body);
+  console.log('Session CSRF token:', req.session.csrfToken);
   
   // Перевірка валідації введення
   const errors = validationResult(req);
