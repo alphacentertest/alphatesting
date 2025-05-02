@@ -936,10 +936,13 @@ app.get('/test/question', checkAuth, (req, res) => {
             console.log('Save and Next button clicked for index:', index);
             try {
               let answers = selectedOptions;
+              console.log('Selected options:', selectedOptions);
               if (document.querySelector('input[name="q' + index + '"]')) {
                 answers = document.getElementById('q' + index + '_input').value;
+                console.log('Input answer:', answers);
               } else if (document.getElementById('sortable-options')) {
                 answers = Array.from(document.querySelectorAll('#sortable-options .option-box')).map(el => el.dataset.value);
+                console.log('Sortable options answer:', answers);
               }
               const responseTime = Date.now() - questionStartTime;
               console.log('Sending answer with data:', { index, answers, timeAway, switchCount, responseTime, activityCount });
@@ -948,15 +951,24 @@ app.get('/test/question', checkAuth, (req, res) => {
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ index, answer: answers, timeAway, switchCount, responseTime, activityCount })
               });
+              console.log('Response status:', response.status);
+              if (response.status === 302 || response.redirected) {
+                 console.warn('Session expired, redirecting to login');
+                 window.location.href = '/';
+                 return;
+              }
               const result = await response.json();
+              console.log('Response result:', result);
               if (result.success) {
                 console.log('Answer saved successfully, redirecting to next question');
                 window.location.href = '/test/question?index=' + (index + 1);
               } else {
                 console.error('Failed to save answer:', result);
+                alert('Помилка при збереженні відповіді: ' + (result.error || 'Невідома помилка'));
               }
             } catch (error) {
               console.error('Error in saveAndNext:', error);
+              alert('Помилка при збереженні відповіді: ' + error.message);
             }
           }
 
@@ -972,10 +984,13 @@ app.get('/test/question', checkAuth, (req, res) => {
             console.log('Finish Test button clicked for index:', index);
             try {
               let answers = selectedOptions;
+              console.log('Selected options:', selectedOptions);
               if (document.querySelector('input[name="q' + index + '"]')) {
                 answers = document.getElementById('q' + index + '_input').value;
+                console.log('Input answer:', answers);
               } else if (document.getElementById('sortable-options')) {
                 answers = Array.from(document.querySelectorAll('#sortable-options .option-box')).map(el => el.dataset.value);
+                console.log('Sortable options answer:', answers);
               }
               const responseTime = Date.now() - questionStartTime;
               console.log('Finishing test with data:', { index, answers, timeAway, switchCount, responseTime, activityCount });
@@ -984,16 +999,25 @@ app.get('/test/question', checkAuth, (req, res) => {
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ index, answer: answers, timeAway, switchCount, responseTime, activityCount })
               });
+              console.log('Response status:', response.status);
+              if (response.status === 302 || response.redirected) {
+                 console.warn('Session expired, redirecting to login');
+                 window.location.href = '/';
+                 return;
+              }
               const result = await response.json();
+              console.log('Response result:', result);
               if (result.success) {
                 console.log('Answer saved successfully, redirecting to result');
                 hideConfirm();
                 window.location.href = '/result';
               } else {
                 console.error('Failed to save answer:', result);
+                alert('Помилка при завершенні тесту: ' + (result.error || 'Невідома помилка'));
               }
             } catch (error) {
               console.error('Error in finishTest:', error);
+              alert('Помилка при завершенні тесту: ' + error.message);
             }
           }
 
@@ -1042,7 +1066,7 @@ app.post('/answer', checkAuth, (req, res) => {
     const userTest = userTests.get(req.user);
     if (!userTest) {
       console.warn(`Test not started for user ${req.user} in /answer`);
-      return res.status(400).json({ error: 'Тест не розпочато' });
+      return res.status(400).json({ success: false, error: 'Тест не розпочато' });
     }
     userTest.answers[index] = answer;
     userTest.suspiciousActivity = userTest.suspiciousActivity || { timeAway: 0, switchCount: 0, responseTimes: [], activityCounts: [] };
@@ -1055,7 +1079,7 @@ app.post('/answer', checkAuth, (req, res) => {
     res.json({ success: true });
   } catch (error) {
     console.error('Ошибка в /answer:', error.message, error.stack);
-    res.status(500).json({ error: 'Помилка сервера' });
+    res.status(500).json({ success: false, error: 'Помилка сервера' });
   }
 });
 
