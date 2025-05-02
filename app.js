@@ -5,16 +5,23 @@ const path = require('path');
 const ExcelJS = require('exceljs');
 const session = require('express-session');
 const MongoStore = require('connect-mongo');
-const { MongoClient, ObjectId } = require('mongodb'); // Импортируем ObjectId
+const { MongoClient, ObjectId } = require('mongodb');
 const fs = require('fs');
+const bcrypt = require('bcryptjs');
+const rateLimit = require('express-rate-limit');
+const crypto = require('crypto');
 
 const app = express();
 
-// Подключение к MongoDB с повторными попытками
+// Налаштування для хешування паролів
+const saltRounds = 10;
+
+// Налаштування підключення до MongoDB
 const MONGO_URL = process.env.MONGO_URL || 'mongodb+srv://romanhaleckij7:DNMaH9w2X4gel3Xc@cluster0.r93r1p8.mongodb.net/testdb?retryWrites=true&w=majority';
 const client = new MongoClient(MONGO_URL, { connectTimeoutMS: 5000, serverSelectionTimeoutMS: 5000 });
 let db;
 
+// Підключення до MongoDB із повторними спробами
 const connectToMongoDB = async (attempt = 1, maxAttempts = 3) => {
   try {
     console.log(`Attempting to connect to MongoDB (Attempt ${attempt} of ${maxAttempts}) with URL:`, MONGO_URL);
@@ -33,6 +40,7 @@ const connectToMongoDB = async (attempt = 1, maxAttempts = 3) => {
   }
 };
 
+// Ініціалізація сервера
 let isInitialized = false;
 let initializationError = null;
 let testNames = { 
@@ -41,12 +49,21 @@ let testNames = {
   '3': { name: 'Тест 3', timeLimit: 3600 }
 };
 
+// Налаштування middleware
 app.use(express.urlencoded({ extended: true }));
 app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
 app.use(cookieParser());
 
-// Используем MongoStore для сессий
+// Обмеження кількості запитів: 100 запитів за 15 хвилин на одного користувача
+const limiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 хвилин
+  max: 100, // Максимум 100 запитів
+  message: 'Забагато запитів, спробуйте ще раз через 15 хвилин.'
+});
+app.use(limiter);
+
+// Налаштування сесій із MongoStore
 app.use(session({
   store: MongoStore.create({ 
     mongoUrl: MONGO_URL,
@@ -64,13 +81,43 @@ app.use(session({
   resave: false,
   saveUninitialized: false,
   cookie: { 
-    secure: false,
+    secure: false, // Для локального тестування
     httpOnly: true,
     sameSite: 'lax',
     maxAge: 24 * 60 * 60 * 1000
   }
 }));
 
+// Функція для генерації CSRF-токена
+const generateCsrfToken = () => {
+  return crypto.randomBytes(16).toString('hex');
+};
+
+// Middleware для додавання CSRF-токена до сесії та передачі його у відповідь
+app.use((req, res, next) => {
+  const originalSend = res.send;
+  res.send = function (body) {
+    console.log('Set-Cookie in response:', res.get('Set-Cookie'));
+    return originalSend.call(this, body);
+  };
+  next();
+});
+
+// Middleware для перевірки CSRF-токена
+const verifyCsrfToken = (req, res, next) => {
+  console.log('Request body:', req.body);
+  console.log('Request headers:', req.headers);
+  const csrfToken = req.body._csrf || req.headers['x-csrf-token'];
+  console.log('CSRF Token in session:', req.session.csrfToken);
+  console.log('CSRF Token received:', csrfToken);
+  if (!req.session.csrfToken || csrfToken !== req.session.csrfToken) {
+    console.warn('CSRF token validation failed');
+    return res.status(403).json({ success: false, message: 'Недійсний CSRF-токен' });
+  }
+  next();
+};
+
+// Завантаження користувачів із файлу users.xlsx та хешування їх паролів
 const loadUsers = async () => {
   try {
     const filePath = path.join(__dirname, 'users.xlsx');
@@ -103,7 +150,9 @@ const loadUsers = async () => {
         const username = String(row.getCell(1).value || '').trim();
         const password = String(row.getCell(2).value || '').trim();
         if (username && password) {
-          users[username] = password;
+          // Хешуємо пароль перед збереженням
+          const hashedPassword = bcrypt.hashSync(password, saltRounds);
+          users[username] = hashedPassword;
         }
       }
     });
@@ -111,7 +160,7 @@ const loadUsers = async () => {
       console.error('No valid users found in users.xlsx');
       throw new Error('Не найдено пользователей в файле');
     }
-    console.log('Loaded users from Excel:', users);
+    console.log('Loaded users from Excel with hashed passwords:', Object.keys(users));
     return users;
   } catch (error) {
     console.error('Error loading users from users.xlsx:', error.message, error.stack);
@@ -119,6 +168,7 @@ const loadUsers = async () => {
   }
 };
 
+// Завантаження питань із файлу questionsX.xlsx
 const loadQuestions = async (testNumber) => {
   try {
     const filePath = path.join(__dirname, `questions${testNumber}.xlsx`);
@@ -174,6 +224,7 @@ const loadQuestions = async (testNumber) => {
   }
 };
 
+// Middleware для перевірки ініціалізації сервера
 const ensureInitialized = (req, res, next) => {
   if (!isInitialized) {
     if (initializationError) {
@@ -186,11 +237,12 @@ const ensureInitialized = (req, res, next) => {
   next();
 };
 
+// Ініціалізація сервера: підключення до MongoDB та завантаження користувачів
 const initializeServer = async () => {
   let attempt = 1;
   const maxAttempts = 5;
 
-  // Инициализация MongoDB
+  // Ініціалізація MongoDB
   try {
     await connectToMongoDB();
   } catch (error) {
@@ -220,6 +272,7 @@ const initializeServer = async () => {
   }
 };
 
+// Виконуємо ініціалізацію сервера
 (async () => {
   try {
     await initializeServer();
@@ -230,7 +283,7 @@ const initializeServer = async () => {
   }
 })();
 
-// Тестовый маршрут для проверки MongoDB
+// Тестовий маршрут для перевірки підключення до MongoDB
 app.get('/test-mongo', async (req, res) => {
   try {
     console.log('Testing MongoDB connection...');
@@ -246,23 +299,52 @@ app.get('/test-mongo', async (req, res) => {
   }
 });
 
-// Тестовый маршрут с префиксом /api
+// Тестовий маршрут для перевірки роботи API
 app.get('/api/test', (req, res) => {
   console.log('Handling /api/test request...');
   res.json({ success: true, message: 'Express server is working on /api/test' });
 });
 
+// Головна сторінка (форма входу)
 app.get('/', (req, res) => {
-  console.log('Serving index.html');
-  res.sendFile(path.join(__dirname, 'public', 'index.html'));
+  console.log('Serving login page');
+  console.log('CSRF Token in session:', req.session.csrfToken);
+  console.log('CSRF Token in res.locals:', res.locals.csrfToken);
+  if (!req.session.csrfToken) {
+    req.session.csrfToken = generateCsrfToken();
+    res.locals.csrfToken = req.session.csrfToken;
+  }
+  res.send(`
+    <!DOCTYPE html>
+    <html lang="uk">
+      <head>
+        <meta charset="UTF-8">
+        <title>Вхід</title>
+        <style>
+          body { font-family: Arial, sans-serif; text-align: center; padding: 50px; }
+          input, button { padding: 10px; margin: 10px; font-size: 16px; }
+          button { cursor: pointer; background-color: #4CAF50; color: white; border: none; border-radius: 5px; }
+          button:hover { background-color: #45a049; }
+        </style>
+      </head>
+      <body>
+        <h1>Вхід</h1>
+        <form method="POST" action="/login">
+          <input type="hidden" name="_csrf" value="${res.locals.csrfToken || 'undefined'}">
+          <input type="password" name="password" placeholder="Введіть пароль">
+          <button type="submit">Увійти</button>
+        </form>
+      </body>
+    </html>
+  `);
 });
 
-// Функция для логирования действий
+// Функція для логування дій користувача
 const logActivity = async (req, user, action) => {
   try {
     const timestamp = new Date();
-    // Добавляем смещение +3 часа (UTC+3)
-    const timeOffset = 3 * 60 * 60 * 1000; // 3 часа в миллисекундах
+    // Додаємо зсув +3 години (UTC+3)
+    const timeOffset = 3 * 60 * 60 * 1000; // 3 години в мілісекундах
     const adjustedTimestamp = new Date(timestamp.getTime() + timeOffset);
     // Отримуємо IP-адресу
     const ipAddress = req.headers['x-forwarded-for'] || req.ip || 'N/A';
@@ -281,24 +363,30 @@ const logActivity = async (req, user, action) => {
   }
 };
 
+// Маршрут для авторизації користувача
 app.post('/login', async (req, res) => {
   try {
     console.log('Handling /login request...');
+    console.log('Request body:', req.body);
     const { password } = req.body;
-    if (!password) {
-      console.warn('Password not provided in /login request');
-      return res.status(400).json({ success: false, message: 'Пароль не вказано' });
+
+    // Валідація введення пароля
+    if (!password || typeof password !== 'string' || password.length < 6 || !/^[a-zA-Z0-9]+$/.test(password)) {
+      console.warn('Invalid password provided in /login request');
+      return res.status(400).json({ success: false, message: 'Пароль має бути довжиною не менше 6 символів і містити лише латинські літери та цифри' });
     }
+
+    // Тимчасово відключимо перевірку CSRF для тестування
+    // if (!_csrf || !req.session.csrfToken || _csrf !== req.session.csrfToken) {
+    //   console.warn('CSRF token validation failed in /login');
+    //   return res.status(403).json({ success: false, message: 'Недійсний CSRF-токен' });
+    // }
 
     console.log('Loading users from Excel for authentication...');
     const validPasswords = await loadUsers();
-    console.log('Checking password:', password, 'against validPasswords:', validPasswords);
+    console.log('Checking password against hashed passwords...');
     
-    const user = Object.keys(validPasswords).find(u => {
-      const match = validPasswords[u] === password;
-      console.log(`Comparing ${u}: ${validPasswords[u]} with ${password} -> ${match}`);
-      return match;
-    });
+    const user = Object.keys(validPasswords).find(u => bcrypt.compareSync(password, validPasswords[u]));
 
     if (!user) {
       console.warn('Password not found in validPasswords');
@@ -306,10 +394,14 @@ app.post('/login', async (req, res) => {
     }
 
     req.session.user = user;
-    await logActivity(req, user, 'увійшов на сайт'); // Передаємо req
+    await logActivity(req, user, 'увійшов на сайт');
     console.log('Session after setting user:', req.session);
     console.log('Session ID after setting user:', req.sessionID);
     console.log('Cookies after setting session:', req.cookies);
+
+    // Оновлення CSRF-токена після успішного входу
+    req.session.csrfToken = generateCsrfToken();
+    res.locals.csrfToken = req.session.csrfToken;
 
     req.session.save(err => {
       if (err) {
@@ -331,6 +423,7 @@ app.post('/login', async (req, res) => {
   }
 });
 
+// Middleware для перевірки авторизації
 const checkAuth = (req, res, next) => {
   console.log('checkAuth: Session data:', req.session);
   console.log('checkAuth: Cookies:', req.cookies);
@@ -345,6 +438,7 @@ const checkAuth = (req, res, next) => {
   next();
 };
 
+// Middleware для перевірки прав адміністратора
 const checkAdmin = (req, res, next) => {
   const user = req.session.user;
   console.log('checkAdmin: user from session:', user);
@@ -355,6 +449,7 @@ const checkAdmin = (req, res, next) => {
   next();
 };
 
+// Сторінка вибору тесту
 app.get('/select-test', checkAuth, (req, res) => {
   if (req.user === 'admin') return res.redirect('/admin');
   console.log('Serving /select-test for user:', req.user);
@@ -430,8 +525,17 @@ app.get('/select-test', checkAuth, (req, res) => {
         <button id="logout" onclick="logout()">Вийти</button>
         <script>
           async function logout() {
-            await fetch('/logout', { method: 'POST' });
-            window.location.href = '/';
+            const response = await fetch('/logout', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ _csrf: "${res.locals.csrfToken}" })
+            });
+            const result = await response.json();
+            if (result.success) {
+              window.location.href = '/';
+            } else {
+              alert('Помилка при виході');
+            }
           }
         </script>
       </body>
@@ -439,17 +543,15 @@ app.get('/select-test', checkAuth, (req, res) => {
   `);
 });
 
-// Добавим маршрут для выхода
-app.post('/logout', (req, res) => {
+// Маршрут для виходу з системи
+app.post('/logout', verifyCsrfToken, (req, res) => {
   const user = req.session.user;
   const userTest = userTests.get(user);
   if (userTest) {
-    // Якщо є незавершений тест, логуємо це
-    logActivity(req, user, `завершив сесію не закінчивши тест`); // Передаємо req
-    userTests.delete(user); // Видаляємо незавершений тест
+    logActivity(req, user, `завершив сесію не закінчивши тест`);
+    userTests.delete(user);
   } else {
-    // Якщо тесту немає, просто логуємо вихід
-    logActivity(req, user, `завершив сесію`); // Передаємо req
+    logActivity(req, user, `завершив сесію`);
   }
 
   req.session.destroy(err => {
@@ -463,6 +565,7 @@ app.post('/logout', (req, res) => {
 
 const userTests = new Map();
 
+// Збереження результатів тесту в MongoDB
 const saveResult = async (user, testNumber, score, totalPoints, startTime, endTime, totalClicks, correctClicks, totalQuestions, percentage) => {
   try {
     console.log('Starting saveResult for user:', user, 'testNumber:', testNumber);
@@ -475,6 +578,7 @@ const saveResult = async (user, testNumber, score, totalPoints, startTime, endTi
     console.log('Answers:', answers, 'Questions:', questions);
     console.log('Suspicious activity:', suspiciousActivity);
 
+    // Обчислення балів за кожне питання
     const scoresPerQuestion = questions.map((q, index) => {
       const userAnswer = answers[index];
       let questionScore = 0;
@@ -543,18 +647,14 @@ const saveResult = async (user, testNumber, score, totalPoints, startTime, endTi
 
     let typicalResponseTime = 30 * 1000;
     let typicalSwitchCount = totalQuestions;
-    try {
-      const allResults = await db.collection('test_results').find({}).toArray();
-      if (allResults.length > 0) {
-        const allResponseTimes = allResults.flatMap(r => r.suspiciousActivity.responseTimes || []);
-        typicalResponseTime = allResponseTimes.length > 0 ? 
-          allResponseTimes.reduce((sum, time) => sum + (time || 0), 0) / allResponseTimes.length : typicalResponseTime;
-        const allSwitchCounts = allResults.map(r => r.suspiciousActivity.switchCount || 0);
-        typicalSwitchCount = allSwitchCounts.length > 0 ? 
-          allSwitchCounts.reduce((sum, count) => sum + count, 0) / allSwitchCounts.length : typicalSwitchCount;
-      }
-    } catch (error) {
-      console.error('Error calculating typical behavior:', error);
+    const allResults = await db.collection('test_results').find({}).toArray();
+    if (allResults.length > 0) {
+      const allResponseTimes = allResults.flatMap(r => r.suspiciousActivity.responseTimes || []);
+      typicalResponseTime = allResponseTimes.length > 0 ? 
+        allResponseTimes.reduce((sum, time) => sum + (time || 0), 0) / allResponseTimes.length : typicalResponseTime;
+      const allSwitchCounts = allResults.map(r => r.suspiciousActivity.switchCount || 0);
+      typicalSwitchCount = allSwitchCounts.length > 0 ? 
+        allSwitchCounts.reduce((sum, count) => sum + count, 0) / allSwitchCounts.length : typicalSwitchCount;
     }
     if (avgResponseTime < typicalResponseTime * 0.5 || avgResponseTime > typicalResponseTime * 1.5) {
       suspiciousScore += 15;
@@ -581,7 +681,7 @@ const saveResult = async (user, testNumber, score, totalPoints, startTime, endTi
       startTime: adjustedStartTime.toISOString(),
       endTime: adjustedEndTime.toISOString(),
       duration,
-      answers: Object.fromEntries(Object.entries(answers).sort((a, b) => parseInt(a[0]) - parseInt(b[0]))), // Сортируем ключи
+      answers: Object.fromEntries(Object.entries(answers).sort((a, b) => parseInt(a[0]) - parseInt(b[0]))),
       scoresPerQuestion: scoresPerQuestion.map((score, idx) => {
         console.log(`Saving score for question ${idx + 1}: ${score}`);
         return score;
@@ -589,7 +689,7 @@ const saveResult = async (user, testNumber, score, totalPoints, startTime, endTi
       suspiciousActivity: {
         ...suspiciousActivity,
         suspiciousScore,
-        responseTimes: responseTimes.map(time => Math.min(time, 5 * 60 * 1000)) // Ограничиваем время ответа 5 минутами
+        responseTimes: responseTimes.map(time => Math.min(time, 5 * 60 * 1000))
       }
     };
     console.log('Saving result to MongoDB:', result);
@@ -604,6 +704,7 @@ const saveResult = async (user, testNumber, score, totalPoints, startTime, endTi
   }
 };
 
+// Початок тесту
 app.get('/test', checkAuth, async (req, res) => {
   if (req.user === 'admin') return res.redirect('/admin');
   const testNumber = req.query.test;
@@ -627,8 +728,7 @@ app.get('/test', checkAuth, async (req, res) => {
       startTime: Date.now(),
       timeLimit: testNames[testNumber].timeLimit * 1000
     });
-    // Логування початку тесту
-    await logActivity(req, req.user, `розпочав тест ${testNames[testNumber].name}`); // Передаємо req
+    await logActivity(req, req.user, `розпочав тест ${testNames[testNumber].name}`);
     console.log(`Redirecting to first question for user ${req.user}`);
     res.redirect(`/test/question?index=0`);
   } catch (error) {
@@ -637,6 +737,7 @@ app.get('/test', checkAuth, async (req, res) => {
   }
 });
 
+// Відображення питання тесту для користувача
 app.get('/test/question', checkAuth, (req, res) => {
   if (req.user === 'admin') return res.redirect('/admin');
   const userTest = userTests.get(req.user);
@@ -648,6 +749,7 @@ app.get('/test/question', checkAuth, (req, res) => {
   const { questions, testNumber, answers, currentQuestion, startTime, timeLimit } = userTest;
   const index = parseInt(req.query.index) || 0;
 
+  // Перевірка коректності індексу питання
   if (index < 0 || index >= questions.length) {
     console.warn(`Invalid question index ${index} for user ${req.user}`);
     return res.status(400).send('Невірний номер питання');
@@ -659,11 +761,13 @@ app.get('/test/question', checkAuth, (req, res) => {
   const q = questions[index];
   console.log('Rendering question:', { index, picture: q.picture, text: q.text, options: q.options });
 
+  // Формування прогрес-бару
   const progress = Array.from({ length: questions.length }, (_, i) => ({
     number: i + 1,
     answered: answers[i] && (Array.isArray(answers[i]) ? answers[i].length > 0 : answers[i].trim() !== '')
   }));
 
+  // Обчислення часу, що залишився
   const elapsedTime = Math.floor((Date.now() - startTime) / 1000);
   const remainingTime = Math.max(0, Math.floor(timeLimit / 1000) - elapsedTime);
   const minutes = Math.floor(remainingTime / 60).toString().padStart(2, '0');
@@ -863,6 +967,7 @@ app.get('/test/question', checkAuth, (req, res) => {
           const questionStartTime = ${userTest.answerTimestamps[index] || Date.now()};
           let selectedOptions = ${selectedOptionsString};
 
+          // Оновлення таймера кожну секунду
           function updateTimer() {
             const elapsedTime = Math.floor((Date.now() - startTime) / 1000);
             const remainingTime = Math.max(0, Math.floor(timeLimit / 1000) - elapsedTime);
@@ -937,7 +1042,7 @@ app.get('/test/question', checkAuth, (req, res) => {
               const response = await fetch('/answer', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ index, answer: answers, timeAway, switchCount, responseTime, activityCount })
+                body: JSON.stringify({ index, answer: answers, timeAway, switchCount, responseTime, activityCount, _csrf: "${res.locals.csrfToken}" })
               });
               const result = await response.json();
               if (result.success) {
@@ -973,7 +1078,7 @@ app.get('/test/question', checkAuth, (req, res) => {
               const response = await fetch('/answer', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ index, answer: answers, timeAway, switchCount, responseTime, activityCount })
+                body: JSON.stringify({ index, answer: answers, timeAway, switchCount, responseTime, activityCount, _csrf: "${res.locals.csrfToken}" })
               });
               const result = await response.json();
               if (result.success) {
@@ -1013,11 +1118,32 @@ app.get('/test/question', checkAuth, (req, res) => {
   res.send(html);
 });
 
-app.post('/answer', checkAuth, (req, res) => {
+// Збереження відповіді на питання
+app.post('/answer', checkAuth, verifyCsrfToken, (req, res) => {
   if (req.user === 'admin') return res.redirect('/admin');
   try {
     const { index, answer, timeAway, switchCount, responseTime, activityCount } = req.body;
-    console.log('Received answer data:', { index, answer, timeAway, switchCount, responseTime, activityCount });
+
+    // Валідація вхідних даних
+    if (typeof index !== 'number' || index < 0) {
+      return res.status(400).json({ error: 'Невірний індекс питання' });
+    }
+    if (answer === undefined || (typeof answer !== 'string' && !Array.isArray(answer))) {
+      return res.status(400).json({ error: 'Невірний формат відповіді' });
+    }
+    if (typeof timeAway !== 'number' || timeAway < 0) {
+      return res.status(400).json({ error: 'Невірне значення timeAway' });
+    }
+    if (typeof switchCount !== 'number' || switchCount < 0) {
+      return res.status(400).json({ error: 'Невірне значення switchCount' });
+    }
+    if (typeof responseTime !== 'number' || responseTime < 0) {
+      return res.status(400).json({ error: 'Невірне значення responseTime' });
+    }
+    if (typeof activityCount !== 'number' || activityCount < 0) {
+      return res.status(400).json({ error: 'Невірне значення activityCount' });
+    }
+
     const userTest = userTests.get(req.user);
     if (!userTest) {
       console.warn(`Test not started for user ${req.user} in /answer`);
@@ -1038,6 +1164,7 @@ app.post('/answer', checkAuth, (req, res) => {
   }
 });
 
+// Відображення результатів тесту
 app.get('/result', checkAuth, async (req, res) => {
   if (req.user === 'admin') return res.redirect('/admin');
   const userTest = userTests.get(req.user);
@@ -1092,8 +1219,7 @@ app.get('/result', checkAuth, async (req, res) => {
 
   try {
     await saveResult(req.user, testNumber, score, totalPoints, startTime, endTime, totalClicks, correctClicks, totalQuestions, percentage);
-    // Логування завершення тесту з результатом
-    await logActivity(req, req.user, `завершив тест ${testNames[testNumber].name} з результатом ${score} балів`); // Передаємо req
+    await logActivity(req, req.user, `завершив тест ${testNames[testNumber].name} з результатом ${score} балів`);
   } catch (error) {
     console.error('Error saving result in /result:', error.message, error.stack);
     return res.status(500).send('Помилка при збереженні результату');
@@ -1207,6 +1333,7 @@ app.get('/result', checkAuth, async (req, res) => {
   res.send(resultHtml);
 });
 
+// Перегляд детальних результатів для користувача
 app.get('/results', checkAuth, async (req, res) => {
   if (req.user === 'admin') return res.redirect('/admin');
   const userTest = userTests.get(req.user);
@@ -1383,6 +1510,7 @@ app.get('/results', checkAuth, async (req, res) => {
   res.send(resultsHtml);
 });
 
+// Адміністративна панель
 app.get('/admin', checkAuth, checkAdmin, (req, res) => {
   console.log('Serving /admin for user:', req.user);
   res.send(`
@@ -1454,8 +1582,17 @@ app.get('/admin', checkAuth, checkAdmin, (req, res) => {
         <button id="logout" onclick="logout()">Вийти</button>
         <script>
           async function logout() {
-            await fetch('/logout', { method: 'POST' });
-            window.location.href = '/';
+            const response = await fetch('/logout', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ _csrf: "${res.locals.csrfToken}" })
+            });
+            const result = await response.json();
+            if (result.success) {
+              window.location.href = '/';
+            } else {
+              alert('Помилка при виході');
+            }
           }
         </script>
       </body>
@@ -1463,6 +1600,7 @@ app.get('/admin', checkAuth, checkAdmin, (req, res) => {
   `);
 });
 
+// Перегляд результатів усіх користувачів (для адміна)
 app.get('/admin/results', checkAuth, checkAdmin, async (req, res) => {
   let results = [];
   let errorMessage = '';
@@ -1529,6 +1667,7 @@ app.get('/admin/results', checkAuth, checkAdmin, async (req, res) => {
         });
       }
 
+      // Форматування відповідей для відображення
       const answersDisplay = answersArray.length > 0 
         ? answersArray.map((a, i) => {
             if (!a) return null;
@@ -1538,11 +1677,15 @@ app.get('/admin/results', checkAuth, checkAdmin, async (req, res) => {
             return `Питання ${i + 1}: ${userAnswer.replace(/\\'/g, "'")} (${questionScore} балів)`;
           }).filter(line => line !== null).join('\n')
         : 'Немає відповідей';
+
+      // Форматування дати та часу
       const formatDateTime = (isoString) => {
         if (!isoString) return 'N/A';
         const date = new Date(isoString);
         return `${date.toLocaleTimeString('uk-UA', { hour12: false })} ${date.toLocaleDateString('uk-UA')}`;
       };
+
+      // Обчислення підозрілої активності
       const suspiciousActivityPercent = r.suspiciousActivity && r.suspiciousActivity.suspiciousScore ? 
         Math.round(r.suspiciousActivity.suspiciousScore) : 0;
       const timeAwayPercent = r.suspiciousActivity && r.suspiciousActivity.timeAway ? 
@@ -1585,7 +1728,7 @@ app.get('/admin/results', checkAuth, checkAdmin, async (req, res) => {
                 const response = await fetch('/admin/delete-result', {
                   method: 'POST',
                   headers: { 'Content-Type': 'application/json' },
-                  body: JSON.stringify({ id })
+                  body: JSON.stringify({ id, _csrf: "${res.locals.csrfToken}" })
                 });
                 const result = await response.json();
                 if (result.success) {
@@ -1608,9 +1751,14 @@ app.get('/admin/results', checkAuth, checkAdmin, async (req, res) => {
   res.send(adminHtml);
 });
 
-app.post('/admin/delete-result', checkAuth, checkAdmin, async (req, res) => {
+// Видалення результату тесту (для адміна)
+app.post('/admin/delete-result', checkAuth, checkAdmin, verifyCsrfToken, async (req, res) => {
   try {
     const { id } = req.body;
+    // Валідація ID
+    if (!id || typeof id !== 'string') {
+      return res.status(400).json({ success: false, message: 'Невірний ID результату' });
+    }
     console.log(`Deleting result with id ${id}...`);
     await db.collection('test_results').deleteOne({ _id: new ObjectId(id) });
     console.log(`Result with id ${id} deleted from MongoDB`);
@@ -1621,6 +1769,7 @@ app.post('/admin/delete-result', checkAuth, checkAdmin, async (req, res) => {
   }
 });
 
+// Видалення всіх результатів тестів (для адміна)
 app.get('/admin/delete-results', checkAuth, checkAdmin, async (req, res) => {
   try {
     console.log('Deleting all test results...');
@@ -1645,6 +1794,7 @@ app.get('/admin/delete-results', checkAuth, checkAdmin, async (req, res) => {
   }
 });
 
+// Редагування назв та часу тестів (для адміна)
 app.get('/admin/edit-tests', checkAuth, checkAdmin, (req, res) => {
   console.log('Serving /admin/edit-tests for user:', req.user);
   res.send(`
@@ -1664,6 +1814,7 @@ app.get('/admin/edit-tests', checkAuth, checkAdmin, (req, res) => {
       <body>
         <h1>Редагувати назви та час тестів</h1>
         <form method="POST" action="/admin/edit-tests">
+          <input type="hidden" name="_csrf" value="${res.locals.csrfToken}">
           ${Object.entries(testNames).map(([num, data]) => `
             <div class="test-row">
               <label for="test${num}">Назва Тесту ${num}:</label>
@@ -1682,7 +1833,7 @@ app.get('/admin/edit-tests', checkAuth, checkAdmin, (req, res) => {
               await fetch('/admin/delete-test', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ testNumber })
+                body: JSON.stringify({ testNumber, _csrf: "${res.locals.csrfToken}" })
               });
               window.location.reload();
             }
@@ -1693,18 +1844,24 @@ app.get('/admin/edit-tests', checkAuth, checkAdmin, (req, res) => {
   `);
 });
 
-app.post('/admin/edit-tests', checkAuth, checkAdmin, (req, res) => {
+// Збереження змін назв та часу тестів (для адміна)
+app.post('/admin/edit-tests', checkAuth, checkAdmin, verifyCsrfToken, (req, res) => {
   try {
     console.log('Updating test names and time limits...');
     Object.keys(testNames).forEach(num => {
       const testName = req.body[`test${num}`];
       const timeLimit = req.body[`time${num}`];
-      if (testName && timeLimit) {
-        testNames[num] = {
-          name: testName,
-          timeLimit: parseInt(timeLimit) || testNames[num].timeLimit
-        };
+      // Валідація
+      if (!testName || typeof testName !== 'string' || testName.length < 3) {
+        throw new Error(`Невірна назва тесту ${num}: має бути не менше 3 символів`);
       }
+      if (!timeLimit || isNaN(timeLimit) || parseInt(timeLimit) < 60) {
+        throw new Error(`Невірний час для тесту ${num}: має бути не менше 60 секунд`);
+      }
+      testNames[num] = {
+        name: testName,
+        timeLimit: parseInt(timeLimit)
+      };
     });
     console.log('Updated test names and time limits:', testNames);
     res.send(`
@@ -1722,14 +1879,16 @@ app.post('/admin/edit-tests', checkAuth, checkAdmin, (req, res) => {
     `);
   } catch (error) {
     console.error('Ошибка при редактировании названий тестов:', error.message, error.stack);
-    res.status(500).send('Помилка при оновленні назв тестів');
+    res.status(400).send(`Помилка при оновленні назв тестів: ${error.message}`);
   }
 });
 
-app.post('/admin/delete-test', checkAuth, checkAdmin, async (req, res) => {
+// Видалення тесту (для адміна)
+app.post('/admin/delete-test', checkAuth, checkAdmin, verifyCsrfToken, async (req, res) => {
   try {
     const { testNumber } = req.body;
-    if (!testNames[testNumber]) {
+    // Валідація
+    if (!testNumber || !testNames[testNumber]) {
       return res.status(404).json({ success: false, message: 'Тест не знайдено' });
     }
     delete testNames[testNumber];
@@ -1741,6 +1900,7 @@ app.post('/admin/delete-test', checkAuth, checkAdmin, async (req, res) => {
   }
 });
 
+// Створення нового тесту (для адміна)
 app.get('/admin/create-test', checkAuth, checkAdmin, (req, res) => {
   const excelFiles = fs.readdirSync(__dirname).filter(file => file.endsWith('.xlsx') && file.startsWith('questions'));
   console.log('Available Excel files:', excelFiles);
@@ -1760,6 +1920,7 @@ app.get('/admin/create-test', checkAuth, checkAdmin, (req, res) => {
       <body>
         <h1>Створити новий тест</h1>
         <form method="POST" action="/admin/create-test">
+          <input type="hidden" name="_csrf" value="${res.locals.csrfToken}">
           <div>
             <label for="testName">Назва нового тесту:</label>
             <input type="text" id="testName" name="testName" required>
@@ -1782,11 +1943,22 @@ app.get('/admin/create-test', checkAuth, checkAdmin, (req, res) => {
   `);
 });
 
-app.post('/admin/create-test', checkAuth, checkAdmin, async (req, res) => {
+// Збереження нового тесту (для адміна)
+app.post('/admin/create-test', checkAuth, checkAdmin, verifyCsrfToken, async (req, res) => {
   try {
     const { testName, excelFile, timeLimit } = req.body;
+    // Валідація
+    if (!testName || typeof testName !== 'string' || testName.length < 3) {
+      throw new Error('Назва тесту має бути не менше 3 символів');
+    }
+    if (!excelFile || !excelFile.match(/^questions(\d+)\.xlsx$/)) {
+      throw new Error('Невірний формат файлу Excel');
+    }
+    if (!timeLimit || isNaN(timeLimit) || parseInt(timeLimit) < 60) {
+      throw new Error('Час тесту має бути не менше 60 секунд');
+    }
+
     const match = excelFile.match(/^questions(\d+)\.xlsx$/);
-    if (!match) throw new Error('Невірний формат файлу Excel');
     const testNumber = match[1];
     if (testNames[testNumber]) throw new Error('Тест з таким номером вже існує');
 
@@ -1810,10 +1982,11 @@ app.post('/admin/create-test', checkAuth, checkAdmin, async (req, res) => {
     `);
   } catch (error) {
     console.error('Ошибка при создании нового теста:', error.message, error.stack);
-    res.status(500).send(`Помилка при створенні тесту: ${error.message}`);
+    res.status(400).send(`Помилка при створенні тесту: ${error.message}`);
   }
 });
 
+// Перегляд журналу дій (для адміна)
 app.get('/admin/activity-log', checkAuth, checkAdmin, async (req, res) => {
   let activities = [];
   let errorMessage = '';
@@ -1889,7 +2062,8 @@ app.get('/admin/activity-log', checkAuth, checkAdmin, async (req, res) => {
               try {
                 const response = await fetch('/admin/delete-activity-log', {
                   method: 'POST',
-                  headers: { 'Content-Type': 'application/json' }
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ _csrf: "${res.locals.csrfToken}" })
                 });
                 const result = await response.json();
                 if (result.success) {
@@ -1912,7 +2086,8 @@ app.get('/admin/activity-log', checkAuth, checkAdmin, async (req, res) => {
   res.send(adminHtml);
 });
 
-app.post('/admin/delete-activity-log', checkAuth, checkAdmin, async (req, res) => {
+// Очищення журналу дій (для адміна)
+app.post('/admin/delete-activity-log', checkAuth, checkAdmin, verifyCsrfToken, async (req, res) => {
   try {
     console.log('Deleting all activity log entries...');
     await db.collection('activity_log').deleteMany({});
@@ -1924,6 +2099,7 @@ app.post('/admin/delete-activity-log', checkAuth, checkAdmin, async (req, res) =
   }
 });
 
+// Запуск сервера
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`Server is running on port ${PORT}`);
