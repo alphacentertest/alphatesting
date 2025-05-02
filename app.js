@@ -338,7 +338,7 @@ app.get('/', (req, res) => {
         </style>
       </head>
       <body>
-        <h1>Введіть пароль для входу (Updated Version 3)</h1>
+        <h1>Введіть будь ласка пароль для входу (Updated Version 3)</h1>
         <input type="password" id="password" placeholder="Пароль">
         <br>
         <input type="hidden" id="csrfToken" value="${res.locals.csrfToken || 'undefined'}">
