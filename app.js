@@ -5,25 +5,16 @@ const path = require('path');
 const ExcelJS = require('exceljs');
 const session = require('express-session');
 const MongoStore = require('connect-mongo');
-const { MongoClient, ObjectId } = require('mongodb');
+const { MongoClient, ObjectId } = require('mongodb'); // Импортируем ObjectId
 const fs = require('fs');
-const bcrypt = require('bcryptjs');
-const rateLimit = require('express-rate-limit');
-const crypto = require('crypto');
 
 const app = express();
 
-console.log('App.js loaded - Version 8');
-
-// Налаштування для хешування паролів
-const saltRounds = 10;
-
-// Налаштування підключення до MongoDB
+// Подключение к MongoDB с повторными попытками
 const MONGO_URL = process.env.MONGO_URL || 'mongodb+srv://romanhaleckij7:DNMaH9w2X4gel3Xc@cluster0.r93r1p8.mongodb.net/testdb?retryWrites=true&w=majority';
 const client = new MongoClient(MONGO_URL, { connectTimeoutMS: 5000, serverSelectionTimeoutMS: 5000 });
 let db;
 
-// Підключення до MongoDB із повторними спробами
 const connectToMongoDB = async (attempt = 1, maxAttempts = 3) => {
   try {
     console.log(`Attempting to connect to MongoDB (Attempt ${attempt} of ${maxAttempts}) with URL:`, MONGO_URL);
@@ -42,9 +33,6 @@ const connectToMongoDB = async (attempt = 1, maxAttempts = 3) => {
   }
 };
 
-app.set('trust proxy', 1);
-
-// Ініціалізація сервера
 let isInitialized = false;
 let initializationError = null;
 let testNames = { 
@@ -53,21 +41,12 @@ let testNames = {
   '3': { name: 'Тест 3', timeLimit: 3600 }
 };
 
-// Налаштування middleware
 app.use(express.urlencoded({ extended: true }));
 app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
 app.use(cookieParser());
 
-// Обмеження кількості запитів: 100 запитів за 15 хвилин на одного користувача
-const limiter = rateLimit({
-  windowMs: 15 * 60 * 1000, // 15 хвилин
-  max: 100, // Максимум 100 запитів
-  message: 'Забагато запитів, спробуйте ще раз через 15 хвилин.'
-});
-app.use(limiter);
-
-// Налаштування сесій із MongoStore
+// Используем MongoStore для сессий
 app.use(session({
   store: MongoStore.create({ 
     mongoUrl: MONGO_URL,
@@ -85,46 +64,13 @@ app.use(session({
   resave: false,
   saveUninitialized: false,
   cookie: { 
-    secure: process.env.NODE_ENV === 'production', // true на Heroku
+    secure: false,
     httpOnly: true,
     sameSite: 'lax',
     maxAge: 24 * 60 * 60 * 1000
   }
 }));
 
-// Функція для генерації CSRF-токена
-const generateCsrfToken = () => {
-  return crypto.randomBytes(16).toString('hex');
-};
-
-// Middleware для додавання CSRF-токена до сесії та передачі його у відповідь
-app.use((req, res, next) => {
-  if (!req.session.csrfToken) {
-    req.session.csrfToken = generateCsrfToken();
-  }
-  res.locals.csrfToken = req.session.csrfToken;
-  console.log('CSRF Token in session:', req.session.csrfToken);
-  next();
-});
-
-// Middleware для перевірки CSRF-токена
-const verifyCsrfToken = (req, res, next) => {
-  console.log('Request body:', req.body);
-  console.log('Request headers:', req.headers);
-  const csrfToken = req.body._csrf || req.headers['x-csrf-token'];
-  console.log('CSRF Token in session:', req.session.csrfToken);
-  console.log('CSRF Token received:', csrfToken);
-  if (!req.session.csrfToken || csrfToken !== req.session.csrfToken) {
-    console.warn('CSRF token validation failed');
-    return res.status(403).json({ success: false, message: 'Недійсний CSRF-токен' });
-  }
-  // Оновлення CSRF-токена після успішного запиту
-  req.session.csrfToken = generateCsrfToken();
-  res.locals.csrfToken = req.session.csrfToken;
-  next();
-};
-
-// Завантаження користувачів із файлу users.xlsx та хешування їх паролів
 const loadUsers = async () => {
   try {
     const filePath = path.join(__dirname, 'users.xlsx');
@@ -157,9 +103,7 @@ const loadUsers = async () => {
         const username = String(row.getCell(1).value || '').trim();
         const password = String(row.getCell(2).value || '').trim();
         if (username && password) {
-          // Хешуємо пароль перед збереженням
-          const hashedPassword = bcrypt.hashSync(password, saltRounds);
-          users[username] = hashedPassword;
+          users[username] = password;
         }
       }
     });
@@ -167,7 +111,7 @@ const loadUsers = async () => {
       console.error('No valid users found in users.xlsx');
       throw new Error('Не найдено пользователей в файле');
     }
-    console.log('Loaded users from Excel with hashed passwords:', Object.keys(users));
+    console.log('Loaded users from Excel:', users);
     return users;
   } catch (error) {
     console.error('Error loading users from users.xlsx:', error.message, error.stack);
@@ -175,7 +119,6 @@ const loadUsers = async () => {
   }
 };
 
-// Завантаження питань із файлу questionsX.xlsx
 const loadQuestions = async (testNumber) => {
   try {
     const filePath = path.join(__dirname, `questions${testNumber}.xlsx`);
@@ -231,7 +174,6 @@ const loadQuestions = async (testNumber) => {
   }
 };
 
-// Middleware для перевірки ініціалізації сервера
 const ensureInitialized = (req, res, next) => {
   if (!isInitialized) {
     if (initializationError) {
@@ -244,14 +186,11 @@ const ensureInitialized = (req, res, next) => {
   next();
 };
 
-let validPasswords = null;
-
-// Ініціалізація сервера: підключення до MongoDB та завантаження користувачів
 const initializeServer = async () => {
   let attempt = 1;
   const maxAttempts = 5;
 
-  // Ініціалізація MongoDB
+  // Инициализация MongoDB
   try {
     await connectToMongoDB();
   } catch (error) {
@@ -262,7 +201,7 @@ const initializeServer = async () => {
   while (attempt <= maxAttempts) {
     try {
       console.log(`Starting server initialization (Attempt ${attempt} of ${maxAttempts})...`);
-      validPasswords = await loadUsers();
+      await loadUsers();
       console.log('Users initialized successfully from Excel');
       isInitialized = true;
       initializationError = null;
@@ -281,7 +220,6 @@ const initializeServer = async () => {
   }
 };
 
-// Виконуємо ініціалізацію сервера
 (async () => {
   try {
     await initializeServer();
@@ -292,7 +230,7 @@ const initializeServer = async () => {
   }
 })();
 
-// Тестовий маршрут для перевірки підключення до MongoDB
+// Тестовый маршрут для проверки MongoDB
 app.get('/test-mongo', async (req, res) => {
   try {
     console.log('Testing MongoDB connection...');
@@ -308,115 +246,53 @@ app.get('/test-mongo', async (req, res) => {
   }
 });
 
-// Тестовий маршрут для перевірки роботи API
+// Тестовый маршрут с префиксом /api
 app.get('/api/test', (req, res) => {
   console.log('Handling /api/test request...');
   res.json({ success: true, message: 'Express server is working on /api/test' });
 });
 
-// Головна сторінка (форма входу)
 app.get('/', (req, res) => {
-  console.log('Rendering login page with CSRF token (Updated Version 3):', res.locals.csrfToken);
-  res.send(`
-    <!DOCTYPE html>
-    <html lang="uk">
-      <head>
-        <meta charset="UTF-8">
-        <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>Вхід</title>
-        <style>
-          body { font-family: Arial, sans-serif; text-align: center; padding: 20px; }
-          h1 { font-size: 24px; margin-bottom: 20px; }
-          input { padding: 10px; font-size: 18px; width: 200px; margin-bottom: 10px; }
-          button { padding: 10px 20px; font-size: 18px; cursor: pointer; background-color: #4CAF50; color: white; border: none; border-radius: 5px; }
-          button:hover { background-color: #45a049; }
-          .error { color: red; margin-top: 10px; }
-          @media (max-width: 600px) {
-            h1 { font-size: 20px; }
-            input, button { font-size: 16px; width: 90%; padding: 8px; }
-          }
-        </style>
-      </head>
-      <body>
-        <h1>Введіть будь ласка пароль для входу (Updated Version 3)</h1>
-        <input type="password" id="password" placeholder="Пароль">
-        <br>
-        <input type="hidden" id="csrfToken" value="${res.locals.csrfToken || 'undefined'}">
-        <button onclick="login()">Увійти</button>
-        <div id="error" class="error"></div>
-
-        <script>
-          console.log('Login page loaded (Updated Version 3) with CSRF token:', document.getElementById('csrfToken').value);
-          async function login() {
-            console.log('Login function called (Updated Version 3)');
-            const password = document.getElementById('password').value;
-            const csrfToken = document.getElementById('csrfToken').value;
-            console.log('CSRF Token being sent (Updated Version 3):', csrfToken);
-            if (csrfToken === 'undefined') {
-              document.getElementById('error').textContent = 'CSRF-токен відсутній. Оновіть сторінку.';
-              return;
-            }
-            const response = await fetch('/login', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ password, _csrf: csrfToken })
-            });
-            const result = await response.json();
-            if (result.success) {
-              window.location.href = result.redirect;
-            } else {
-              document.getElementById('error').textContent = 'Помилка: ' + result.message;
-            }
-          }
-
-          document.getElementById('password').addEventListener('keypress', (e) => {
-            if (e.key === 'Enter') login();
-          });
-        </script>
-      </body>
-    </html>
-  `);
+  console.log('Serving index.html');
+  res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
 
-// Функція для логування дій користувача
-const logActivity = async (req, user, action) => {
+// Функция для логирования действий
+const logActivity = async (user, action) => {
   try {
     const timestamp = new Date();
-    // Додаємо зсув +3 години (UTC+3)
-    const timeOffset = 3 * 60 * 60 * 1000; // 3 години в мілісекундах
+    // Добавляем смещение +3 часа (UTC+3)
+    const timeOffset = 3 * 60 * 60 * 1000; // 3 часа в миллисекундах
     const adjustedTimestamp = new Date(timestamp.getTime() + timeOffset);
-    // Отримуємо IP-адресу
-    const ipAddress = req.headers['x-forwarded-for'] || req.ip || 'N/A';
-    // Отримуємо ідентифікатор сесії
-    const sessionId = req.sessionID || 'N/A';
     await db.collection('activity_log').insertOne({
       user,
       action,
-      ipAddress,  // Додаємо IP-адресу
-      sessionId,  // Додаємо ідентифікатор сесії
       timestamp: adjustedTimestamp.toISOString()
     });
-    console.log(`Logged activity: ${user} - ${action} at ${adjustedTimestamp}, IP: ${ipAddress}, SessionID: ${sessionId}`);
+    console.log(`Logged activity: ${user} - ${action} at ${adjustedTimestamp}`);
   } catch (error) {
     console.error('Error logging activity:', error.message, error.stack);
   }
 };
 
-// Маршрут для авторизації користувача
-app.post('/login', verifyCsrfToken, async (req, res) => {
+app.post('/login', async (req, res) => {
   try {
     console.log('Handling /login request...');
-    console.log('Request body:', req.body);
     const { password } = req.body;
-
-    // Валідація введення пароля
-    if (!password || typeof password !== 'string' || password.length < 6 || !/^[a-zA-Z0-9]+$/.test(password)) {
-      console.warn('Invalid password provided in /login request');
-      return res.status(400).json({ success: false, message: 'Пароль має бути довжиною не менше 6 символів і містити лише латинські літери та цифри' });
+    if (!password) {
+      console.warn('Password not provided in /login request');
+      return res.status(400).json({ success: false, message: 'Пароль не вказано' });
     }
 
-    console.log('Checking password against hashed passwords...');
-    const user = Object.keys(validPasswords).find(u => bcrypt.compareSync(password, validPasswords[u]));
+    console.log('Loading users from Excel for authentication...');
+    const validPasswords = await loadUsers();
+    console.log('Checking password:', password, 'against validPasswords:', validPasswords);
+    
+    const user = Object.keys(validPasswords).find(u => {
+      const match = validPasswords[u] === password;
+      console.log(`Comparing ${u}: ${validPasswords[u]} with ${password} -> ${match}`);
+      return match;
+    });
 
     if (!user) {
       console.warn('Password not found in validPasswords');
@@ -424,7 +300,7 @@ app.post('/login', verifyCsrfToken, async (req, res) => {
     }
 
     req.session.user = user;
-    await logActivity(req, user, 'увійшов на сайт');
+    await logActivity(user, 'увійшов на сайт'); // Ждём завершения логирования
     console.log('Session after setting user:', req.session);
     console.log('Session ID after setting user:', req.sessionID);
     console.log('Cookies after setting session:', req.cookies);
@@ -449,7 +325,6 @@ app.post('/login', verifyCsrfToken, async (req, res) => {
   }
 });
 
-// Middleware для перевірки авторизації
 const checkAuth = (req, res, next) => {
   console.log('checkAuth: Session data:', req.session);
   console.log('checkAuth: Cookies:', req.cookies);
@@ -464,7 +339,6 @@ const checkAuth = (req, res, next) => {
   next();
 };
 
-// Middleware для перевірки прав адміністратора
 const checkAdmin = (req, res, next) => {
   const user = req.session.user;
   console.log('checkAdmin: user from session:', user);
@@ -475,7 +349,6 @@ const checkAdmin = (req, res, next) => {
   next();
 };
 
-// Сторінка вибору тесту
 app.get('/select-test', checkAuth, (req, res) => {
   if (req.user === 'admin') return res.redirect('/admin');
   console.log('Serving /select-test for user:', req.user);
@@ -551,17 +424,8 @@ app.get('/select-test', checkAuth, (req, res) => {
         <button id="logout" onclick="logout()">Вийти</button>
         <script>
           async function logout() {
-            const response = await fetch('/logout', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ _csrf: "${res.locals.csrfToken}" })
-            });
-            const result = await response.json();
-            if (result.success) {
-              window.location.href = '/';
-            } else {
-              alert('Помилка при виході');
-            }
+            await fetch('/logout', { method: 'POST' });
+            window.location.href = '/';
           }
         </script>
       </body>
@@ -569,17 +433,8 @@ app.get('/select-test', checkAuth, (req, res) => {
   `);
 });
 
-// Маршрут для виходу з системи
-app.post('/logout', verifyCsrfToken, (req, res) => {
-  const user = req.session.user;
-  const userTest = userTests.get(user);
-  if (userTest) {
-    logActivity(req, user, `завершив сесію не закінчивши тест`);
-    userTests.delete(user);
-  } else {
-    logActivity(req, user, `завершив сесію`);
-  }
-
+// Добавим маршрут для выхода
+app.post('/logout', (req, res) => {
   req.session.destroy(err => {
     if (err) {
       console.error('Error destroying session:', err);
@@ -591,7 +446,6 @@ app.post('/logout', verifyCsrfToken, (req, res) => {
 
 const userTests = new Map();
 
-// Збереження результатів тесту в MongoDB
 const saveResult = async (user, testNumber, score, totalPoints, startTime, endTime, totalClicks, correctClicks, totalQuestions, percentage) => {
   try {
     console.log('Starting saveResult for user:', user, 'testNumber:', testNumber);
@@ -604,7 +458,6 @@ const saveResult = async (user, testNumber, score, totalPoints, startTime, endTi
     console.log('Answers:', answers, 'Questions:', questions);
     console.log('Suspicious activity:', suspiciousActivity);
 
-    // Обчислення балів за кожне питання
     const scoresPerQuestion = questions.map((q, index) => {
       const userAnswer = answers[index];
       let questionScore = 0;
@@ -673,14 +526,18 @@ const saveResult = async (user, testNumber, score, totalPoints, startTime, endTi
 
     let typicalResponseTime = 30 * 1000;
     let typicalSwitchCount = totalQuestions;
-    const allResults = await db.collection('test_results').find({}).toArray();
-    if (allResults.length > 0) {
-      const allResponseTimes = allResults.flatMap(r => r.suspiciousActivity.responseTimes || []);
-      typicalResponseTime = allResponseTimes.length > 0 ? 
-        allResponseTimes.reduce((sum, time) => sum + (time || 0), 0) / allResponseTimes.length : typicalResponseTime;
-      const allSwitchCounts = allResults.map(r => r.suspiciousActivity.switchCount || 0);
-      typicalSwitchCount = allSwitchCounts.length > 0 ? 
-        allSwitchCounts.reduce((sum, count) => sum + count, 0) / allSwitchCounts.length : typicalSwitchCount;
+    try {
+      const allResults = await db.collection('test_results').find({}).toArray();
+      if (allResults.length > 0) {
+        const allResponseTimes = allResults.flatMap(r => r.suspiciousActivity.responseTimes || []);
+        typicalResponseTime = allResponseTimes.length > 0 ? 
+          allResponseTimes.reduce((sum, time) => sum + (time || 0), 0) / allResponseTimes.length : typicalResponseTime;
+        const allSwitchCounts = allResults.map(r => r.suspiciousActivity.switchCount || 0);
+        typicalSwitchCount = allSwitchCounts.length > 0 ? 
+          allSwitchCounts.reduce((sum, count) => sum + count, 0) / allSwitchCounts.length : typicalSwitchCount;
+      }
+    } catch (error) {
+      console.error('Error calculating typical behavior:', error);
     }
     if (avgResponseTime < typicalResponseTime * 0.5 || avgResponseTime > typicalResponseTime * 1.5) {
       suspiciousScore += 15;
@@ -707,7 +564,7 @@ const saveResult = async (user, testNumber, score, totalPoints, startTime, endTi
       startTime: adjustedStartTime.toISOString(),
       endTime: adjustedEndTime.toISOString(),
       duration,
-      answers: Object.fromEntries(Object.entries(answers).sort((a, b) => parseInt(a[0]) - parseInt(b[0]))),
+      answers: Object.fromEntries(Object.entries(answers).sort((a, b) => parseInt(a[0]) - parseInt(b[0]))), // Сортируем ключи
       scoresPerQuestion: scoresPerQuestion.map((score, idx) => {
         console.log(`Saving score for question ${idx + 1}: ${score}`);
         return score;
@@ -715,7 +572,7 @@ const saveResult = async (user, testNumber, score, totalPoints, startTime, endTi
       suspiciousActivity: {
         ...suspiciousActivity,
         suspiciousScore,
-        responseTimes: responseTimes.map(time => Math.min(time, 5 * 60 * 1000))
+        responseTimes: responseTimes.map(time => Math.min(time, 5 * 60 * 1000)) // Ограничиваем время ответа 5 минутами
       }
     };
     console.log('Saving result to MongoDB:', result);
@@ -730,7 +587,6 @@ const saveResult = async (user, testNumber, score, totalPoints, startTime, endTi
   }
 };
 
-// Початок тесту
 app.get('/test', checkAuth, async (req, res) => {
   if (req.user === 'admin') return res.redirect('/admin');
   const testNumber = req.query.test;
@@ -754,7 +610,6 @@ app.get('/test', checkAuth, async (req, res) => {
       startTime: Date.now(),
       timeLimit: testNames[testNumber].timeLimit * 1000
     });
-    await logActivity(req, req.user, `розпочав тест ${testNames[testNumber].name}`);
     console.log(`Redirecting to first question for user ${req.user}`);
     res.redirect(`/test/question?index=0`);
   } catch (error) {
@@ -763,241 +618,387 @@ app.get('/test', checkAuth, async (req, res) => {
   }
 });
 
-// Відображення питання тесту для користувача
-app.get('/test/question', checkAuth, async (req, res) => {
-  const { index } = req.query;
-  const idx = parseInt(index, 10);
-  const testNumber = req.session.currentTest;
-
-  if (!testNumber || isNaN(idx)) {
-    return res.redirect('/select-test');
+app.get('/test/question', checkAuth, (req, res) => {
+  if (req.user === 'admin') return res.redirect('/admin');
+  const userTest = userTests.get(req.user);
+  if (!userTest) {
+    console.warn(`Test not started for user ${req.user}`);
+    return res.status(400).send('Тест не розпочато');
   }
 
-  const questions = await loadQuestions(testNumber);
-  if (!questions || idx < 0 || idx >= questions.length) {
-    return res.redirect('/select-test');
+  const { questions, testNumber, answers, currentQuestion, startTime, timeLimit } = userTest;
+  const index = parseInt(req.query.index) || 0;
+
+  if (index < 0 || index >= questions.length) {
+    console.warn(`Invalid question index ${index} for user ${req.user}`);
+    return res.status(400).send('Невірний номер питання');
   }
 
-  const question = { ...questions[idx], index: idx };
-  console.log('Rendering question:', question);
+  userTest.currentQuestion = index;
+  userTest.answerTimestamps = userTest.answerTimestamps || {};
+  userTest.answerTimestamps[index] = userTest.answerTimestamps[index] || Date.now();
+  const q = questions[index];
+  console.log('Rendering question:', { index, picture: q.picture, text: q.text, options: q.options });
 
-  res.send(`
+  const progress = Array.from({ length: questions.length }, (_, i) => ({
+    number: i + 1,
+    answered: answers[i] && (Array.isArray(answers[i]) ? answers[i].length > 0 : answers[i].trim() !== '')
+  }));
+
+  const elapsedTime = Math.floor((Date.now() - startTime) / 1000);
+  const remainingTime = Math.max(0, Math.floor(timeLimit / 1000) - elapsedTime);
+  const minutes = Math.floor(remainingTime / 60).toString().padStart(2, '0');
+  const seconds = (remainingTime % 60).toString().padStart(2, '0');
+
+  const selectedOptions = answers[index] || [];
+  const selectedOptionsString = JSON.stringify(selectedOptions).replace(/'/g, "\\'");
+
+  let html = `
     <!DOCTYPE html>
     <html lang="uk">
       <head>
         <meta charset="UTF-8">
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>Тест</title>
+        <title>${testNames[testNumber].name}</title>
+        <script src="https://cdnjs.cloudflare.com/ajax/libs/Sortable/1.15.0/Sortable.min.js" onerror="console.error('Failed to load Sortable.js')"></script>
         <style>
-          body { font-family: Arial, sans-serif; margin: 0; padding: 20px; }
-          h2 { font-size: 24px; margin-bottom: 20px; }
-          img { max-width: 100%; height: auto; margin-bottom: 20px; }
-          .options { display: flex; flex-direction: column; gap: 10px; }
-          label { display: flex; align-items: center; gap: 10px; font-size: 18px; }
-          input[type="checkbox"], input[type="text"] { margin: 0; }
-          input[type="text"] { padding: 5px; font-size: 16px; width: 100%; max-width: 300px; }
-          button { padding: 10px 20px; font-size: 18px; cursor: pointer; margin-top: 20px; border: none; border-radius: 5px; }
-          #next { background-color: #4CAF50; color: white; }
-          #next:hover { background-color: #45a049; }
-          #finish { background-color: #2196F3; color: white; }
-          #finish:hover { background-color: #1e88e5; }
-          #logout { background-color: #ef5350; color: white; position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%); width: 200px; }
-          .sortable { list-style-type: none; padding: 0; margin: 0; }
-          .sortable li { padding: 10px; background-color: #f0f0f0; margin-bottom: 5px; cursor: move; }
+          body { font-family: Arial, sans-serif; margin: 0; padding: 20px; padding-bottom: 80px; background-color: #f0f0f0; }
+          h1 { font-size: 24px; text-align: center; }
+          img { max-width: 100%; margin-bottom: 10px; display: block; margin-left: auto; margin-right: auto; }
+          .progress-bar { 
+            display: flex; 
+            flex-direction: column; 
+            gap: 5px; 
+            margin-bottom: 20px; 
+            width: calc(100% - 40px); 
+            margin-left: auto; 
+            margin-right: auto; 
+            box-sizing: border-box; 
+          }
+          .progress-circle { 
+            width: 40px; 
+            height: 40px; 
+            border-radius: 50%; 
+            display: flex; 
+            align-items: center; 
+            justify-content: center; 
+            font-size: 14px; 
+            flex-shrink: 0; 
+          }
+          .progress-circle.unanswered { background-color: red; color: white; }
+          .progress-circle.answered { background-color: green; color: white; }
+          .progress-line { 
+            width: 5px; 
+            height: 2px; 
+            background-color: #ccc; 
+            margin: 0 2px; 
+            align-self: center; 
+            flex-shrink: 0; 
+          }
+          .progress-line.answered { background-color: green; }
+          .progress-row { 
+            display: flex; 
+            align-items: center; 
+            justify-content: space-around; 
+            gap: 2px; 
+            flex-wrap: wrap; 
+          }
+          .option-box { border: 2px solid #ccc; padding: 10px; margin: 5px 0; border-radius: 5px; cursor: pointer; font-size: 16px; user-select: none; }
+          .option-box.selected { background-color: #90ee90; }
+          .button-container { position: fixed; bottom: 20px; left: 20px; right: 20px; display: flex; justify-content: space-between; }
+          button { padding: 10px 20px; margin: 5px; border: none; cursor: pointer; border-radius: 5px; font-size: 16px; }
+          .back-btn { background-color: red; color: white; }
+          .next-btn { background-color: blue; color: white; }
+          .finish-btn { background-color: green; color: white; }
+          button:disabled { background-color: grey; cursor: not-allowed; }
+          #timer { font-size: 24px; margin-bottom: 20px; text-align: center; }
+          #confirm-modal { display: none; position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%); background: white; padding: 20px; border: 2px solid black; z-index: 1000; }
+          #confirm-modal button { margin: 0 10px; }
+          .question-box { padding: 10px; margin: 5px 0; }
+          .instruction { font-style: italic; color: #555; margin-bottom: 10px; font-size: 18px; }
+          .option-box.draggable { cursor: move; }
+          .option-box.dragging { opacity: 0.5; }
+          #question-container { background-color: white; padding: 20px; border-radius: 8px; box-shadow: 0 0 10px rgba(0, 0, 0, 0.1); width: calc(100% - 40px); margin: 0 auto 20px auto; box-sizing: border-box; }
+          #answers { margin-bottom: 20px; }
           @media (max-width: 600px) {
-            body { padding: 10px; }
-            h2 { font-size: 20px; }
-            label { font-size: 16px; }
-            button { font-size: 16px; padding: 8px 16px; }
-            #logout { width: 90%; }
+            h1 { font-size: 28px; }
+            .progress-bar { flex-direction: column; }
+            .progress-circle { width: 20px; height: 20px; font-size: 10px; }
+            .progress-line { width: 5px; }
+            .progress-row { justify-content: center; gap: 2px; flex-wrap: wrap; }
+            .option-box { font-size: 18px; padding: 15px; }
+            button { font-size: 18px; padding: 15px; }
+            #timer { font-size: 20px; }
+            .question-box h2 { font-size: 20px; }
+          }
+          @media (min-width: 601px) {
+            .progress-bar { flex-direction: row; justify-content: center; }
+            .progress-circle { width: 40px; height: 40px; font-size: 14px; }
+            .progress-line { width: 5px; }
+            .progress-row { justify-content: space-around; }
           }
         </style>
       </head>
       <body>
-        <h2>${question.text}</h2>
-        ${question.picture ? `<img src="${question.picture}" alt="Question Image">` : ''}
-        ${question.type === 'multiple' ? `
-          <div class="options">
-            ${question.options.map((option, i) => `
-              <label>
-                <input type="checkbox" name="answer" value="${option}">
+        <h1>${testNames[testNumber].name}</h1>
+        <div id="timer">Залишилось часу: ${minutes} мм ${seconds} с</div>
+        <div class="progress-bar">
+  `;
+  if (progress.length <= 10) {
+    html += `
+      <div class="progress-row">
+        ${progress.map((p, j) => `
+          <div class="progress-circle ${p.answered ? 'answered' : 'unanswered'}">${p.number}</div>
+          ${j < progress.length - 1 ? '<div class="progress-line ' + (p.answered ? 'answered' : '') + '"></div>' : ''}
+        `).join('')}
+      </div>
+    `;
+  } else {
+    for (let i = 0; i < progress.length; i += 10) {
+      const rowCircles = progress.slice(i, i + 10);
+      html += `
+        <div class="progress-row">
+          ${rowCircles.map((p, j) => `
+            <div class="progress-circle ${p.answered ? 'answered' : 'unanswered'}">${p.number}</div>
+            ${j < rowCircles.length - 1 ? '<div class="progress-line ' + (p.answered ? 'answered' : '') + '"></div>' : ''}
+          `).join('')}
+        </div>
+      `;
+    }
+  }
+  html += `
+        </div>
+        <div id="question-container">
+  `;
+  if (q.picture) {
+    html += `<img src="${q.picture}" alt="Picture" onerror="this.src='/images/placeholder.png'; console.log('Image failed to load: ${q.picture}')"><br>`;
+  }
+
+  const instructionText = q.type === 'multiple' ? 'Виберіть усі правильні відповіді' :
+                         q.type === 'input' ? 'Введіть правильну відповідь' :
+                         q.type === 'ordering' ? 'Розташуйте відповіді у правильній послідовності' : '';
+  html += `
+          <div class="question-box">
+            <h2 id="question-text">${index + 1}. ${q.text}</h2>
+          </div>
+          <p id="instruction" class="instruction">${instructionText}</p>
+          <div id="answers">
+  `;
+
+  if (!q.options || q.options.length === 0) {
+    const userAnswer = answers[index] || '';
+    html += `
+      <input type="text" name="q${index}" id="q${index}_input" value="${userAnswer}" placeholder="Введіть відповідь" class="answer-option"><br>
+    `;
+  } else {
+    if (q.type === 'ordering') {
+      html += `
+        <div id="sortable-options">
+          ${(answers[index] || q.options).map((option, optIndex) => {
+            const escapedOption = option.replace(/'/g, "\\'").replace(/"/g, '\\"');
+            return `
+              <div class="option-box draggable" data-index="${optIndex}" data-value="${escapedOption}">
                 ${option}
-              </label>
-            `).join('')}
+              </div>
+            `;
+          }).join('')}
+        </div>
+      `;
+    } else {
+      q.options.forEach((option, optIndex) => {
+        const selected = selectedOptions.includes(option) ? 'selected' : '';
+        const escapedOption = option.replace(/'/g, "\\'").replace(/"/g, '\\"');
+        html += `
+          <div class="option-box ${selected}" data-value="${escapedOption}">
+            ${option}
           </div>
-        ` : question.type === 'input' ? `
-          <div class="options">
-            <input type="text" id="answerInput" placeholder="Введіть відповідь">
+        `;
+      });
+    }
+  }
+
+  html += `
           </div>
-        ` : question.type === 'ordering' ? `
-          <ul class="sortable">
-            ${question.options.map((option, i) => `
-              <li data-id="${i}">${option}</li>
-            `).join('')}
-          </ul>
-        ` : ''}
-
-        <input type="hidden" id="csrfToken" value="${res.locals.csrfToken || 'undefined'}">
-        <button id="next" onclick="submitAnswer(${idx}, ${questions.length - 1})">Далі</button>
-        ${idx === questions.length - 1 ? `<button id="finish" onclick="submitAnswer(${idx}, ${questions.length - 1}, true)">Завершити тест</button>` : ''}
-        <button id="logout" onclick="logout()">Вийти</button>
-
+        </div>
+        <div class="button-container">
+          <button class="back-btn" ${index === 0 ? 'disabled' : ''} onclick="window.location.href='/test/question?index=${index - 1}'">Назад</button>
+          <button id="submit-answer" class="next-btn" ${index === questions.length - 1 ? 'disabled' : ''} onclick="saveAndNext(${index})">Далі</button>
+          <button class="finish-btn" onclick="showConfirm(${index})">Завершити тест</button>
+        </div>
+        <div id="confirm-modal">
+          <h2>Ви дійсно бажаєте завершити тест?</h2>
+          <button onclick="finishTest(${index})">Так</button>
+          <button onclick="hideConfirm()">Ні</button>
+        </div>
         <script>
-          let startTime = Date.now();
+          let startTime = ${startTime};
+          let timeLimit = ${timeLimit};
+          const timerElement = document.getElementById('timer');
           let timeAway = 0;
-          let lastFocus = Date.now();
+          let lastBlurTime = 0;
           let switchCount = 0;
+          let lastActivityTime = Date.now();
           let activityCount = 0;
+          let lastMouseMoveTime = 0;
+          const debounceDelay = 100; // 100 миллисекунд
+          const questionStartTime = ${userTest.answerTimestamps[index] || Date.now()};
+          let selectedOptions = ${selectedOptionsString};
 
-          document.addEventListener('visibilitychange', () => {
-            if (document.hidden) {
-              lastFocus = Date.now();
-            } else {
-              timeAway += Date.now() - lastFocus;
-              switchCount++;
+          function updateTimer() {
+            const elapsedTime = Math.floor((Date.now() - startTime) / 1000);
+            const remainingTime = Math.max(0, Math.floor(timeLimit / 1000) - elapsedTime);
+            const minutes = Math.floor(remainingTime / 60).toString().padStart(2, '0');
+            const seconds = (remainingTime % 60).toString().padStart(2, '0');
+            timerElement.textContent = 'Залишилось часу: ' + minutes + ' мм ' + seconds + ' с';
+            if (remainingTime <= 0) {
+              window.location.href = '/result';
+            }
+          }
+          updateTimer();
+          setInterval(updateTimer, 1000);
+
+          window.addEventListener('blur', () => {
+            lastBlurTime = Date.now();
+            switchCount++;
+            console.log('Tab blurred, switch count:', switchCount);
+          });
+
+          window.addEventListener('focus', () => {
+            if (lastBlurTime) {
+              const timeSpentAway = Date.now() - lastBlurTime;
+              timeAway += timeSpentAway;
+              console.log('Tab focused, time away:', timeAway);
             }
           });
 
-          document.addEventListener('mousemove', () => activityCount++);
-          document.addEventListener('keydown', () => activityCount++);
-
-          async function submitAnswer(index, lastIndex, finish = false) {
-            const responseTime = Date.now() - startTime - timeAway;
-            let answer;
-            const csrfToken = document.getElementById('csrfToken').value;
-
-            if (${question.type === 'multiple'}) {
-              answer = Array.from(document.querySelectorAll('input[name="answer"]:checked')).map(input => input.value);
-            } else if (${question.type === 'input'}) {
-              answer = [document.getElementById('answerInput').value.trim()];
-            } else if (${question.type === 'ordering'}) {
-              const items = Array.from(document.querySelectorAll('.sortable li'));
-              answer = items.map(item => item.textContent.trim());
+          function debounceMouseMove() {
+            const now = Date.now();
+            if (now - lastMouseMoveTime >= debounceDelay) {
+              lastMouseMoveTime = now;
+              lastActivityTime = now;
+              activityCount++;
+              console.log('Mouse activity detected, count:', activityCount);
             }
+          }
 
-            console.log('Submitting answer with CSRF token:', csrfToken);
-            const response = await fetch('/answer', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({
-                index,
-                answer,
-                timeAway,
-                switchCount,
-                responseTime,
-                activityCount,
-                _csrf: csrfToken
-              })
+          document.addEventListener('mousemove', debounceMouseMove);
+
+          document.addEventListener('keydown', () => {
+            lastActivityTime = Date.now();
+            activityCount++;
+            console.log('Keyboard activity detected, count:', activityCount);
+          });
+
+          document.querySelectorAll('.option-box:not(.draggable)').forEach(box => {
+            box.addEventListener('click', () => {
+              const option = box.getAttribute('data-value');
+              const idx = selectedOptions.indexOf(option);
+              if (idx === -1) {
+                selectedOptions.push(option);
+                box.classList.add('selected');
+              } else {
+                selectedOptions.splice(idx, 1);
+                box.classList.remove('selected');
+              }
+              console.log('Selected options for question ${index}:', selectedOptions);
             });
+          });
 
-            const result = await response.json();
-            console.log('Server response:', result);
-            if (result.success) {
-              if (finish) {
+          async function saveAndNext(index) {
+            console.log('Save and Next button clicked for index:', index);
+            try {
+              let answers = selectedOptions;
+              if (document.querySelector('input[name="q' + index + '"]')) {
+                answers = document.getElementById('q' + index + '_input').value;
+              } else if (document.getElementById('sortable-options')) {
+                answers = Array.from(document.querySelectorAll('#sortable-options .option-box')).map(el => el.dataset.value);
+              }
+              const responseTime = Date.now() - questionStartTime;
+              console.log('Sending answer with data:', { index, answers, timeAway, switchCount, responseTime, activityCount });
+              const response = await fetch('/answer', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ index, answer: answers, timeAway, switchCount, responseTime, activityCount })
+              });
+              const result = await response.json();
+              if (result.success) {
+                console.log('Answer saved successfully, redirecting to next question');
+                window.location.href = '/test/question?index=' + (index + 1);
+              } else {
+                console.error('Failed to save answer:', result);
+              }
+            } catch (error) {
+              console.error('Error in saveAndNext:', error);
+            }
+          }
+
+          function showConfirm(index) {
+            document.getElementById('confirm-modal').style.display = 'block';
+          }
+
+          function hideConfirm() {
+            document.getElementById('confirm-modal').style.display = 'none';
+          }
+
+          async function finishTest(index) {
+            console.log('Finish Test button clicked for index:', index);
+            try {
+              let answers = selectedOptions;
+              if (document.querySelector('input[name="q' + index + '"]')) {
+                answers = document.getElementById('q' + index + '_input').value;
+              } else if (document.getElementById('sortable-options')) {
+                answers = Array.from(document.querySelectorAll('#sortable-options .option-box')).map(el => el.dataset.value);
+              }
+              const responseTime = Date.now() - questionStartTime;
+              console.log('Finishing test with data:', { index, answers, timeAway, switchCount, responseTime, activityCount });
+              const response = await fetch('/answer', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ index, answer: answers, timeAway, switchCount, responseTime, activityCount })
+              });
+              const result = await response.json();
+              if (result.success) {
+                console.log('Answer saved successfully, redirecting to result');
+                hideConfirm();
                 window.location.href = '/result';
               } else {
-                window.location.href = '/test/question?index=' + (index + 1);
+                console.error('Failed to save answer:', result);
               }
-            } else {
-              alert('Помилка: ' + result.message);
+            } catch (error) {
+              console.error('Error in finishTest:', error);
             }
           }
 
-          async function logout() {
-            const csrfToken = document.getElementById('csrfToken').value;
-            const response = await fetch('/logout', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ _csrf: csrfToken })
-            });
-            const result = await response.json();
-            if (result.success) {
-              window.location.href = '/';
+          const sortable = document.getElementById('sortable-options');
+          if (sortable) {
+            if (typeof Sortable === 'undefined') {
+              console.error('Sortable.js is not loaded');
             } else {
-              alert('Помилка при виході');
-            }
-          }
-
-          // Drag-and-drop для ordering
-          if (${question.type === 'ordering'}) {
-            const sortableList = document.querySelector('.sortable');
-            let draggedItem = null;
-
-            sortableList.addEventListener('dragstart', (e) => {
-              draggedItem = e.target;
-              setTimeout(() => draggedItem.style.display = 'none', 0);
-            });
-
-            sortableList.addEventListener('dragend', (e) => {
-              setTimeout(() => {
-                draggedItem.style.display = 'block';
-                draggedItem = null;
-              }, 0);
-            });
-
-            sortableList.addEventListener('dragover', (e) => e.preventDefault());
-
-            sortableList.addEventListener('dragenter', (e) => {
-              e.preventDefault();
-              if (e.target.classList.contains('sortable') || e.target.tagName === 'LI') {
-                e.target.classList.add('drag-over');
-              }
-            });
-
-            sortableList.addEventListener('dragleave', (e) => {
-              if (e.target.classList.contains('sortable') || e.target.tagName === 'LI') {
-                e.target.classList.remove('drag-over');
-              }
-            });
-
-            sortableList.addEventListener('drop', (e) => {
-              e.preventDefault();
-              const target = e.target.classList.contains('sortable') ? e.target : e.target.closest('li');
-              if (target && target !== draggedItem) {
-                const allItems = Array.from(sortableList.children);
-                const draggedIndex = allItems.indexOf(draggedItem);
-                const targetIndex = allItems.indexOf(target);
-                if (draggedIndex < targetIndex) {
-                  target.after(draggedItem);
-                } else {
-                  target.before(draggedItem);
+              new Sortable(sortable, {
+                animation: 150,
+                onStart: function(evt) {
+                  console.log('Drag started on:', evt.item.dataset.value);
+                },
+                onEnd: function(evt) {
+                  console.log('Drag ended:', evt.item.dataset.value, 'from index:', evt.oldIndex, 'to index:', evt.newIndex);
                 }
-              }
-              sortableList.querySelectorAll('.drag-over').forEach(item => item.classList.remove('drag-over'));
-            });
+              });
+            }
+          } else {
+            console.log('Sortable options not found');
           }
         </script>
       </body>
     </html>
-  `);
+  `;
+  res.send(html);
 });
 
-// Збереження відповіді на питання
-app.post('/answer', checkAuth, verifyCsrfToken, (req, res) => {
+app.post('/answer', checkAuth, (req, res) => {
   if (req.user === 'admin') return res.redirect('/admin');
   try {
     const { index, answer, timeAway, switchCount, responseTime, activityCount } = req.body;
-
-    // Валідація вхідних даних
-    if (typeof index !== 'number' || index < 0) {
-      return res.status(400).json({ error: 'Невірний індекс питання' });
-    }
-    if (answer === undefined || (typeof answer !== 'string' && !Array.isArray(answer))) {
-      return res.status(400).json({ error: 'Невірний формат відповіді' });
-    }
-    if (typeof timeAway !== 'number' || timeAway < 0) {
-      return res.status(400).json({ error: 'Невірне значення timeAway' });
-    }
-    if (typeof switchCount !== 'number' || switchCount < 0) {
-      return res.status(400).json({ error: 'Невірне значення switchCount' });
-    }
-    if (typeof responseTime !== 'number' || responseTime < 0) {
-      return res.status(400).json({ error: 'Невірне значення responseTime' });
-    }
-    if (typeof activityCount !== 'number' || activityCount < 0) {
-      return res.status(400).json({ error: 'Невірне значення activityCount' });
-    }
-
+    console.log('Received answer data:', { index, answer, timeAway, switchCount, responseTime, activityCount });
     const userTest = userTests.get(req.user);
     if (!userTest) {
       console.warn(`Test not started for user ${req.user} in /answer`);
@@ -1018,7 +1019,6 @@ app.post('/answer', checkAuth, verifyCsrfToken, (req, res) => {
   }
 });
 
-// Відображення результатів тесту
 app.get('/result', checkAuth, async (req, res) => {
   if (req.user === 'admin') return res.redirect('/admin');
   const userTest = userTests.get(req.user);
@@ -1073,7 +1073,6 @@ app.get('/result', checkAuth, async (req, res) => {
 
   try {
     await saveResult(req.user, testNumber, score, totalPoints, startTime, endTime, totalClicks, correctClicks, totalQuestions, percentage);
-    await logActivity(req, req.user, `завершив тест ${testNames[testNumber].name} з результатом ${score} балів`);
   } catch (error) {
     console.error('Error saving result in /result:', error.message, error.stack);
     return res.status(500).send('Помилка при збереженні результату');
@@ -1187,7 +1186,6 @@ app.get('/result', checkAuth, async (req, res) => {
   res.send(resultHtml);
 });
 
-// Перегляд детальних результатів для користувача
 app.get('/results', checkAuth, async (req, res) => {
   if (req.user === 'admin') return res.redirect('/admin');
   const userTest = userTests.get(req.user);
@@ -1364,7 +1362,6 @@ app.get('/results', checkAuth, async (req, res) => {
   res.send(resultsHtml);
 });
 
-// Адміністративна панель
 app.get('/admin', checkAuth, checkAdmin, (req, res) => {
   console.log('Serving /admin for user:', req.user);
   res.send(`
@@ -1436,17 +1433,8 @@ app.get('/admin', checkAuth, checkAdmin, (req, res) => {
         <button id="logout" onclick="logout()">Вийти</button>
         <script>
           async function logout() {
-            const response = await fetch('/logout', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ _csrf: "${res.locals.csrfToken}" })
-            });
-            const result = await response.json();
-            if (result.success) {
-              window.location.href = '/';
-            } else {
-              alert('Помилка при виході');
-            }
+            await fetch('/logout', { method: 'POST' });
+            window.location.href = '/';
           }
         </script>
       </body>
@@ -1454,7 +1442,6 @@ app.get('/admin', checkAuth, checkAdmin, (req, res) => {
   `);
 });
 
-// Перегляд результатів усіх користувачів (для адміна)
 app.get('/admin/results', checkAuth, checkAdmin, async (req, res) => {
   let results = [];
   let errorMessage = '';
@@ -1521,7 +1508,6 @@ app.get('/admin/results', checkAuth, checkAdmin, async (req, res) => {
         });
       }
 
-      // Форматування відповідей для відображення
       const answersDisplay = answersArray.length > 0 
         ? answersArray.map((a, i) => {
             if (!a) return null;
@@ -1531,15 +1517,11 @@ app.get('/admin/results', checkAuth, checkAdmin, async (req, res) => {
             return `Питання ${i + 1}: ${userAnswer.replace(/\\'/g, "'")} (${questionScore} балів)`;
           }).filter(line => line !== null).join('\n')
         : 'Немає відповідей';
-
-      // Форматування дати та часу
       const formatDateTime = (isoString) => {
         if (!isoString) return 'N/A';
         const date = new Date(isoString);
         return `${date.toLocaleTimeString('uk-UA', { hour12: false })} ${date.toLocaleDateString('uk-UA')}`;
       };
-
-      // Обчислення підозрілої активності
       const suspiciousActivityPercent = r.suspiciousActivity && r.suspiciousActivity.suspiciousScore ? 
         Math.round(r.suspiciousActivity.suspiciousScore) : 0;
       const timeAwayPercent = r.suspiciousActivity && r.suspiciousActivity.timeAway ? 
@@ -1582,7 +1564,7 @@ app.get('/admin/results', checkAuth, checkAdmin, async (req, res) => {
                 const response = await fetch('/admin/delete-result', {
                   method: 'POST',
                   headers: { 'Content-Type': 'application/json' },
-                  body: JSON.stringify({ id, _csrf: "${res.locals.csrfToken}" })
+                  body: JSON.stringify({ id })
                 });
                 const result = await response.json();
                 if (result.success) {
@@ -1605,14 +1587,9 @@ app.get('/admin/results', checkAuth, checkAdmin, async (req, res) => {
   res.send(adminHtml);
 });
 
-// Видалення результату тесту (для адміна)
-app.post('/admin/delete-result', checkAuth, checkAdmin, verifyCsrfToken, async (req, res) => {
+app.post('/admin/delete-result', checkAuth, checkAdmin, async (req, res) => {
   try {
     const { id } = req.body;
-    // Валідація ID
-    if (!id || typeof id !== 'string') {
-      return res.status(400).json({ success: false, message: 'Невірний ID результату' });
-    }
     console.log(`Deleting result with id ${id}...`);
     await db.collection('test_results').deleteOne({ _id: new ObjectId(id) });
     console.log(`Result with id ${id} deleted from MongoDB`);
@@ -1623,7 +1600,6 @@ app.post('/admin/delete-result', checkAuth, checkAdmin, verifyCsrfToken, async (
   }
 });
 
-// Видалення всіх результатів тестів (для адміна)
 app.get('/admin/delete-results', checkAuth, checkAdmin, async (req, res) => {
   try {
     console.log('Deleting all test results...');
@@ -1648,7 +1624,6 @@ app.get('/admin/delete-results', checkAuth, checkAdmin, async (req, res) => {
   }
 });
 
-// Редагування назв та часу тестів (для адміна)
 app.get('/admin/edit-tests', checkAuth, checkAdmin, (req, res) => {
   console.log('Serving /admin/edit-tests for user:', req.user);
   res.send(`
@@ -1668,7 +1643,6 @@ app.get('/admin/edit-tests', checkAuth, checkAdmin, (req, res) => {
       <body>
         <h1>Редагувати назви та час тестів</h1>
         <form method="POST" action="/admin/edit-tests">
-          <input type="hidden" name="_csrf" value="${res.locals.csrfToken}">
           ${Object.entries(testNames).map(([num, data]) => `
             <div class="test-row">
               <label for="test${num}">Назва Тесту ${num}:</label>
@@ -1687,7 +1661,7 @@ app.get('/admin/edit-tests', checkAuth, checkAdmin, (req, res) => {
               await fetch('/admin/delete-test', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ testNumber, _csrf: "${res.locals.csrfToken}" })
+                body: JSON.stringify({ testNumber })
               });
               window.location.reload();
             }
@@ -1698,24 +1672,18 @@ app.get('/admin/edit-tests', checkAuth, checkAdmin, (req, res) => {
   `);
 });
 
-// Збереження змін назв та часу тестів (для адміна)
-app.post('/admin/edit-tests', checkAuth, checkAdmin, verifyCsrfToken, (req, res) => {
+app.post('/admin/edit-tests', checkAuth, checkAdmin, (req, res) => {
   try {
     console.log('Updating test names and time limits...');
     Object.keys(testNames).forEach(num => {
       const testName = req.body[`test${num}`];
       const timeLimit = req.body[`time${num}`];
-      // Валідація
-      if (!testName || typeof testName !== 'string' || testName.length < 3) {
-        throw new Error(`Невірна назва тесту ${num}: має бути не менше 3 символів`);
+      if (testName && timeLimit) {
+        testNames[num] = {
+          name: testName,
+          timeLimit: parseInt(timeLimit) || testNames[num].timeLimit
+        };
       }
-      if (!timeLimit || isNaN(timeLimit) || parseInt(timeLimit) < 60) {
-        throw new Error(`Невірний час для тесту ${num}: має бути не менше 60 секунд`);
-      }
-      testNames[num] = {
-        name: testName,
-        timeLimit: parseInt(timeLimit)
-      };
     });
     console.log('Updated test names and time limits:', testNames);
     res.send(`
@@ -1733,16 +1701,14 @@ app.post('/admin/edit-tests', checkAuth, checkAdmin, verifyCsrfToken, (req, res)
     `);
   } catch (error) {
     console.error('Ошибка при редактировании названий тестов:', error.message, error.stack);
-    res.status(400).send(`Помилка при оновленні назв тестів: ${error.message}`);
+    res.status(500).send('Помилка при оновленні назв тестів');
   }
 });
 
-// Видалення тесту (для адміна)
-app.post('/admin/delete-test', checkAuth, checkAdmin, verifyCsrfToken, async (req, res) => {
+app.post('/admin/delete-test', checkAuth, checkAdmin, async (req, res) => {
   try {
     const { testNumber } = req.body;
-    // Валідація
-    if (!testNumber || !testNames[testNumber]) {
+    if (!testNames[testNumber]) {
       return res.status(404).json({ success: false, message: 'Тест не знайдено' });
     }
     delete testNames[testNumber];
@@ -1754,7 +1720,6 @@ app.post('/admin/delete-test', checkAuth, checkAdmin, verifyCsrfToken, async (re
   }
 });
 
-// Створення нового тесту (для адміна)
 app.get('/admin/create-test', checkAuth, checkAdmin, (req, res) => {
   const excelFiles = fs.readdirSync(__dirname).filter(file => file.endsWith('.xlsx') && file.startsWith('questions'));
   console.log('Available Excel files:', excelFiles);
@@ -1774,7 +1739,6 @@ app.get('/admin/create-test', checkAuth, checkAdmin, (req, res) => {
       <body>
         <h1>Створити новий тест</h1>
         <form method="POST" action="/admin/create-test">
-          <input type="hidden" name="_csrf" value="${res.locals.csrfToken}">
           <div>
             <label for="testName">Назва нового тесту:</label>
             <input type="text" id="testName" name="testName" required>
@@ -1797,22 +1761,11 @@ app.get('/admin/create-test', checkAuth, checkAdmin, (req, res) => {
   `);
 });
 
-// Збереження нового тесту (для адміна)
-app.post('/admin/create-test', checkAuth, checkAdmin, verifyCsrfToken, async (req, res) => {
+app.post('/admin/create-test', checkAuth, checkAdmin, async (req, res) => {
   try {
     const { testName, excelFile, timeLimit } = req.body;
-    // Валідація
-    if (!testName || typeof testName !== 'string' || testName.length < 3) {
-      throw new Error('Назва тесту має бути не менше 3 символів');
-    }
-    if (!excelFile || !excelFile.match(/^questions(\d+)\.xlsx$/)) {
-      throw new Error('Невірний формат файлу Excel');
-    }
-    if (!timeLimit || isNaN(timeLimit) || parseInt(timeLimit) < 60) {
-      throw new Error('Час тесту має бути не менше 60 секунд');
-    }
-
     const match = excelFile.match(/^questions(\d+)\.xlsx$/);
+    if (!match) throw new Error('Невірний формат файлу Excel');
     const testNumber = match[1];
     if (testNames[testNumber]) throw new Error('Тест з таким номером вже існує');
 
@@ -1836,11 +1789,10 @@ app.post('/admin/create-test', checkAuth, checkAdmin, verifyCsrfToken, async (re
     `);
   } catch (error) {
     console.error('Ошибка при создании нового теста:', error.message, error.stack);
-    res.status(400).send(`Помилка при створенні тесту: ${error.message}`);
+    res.status(500).send(`Помилка при створенні тесту: ${error.message}`);
   }
 });
 
-// Перегляд журналу дій (для адміна)
 app.get('/admin/activity-log', checkAuth, checkAdmin, async (req, res) => {
   let activities = [];
   let errorMessage = '';
@@ -1881,14 +1833,12 @@ app.get('/admin/activity-log', checkAuth, checkAdmin, async (req, res) => {
           <tr>
             <th>Користувач</th>
             <th>Дія</th>
-            <th>IP-адреса</th>
-            <th>Ідентифікатор сесії</th>
             <th>Час</th>
             <th>Дата</th>
           </tr>
   `;
   if (!activities || activities.length === 0) {
-    adminHtml += '<tr><td colspan="6">Немає записів</td></tr>';
+    adminHtml += '<tr><td colspan="4">Немає записів</td></tr>';
     console.log('No activities found in activity_log');
   } else {
     activities.forEach(activity => {
@@ -1899,8 +1849,6 @@ app.get('/admin/activity-log', checkAuth, checkAdmin, async (req, res) => {
         <tr>
           <td>${activity.user || 'N/A'}</td>
           <td>${activity.action || 'N/A'}</td>
-          <td>${activity.ipAddress || 'N/A'}</td>
-          <td>${activity.sessionId || 'N/A'}</td>
           <td>${formattedTime}</td>
           <td>${formattedDate}</td>
         </tr>
@@ -1916,8 +1864,7 @@ app.get('/admin/activity-log', checkAuth, checkAdmin, async (req, res) => {
               try {
                 const response = await fetch('/admin/delete-activity-log', {
                   method: 'POST',
-                  headers: { 'Content-Type': 'application/json' },
-                  body: JSON.stringify({ _csrf: "${res.locals.csrfToken}" })
+                  headers: { 'Content-Type': 'application/json' }
                 });
                 const result = await response.json();
                 if (result.success) {
@@ -1940,8 +1887,7 @@ app.get('/admin/activity-log', checkAuth, checkAdmin, async (req, res) => {
   res.send(adminHtml);
 });
 
-// Очищення журналу дій (для адміна)
-app.post('/admin/delete-activity-log', checkAuth, checkAdmin, verifyCsrfToken, async (req, res) => {
+app.post('/admin/delete-activity-log', checkAuth, checkAdmin, async (req, res) => {
   try {
     console.log('Deleting all activity log entries...');
     await db.collection('activity_log').deleteMany({});
@@ -1953,7 +1899,6 @@ app.post('/admin/delete-activity-log', checkAuth, checkAdmin, verifyCsrfToken, a
   }
 });
 
-// Запуск сервера
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`Server is running on port ${PORT}`);
