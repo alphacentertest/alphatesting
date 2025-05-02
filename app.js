@@ -258,18 +258,24 @@ app.get('/', (req, res) => {
 });
 
 // Функция для логирования действий
-const logActivity = async (user, action) => {
+const logActivity = async (req, user, action) => {
   try {
     const timestamp = new Date();
-    // Добавляем смещение +3 часа (UTC+3)
-    const timeOffset = 3 * 60 * 60 * 1000; // 3 часа в миллисекундах
+    // Додаємо зсув +3 години (UTC+3)
+    const timeOffset = 3 * 60 * 60 * 1000; // 3 години в мілісекундах
     const adjustedTimestamp = new Date(timestamp.getTime() + timeOffset);
+    // Отримуємо IP-адресу
+    const ipAddress = req.headers['x-forwarded-for'] || req.ip || 'N/A';
+    // Отримуємо ідентифікатор сесії
+    const sessionId = req.sessionID || 'N/A';
     await db.collection('activity_log').insertOne({
       user,
       action,
+      ipAddress,  // Додаємо IP-адресу
+      sessionId,  // Додаємо ідентифікатор сесії
       timestamp: adjustedTimestamp.toISOString()
     });
-    console.log(`Logged activity: ${user} - ${action} at ${adjustedTimestamp}`);
+    console.log(`Logged activity: ${user} - ${action} at ${adjustedTimestamp}, IP: ${ipAddress}, SessionID: ${sessionId}`);
   } catch (error) {
     console.error('Error logging activity:', error.message, error.stack);
   }
@@ -610,6 +616,7 @@ app.get('/test', checkAuth, async (req, res) => {
       startTime: Date.now(),
       timeLimit: testNames[testNumber].timeLimit * 1000
     });
+    await logActivity(req, req.user, `розпочав тест ${testNames[testNumber].name}`);
     console.log(`Redirecting to first question for user ${req.user}`);
     res.redirect(`/test/question?index=0`);
   } catch (error) {
@@ -1073,6 +1080,7 @@ app.get('/result', checkAuth, async (req, res) => {
 
   try {
     await saveResult(req.user, testNumber, score, totalPoints, startTime, endTime, totalClicks, correctClicks, totalQuestions, percentage);
+    await logActivity(req, req.user, `закінчив тест ${testNames[testNumber].name} з результатом ${score} балів`);
   } catch (error) {
     console.error('Error saving result in /result:', error.message, error.stack);
     return res.status(500).send('Помилка при збереженні результату');
@@ -1837,12 +1845,14 @@ app.get('/admin/activity-log', checkAuth, checkAdmin, async (req, res) => {
           <tr>
             <th>Користувач</th>
             <th>Дія</th>
+            <th>IP-адреса</th>
+            <th>Ідентифікатор сесії</th>
             <th>Час</th>
             <th>Дата</th>
           </tr>
   `;
   if (!activities || activities.length === 0) {
-    adminHtml += '<tr><td colspan="4">Немає записів</td></tr>';
+    adminHtml += '<tr><td colspan="6">Немає записів</td></tr>';
     console.log('No activities found in activity_log');
   } else {
     activities.forEach(activity => {
@@ -1853,6 +1863,8 @@ app.get('/admin/activity-log', checkAuth, checkAdmin, async (req, res) => {
         <tr>
           <td>${activity.user || 'N/A'}</td>
           <td>${activity.action || 'N/A'}</td>
+          <td>${activity.ipAddress || 'N/A'}</td>
+          <td>${activity.sessionId || 'N/A'}</td>
           <td>${formattedTime}</td>
           <td>${formattedDate}</td>
         </tr>
