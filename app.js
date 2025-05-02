@@ -81,7 +81,7 @@ app.use(session({
   resave: false,
   saveUninitialized: false,
   cookie: { 
-    secure: false, // Для локального тестування
+    secure: true, // Для продакшену
     httpOnly: true,
     sameSite: 'lax',
     maxAge: 24 * 60 * 60 * 1000
@@ -95,11 +95,11 @@ const generateCsrfToken = () => {
 
 // Middleware для додавання CSRF-токена до сесії та передачі його у відповідь
 app.use((req, res, next) => {
-  const originalSend = res.send;
-  res.send = function (body) {
-    console.log('Set-Cookie in response:', res.get('Set-Cookie'));
-    return originalSend.call(this, body);
-  };
+  if (!req.session.csrfToken) {
+    req.session.csrfToken = generateCsrfToken();
+  }
+  res.locals.csrfToken = req.session.csrfToken;
+  console.log('CSRF Token in session:', req.session.csrfToken);
   next();
 });
 
@@ -114,6 +114,9 @@ const verifyCsrfToken = (req, res, next) => {
     console.warn('CSRF token validation failed');
     return res.status(403).json({ success: false, message: 'Недійсний CSRF-токен' });
   }
+  // Оновлення CSRF-токена після успішного запиту
+  req.session.csrfToken = generateCsrfToken();
+  res.locals.csrfToken = req.session.csrfToken;
   next();
 };
 
@@ -237,6 +240,8 @@ const ensureInitialized = (req, res, next) => {
   next();
 };
 
+let validPasswords = null;
+
 // Ініціалізація сервера: підключення до MongoDB та завантаження користувачів
 const initializeServer = async () => {
   let attempt = 1;
@@ -253,7 +258,7 @@ const initializeServer = async () => {
   while (attempt <= maxAttempts) {
     try {
       console.log(`Starting server initialization (Attempt ${attempt} of ${maxAttempts})...`);
-      await loadUsers();
+      validPasswords = await loadUsers();
       console.log('Users initialized successfully from Excel');
       isInitialized = true;
       initializationError = null;
@@ -364,7 +369,7 @@ const logActivity = async (req, user, action) => {
 };
 
 // Маршрут для авторизації користувача
-app.post('/login', async (req, res) => {
+app.post('/login', verifyCsrfToken, async (req, res) => {
   try {
     console.log('Handling /login request...');
     console.log('Request body:', req.body);
@@ -376,16 +381,7 @@ app.post('/login', async (req, res) => {
       return res.status(400).json({ success: false, message: 'Пароль має бути довжиною не менше 6 символів і містити лише латинські літери та цифри' });
     }
 
-    // Тимчасово відключимо перевірку CSRF для тестування
-    // if (!_csrf || !req.session.csrfToken || _csrf !== req.session.csrfToken) {
-    //   console.warn('CSRF token validation failed in /login');
-    //   return res.status(403).json({ success: false, message: 'Недійсний CSRF-токен' });
-    // }
-
-    console.log('Loading users from Excel for authentication...');
-    const validPasswords = await loadUsers();
     console.log('Checking password against hashed passwords...');
-    
     const user = Object.keys(validPasswords).find(u => bcrypt.compareSync(password, validPasswords[u]));
 
     if (!user) {
@@ -398,10 +394,6 @@ app.post('/login', async (req, res) => {
     console.log('Session after setting user:', req.session);
     console.log('Session ID after setting user:', req.sessionID);
     console.log('Cookies after setting session:', req.cookies);
-
-    // Оновлення CSRF-токена після успішного входу
-    req.session.csrfToken = generateCsrfToken();
-    res.locals.csrfToken = req.session.csrfToken;
 
     req.session.save(err => {
       if (err) {
@@ -738,384 +730,212 @@ app.get('/test', checkAuth, async (req, res) => {
 });
 
 // Відображення питання тесту для користувача
-app.get('/test/question', checkAuth, (req, res) => {
-  if (req.user === 'admin') return res.redirect('/admin');
-  const userTest = userTests.get(req.user);
-  if (!userTest) {
-    console.warn(`Test not started for user ${req.user}`);
-    return res.status(400).send('Тест не розпочато');
+app.get('/test/question', checkAuth, async (req, res) => {
+  const { index } = req.query;
+  const idx = parseInt(index, 10);
+  const testNumber = req.session.currentTest;
+
+  if (!testNumber || isNaN(idx)) {
+    return res.redirect('/select-test');
   }
 
-  const { questions, testNumber, answers, currentQuestion, startTime, timeLimit } = userTest;
-  const index = parseInt(req.query.index) || 0;
-
-  // Перевірка коректності індексу питання
-  if (index < 0 || index >= questions.length) {
-    console.warn(`Invalid question index ${index} for user ${req.user}`);
-    return res.status(400).send('Невірний номер питання');
+  const questions = await loadQuestions(testNumber);
+  if (!questions || idx < 0 || idx >= questions.length) {
+    return res.redirect('/select-test');
   }
 
-  userTest.currentQuestion = index;
-  userTest.answerTimestamps = userTest.answerTimestamps || {};
-  userTest.answerTimestamps[index] = userTest.answerTimestamps[index] || Date.now();
-  const q = questions[index];
-  console.log('Rendering question:', { index, picture: q.picture, text: q.text, options: q.options });
+  const question = { ...questions[idx], index: idx };
+  console.log('Rendering question:', question);
 
-  // Формування прогрес-бару
-  const progress = Array.from({ length: questions.length }, (_, i) => ({
-    number: i + 1,
-    answered: answers[i] && (Array.isArray(answers[i]) ? answers[i].length > 0 : answers[i].trim() !== '')
-  }));
-
-  // Обчислення часу, що залишився
-  const elapsedTime = Math.floor((Date.now() - startTime) / 1000);
-  const remainingTime = Math.max(0, Math.floor(timeLimit / 1000) - elapsedTime);
-  const minutes = Math.floor(remainingTime / 60).toString().padStart(2, '0');
-  const seconds = (remainingTime % 60).toString().padStart(2, '0');
-
-  const selectedOptions = answers[index] || [];
-  const selectedOptionsString = JSON.stringify(selectedOptions).replace(/'/g, "\\'");
-
-  let html = `
+  res.send(`
     <!DOCTYPE html>
     <html lang="uk">
       <head>
         <meta charset="UTF-8">
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>${testNames[testNumber].name}</title>
-        <script src="https://cdnjs.cloudflare.com/ajax/libs/Sortable/1.15.0/Sortable.min.js" onerror="console.error('Failed to load Sortable.js')"></script>
+        <title>Тест</title>
         <style>
-          body { font-family: Arial, sans-serif; margin: 0; padding: 20px; padding-bottom: 80px; background-color: #f0f0f0; }
-          h1 { font-size: 24px; text-align: center; }
-          img { max-width: 100%; margin-bottom: 10px; display: block; margin-left: auto; margin-right: auto; }
-          .progress-bar { 
-            display: flex; 
-            flex-direction: column; 
-            gap: 5px; 
-            margin-bottom: 20px; 
-            width: calc(100% - 40px); 
-            margin-left: auto; 
-            margin-right: auto; 
-            box-sizing: border-box; 
-          }
-          .progress-circle { 
-            width: 40px; 
-            height: 40px; 
-            border-radius: 50%; 
-            display: flex; 
-            align-items: center; 
-            justify-content: center; 
-            font-size: 14px; 
-            flex-shrink: 0; 
-          }
-          .progress-circle.unanswered { background-color: red; color: white; }
-          .progress-circle.answered { background-color: green; color: white; }
-          .progress-line { 
-            width: 5px; 
-            height: 2px; 
-            background-color: #ccc; 
-            margin: 0 2px; 
-            align-self: center; 
-            flex-shrink: 0; 
-          }
-          .progress-line.answered { background-color: green; }
-          .progress-row { 
-            display: flex; 
-            align-items: center; 
-            justify-content: space-around; 
-            gap: 2px; 
-            flex-wrap: wrap; 
-          }
-          .option-box { border: 2px solid #ccc; padding: 10px; margin: 5px 0; border-radius: 5px; cursor: pointer; font-size: 16px; user-select: none; }
-          .option-box.selected { background-color: #90ee90; }
-          .button-container { position: fixed; bottom: 20px; left: 20px; right: 20px; display: flex; justify-content: space-between; }
-          button { padding: 10px 20px; margin: 5px; border: none; cursor: pointer; border-radius: 5px; font-size: 16px; }
-          .back-btn { background-color: red; color: white; }
-          .next-btn { background-color: blue; color: white; }
-          .finish-btn { background-color: green; color: white; }
-          button:disabled { background-color: grey; cursor: not-allowed; }
-          #timer { font-size: 24px; margin-bottom: 20px; text-align: center; }
-          #confirm-modal { display: none; position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%); background: white; padding: 20px; border: 2px solid black; z-index: 1000; }
-          #confirm-modal button { margin: 0 10px; }
-          .question-box { padding: 10px; margin: 5px 0; }
-          .instruction { font-style: italic; color: #555; margin-bottom: 10px; font-size: 18px; }
-          .option-box.draggable { cursor: move; }
-          .option-box.dragging { opacity: 0.5; }
-          #question-container { background-color: white; padding: 20px; border-radius: 8px; box-shadow: 0 0 10px rgba(0, 0, 0, 0.1); width: calc(100% - 40px); margin: 0 auto 20px auto; box-sizing: border-box; }
-          #answers { margin-bottom: 20px; }
+          body { font-family: Arial, sans-serif; margin: 0; padding: 20px; }
+          h2 { font-size: 24px; margin-bottom: 20px; }
+          img { max-width: 100%; height: auto; margin-bottom: 20px; }
+          .options { display: flex; flex-direction: column; gap: 10px; }
+          label { display: flex; align-items: center; gap: 10px; font-size: 18px; }
+          input[type="checkbox"], input[type="text"] { margin: 0; }
+          input[type="text"] { padding: 5px; font-size: 16px; width: 100%; max-width: 300px; }
+          button { padding: 10px 20px; font-size: 18px; cursor: pointer; margin-top: 20px; border: none; border-radius: 5px; }
+          #next { background-color: #4CAF50; color: white; }
+          #next:hover { background-color: #45a049; }
+          #finish { background-color: #2196F3; color: white; }
+          #finish:hover { background-color: #1e88e5; }
+          #logout { background-color: #ef5350; color: white; position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%); width: 200px; }
+          .sortable { list-style-type: none; padding: 0; margin: 0; }
+          .sortable li { padding: 10px; background-color: #f0f0f0; margin-bottom: 5px; cursor: move; }
           @media (max-width: 600px) {
-            h1 { font-size: 28px; }
-            .progress-bar { flex-direction: column; }
-            .progress-circle { width: 20px; height: 20px; font-size: 10px; }
-            .progress-line { width: 5px; }
-            .progress-row { justify-content: center; gap: 2px; flex-wrap: wrap; }
-            .option-box { font-size: 18px; padding: 15px; }
-            button { font-size: 18px; padding: 15px; }
-            #timer { font-size: 20px; }
-            .question-box h2 { font-size: 20px; }
-          }
-          @media (min-width: 601px) {
-            .progress-bar { flex-direction: row; justify-content: center; }
-            .progress-circle { width: 40px; height: 40px; font-size: 14px; }
-            .progress-line { width: 5px; }
-            .progress-row { justify-content: space-around; }
+            body { padding: 10px; }
+            h2 { font-size: 20px; }
+            label { font-size: 16px; }
+            button { font-size: 16px; padding: 8px 16px; }
+            #logout { width: 90%; }
           }
         </style>
       </head>
       <body>
-        <h1>${testNames[testNumber].name}</h1>
-        <div id="timer">Залишилось часу: ${minutes} мм ${seconds} с</div>
-        <div class="progress-bar">
-  `;
-  if (progress.length <= 10) {
-    html += `
-      <div class="progress-row">
-        ${progress.map((p, j) => `
-          <div class="progress-circle ${p.answered ? 'answered' : 'unanswered'}">${p.number}</div>
-          ${j < progress.length - 1 ? '<div class="progress-line ' + (p.answered ? 'answered' : '') + '"></div>' : ''}
-        `).join('')}
-      </div>
-    `;
-  } else {
-    for (let i = 0; i < progress.length; i += 10) {
-      const rowCircles = progress.slice(i, i + 10);
-      html += `
-        <div class="progress-row">
-          ${rowCircles.map((p, j) => `
-            <div class="progress-circle ${p.answered ? 'answered' : 'unanswered'}">${p.number}</div>
-            ${j < rowCircles.length - 1 ? '<div class="progress-line ' + (p.answered ? 'answered' : '') + '"></div>' : ''}
-          `).join('')}
-        </div>
-      `;
-    }
-  }
-  html += `
-        </div>
-        <div id="question-container">
-  `;
-  if (q.picture) {
-    html += `<img src="${q.picture}" alt="Picture" onerror="this.src='/images/placeholder.png'; console.log('Image failed to load: ${q.picture}')"><br>`;
-  }
-
-  const instructionText = q.type === 'multiple' ? 'Виберіть усі правильні відповіді' :
-                         q.type === 'input' ? 'Введіть правильну відповідь' :
-                         q.type === 'ordering' ? 'Розташуйте відповіді у правильній послідовності' : '';
-  html += `
-          <div class="question-box">
-            <h2 id="question-text">${index + 1}. ${q.text}</h2>
-          </div>
-          <p id="instruction" class="instruction">${instructionText}</p>
-          <div id="answers">
-  `;
-
-  if (!q.options || q.options.length === 0) {
-    const userAnswer = answers[index] || '';
-    html += `
-      <input type="text" name="q${index}" id="q${index}_input" value="${userAnswer}" placeholder="Введіть відповідь" class="answer-option"><br>
-    `;
-  } else {
-    if (q.type === 'ordering') {
-      html += `
-        <div id="sortable-options">
-          ${(answers[index] || q.options).map((option, optIndex) => {
-            const escapedOption = option.replace(/'/g, "\\'").replace(/"/g, '\\"');
-            return `
-              <div class="option-box draggable" data-index="${optIndex}" data-value="${escapedOption}">
+        <h2>${question.text}</h2>
+        ${question.picture ? `<img src="${question.picture}" alt="Question Image">` : ''}
+        ${question.type === 'multiple' ? `
+          <div class="options">
+            ${question.options.map((option, i) => `
+              <label>
+                <input type="checkbox" name="answer" value="${option}">
                 ${option}
-              </div>
-            `;
-          }).join('')}
-        </div>
-      `;
-    } else {
-      q.options.forEach((option, optIndex) => {
-        const selected = selectedOptions.includes(option) ? 'selected' : '';
-        const escapedOption = option.replace(/'/g, "\\'").replace(/"/g, '\\"');
-        html += `
-          <div class="option-box ${selected}" data-value="${escapedOption}">
-            ${option}
+              </label>
+            `).join('')}
           </div>
-        `;
-      });
-    }
-  }
+        ` : question.type === 'input' ? `
+          <div class="options">
+            <input type="text" id="answerInput" placeholder="Введіть відповідь">
+          </div>
+        ` : question.type === 'ordering' ? `
+          <ul class="sortable">
+            ${question.options.map((option, i) => `
+              <li data-id="${i}">${option}</li>
+            `).join('')}
+          </ul>
+        ` : ''}
 
-  html += `
-          </div>
-        </div>
-        <div class="button-container">
-          <button class="back-btn" ${index === 0 ? 'disabled' : ''} onclick="window.location.href='/test/question?index=${index - 1}'">Назад</button>
-          <button id="submit-answer" class="next-btn" ${index === questions.length - 1 ? 'disabled' : ''} onclick="saveAndNext(${index})">Далі</button>
-          <button class="finish-btn" onclick="showConfirm(${index})">Завершити тест</button>
-        </div>
-        <div id="confirm-modal">
-          <h2>Ви дійсно бажаєте завершити тест?</h2>
-          <button onclick="finishTest(${index})">Так</button>
-          <button onclick="hideConfirm()">Ні</button>
-        </div>
+        <input type="hidden" id="csrfToken" value="${res.locals.csrfToken || 'undefined'}">
+        <button id="next" onclick="submitAnswer(${idx}, ${questions.length - 1})">Далі</button>
+        ${idx === questions.length - 1 ? `<button id="finish" onclick="submitAnswer(${idx}, ${questions.length - 1}, true)">Завершити тест</button>` : ''}
+        <button id="logout" onclick="logout()">Вийти</button>
+
         <script>
-          let startTime = ${startTime};
-          let timeLimit = ${timeLimit};
-          const timerElement = document.getElementById('timer');
+          let startTime = Date.now();
           let timeAway = 0;
-          let lastBlurTime = 0;
+          let lastFocus = Date.now();
           let switchCount = 0;
-          let lastActivityTime = Date.now();
           let activityCount = 0;
-          let lastMouseMoveTime = 0;
-          const debounceDelay = 100; // 100 миллисекунд
-          const questionStartTime = ${userTest.answerTimestamps[index] || Date.now()};
-          let selectedOptions = ${selectedOptionsString};
 
-          // Оновлення таймера кожну секунду
-          function updateTimer() {
-            const elapsedTime = Math.floor((Date.now() - startTime) / 1000);
-            const remainingTime = Math.max(0, Math.floor(timeLimit / 1000) - elapsedTime);
-            const minutes = Math.floor(remainingTime / 60).toString().padStart(2, '0');
-            const seconds = (remainingTime % 60).toString().padStart(2, '0');
-            timerElement.textContent = 'Залишилось часу: ' + minutes + ' мм ' + seconds + ' с';
-            if (remainingTime <= 0) {
-              window.location.href = '/result';
-            }
-          }
-          updateTimer();
-          setInterval(updateTimer, 1000);
-
-          window.addEventListener('blur', () => {
-            lastBlurTime = Date.now();
-            switchCount++;
-            console.log('Tab blurred, switch count:', switchCount);
-          });
-
-          window.addEventListener('focus', () => {
-            if (lastBlurTime) {
-              const timeSpentAway = Date.now() - lastBlurTime;
-              timeAway += timeSpentAway;
-              console.log('Tab focused, time away:', timeAway);
+          document.addEventListener('visibilitychange', () => {
+            if (document.hidden) {
+              lastFocus = Date.now();
+            } else {
+              timeAway += Date.now() - lastFocus;
+              switchCount++;
             }
           });
 
-          function debounceMouseMove() {
-            const now = Date.now();
-            if (now - lastMouseMoveTime >= debounceDelay) {
-              lastMouseMoveTime = now;
-              lastActivityTime = now;
-              activityCount++;
-              console.log('Mouse activity detected, count:', activityCount);
+          document.addEventListener('mousemove', () => activityCount++);
+          document.addEventListener('keydown', () => activityCount++);
+
+          async function submitAnswer(index, lastIndex, finish = false) {
+            const responseTime = Date.now() - startTime - timeAway;
+            let answer;
+            const csrfToken = document.getElementById('csrfToken').value;
+
+            if (${question.type === 'multiple'}) {
+              answer = Array.from(document.querySelectorAll('input[name="answer"]:checked')).map(input => input.value);
+            } else if (${question.type === 'input'}) {
+              answer = [document.getElementById('answerInput').value.trim()];
+            } else if (${question.type === 'ordering'}) {
+              const items = Array.from(document.querySelectorAll('.sortable li'));
+              answer = items.map(item => item.textContent.trim());
             }
-          }
 
-          document.addEventListener('mousemove', debounceMouseMove);
-
-          document.addEventListener('keydown', () => {
-            lastActivityTime = Date.now();
-            activityCount++;
-            console.log('Keyboard activity detected, count:', activityCount);
-          });
-
-          document.querySelectorAll('.option-box:not(.draggable)').forEach(box => {
-            box.addEventListener('click', () => {
-              const option = box.getAttribute('data-value');
-              const idx = selectedOptions.indexOf(option);
-              if (idx === -1) {
-                selectedOptions.push(option);
-                box.classList.add('selected');
-              } else {
-                selectedOptions.splice(idx, 1);
-                box.classList.remove('selected');
-              }
-              console.log('Selected options for question ${index}:', selectedOptions);
+            console.log('Submitting answer with CSRF token:', csrfToken);
+            const response = await fetch('/answer', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                index,
+                answer,
+                timeAway,
+                switchCount,
+                responseTime,
+                activityCount,
+                _csrf: csrfToken
+              })
             });
-          });
 
-          async function saveAndNext(index) {
-            console.log('Save and Next button clicked for index:', index);
-            try {
-              let answers = selectedOptions;
-              if (document.querySelector('input[name="q' + index + '"]')) {
-                answers = document.getElementById('q' + index + '_input').value;
-              } else if (document.getElementById('sortable-options')) {
-                answers = Array.from(document.querySelectorAll('#sortable-options .option-box')).map(el => el.dataset.value);
-              }
-              const responseTime = Date.now() - questionStartTime;
-              console.log('Sending answer with data:', { index, answers, timeAway, switchCount, responseTime, activityCount });
-              const response = await fetch('/answer', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ index, answer: answers, timeAway, switchCount, responseTime, activityCount, _csrf: "${res.locals.csrfToken}" })
-              });
-              const result = await response.json();
-              if (result.success) {
-                console.log('Answer saved successfully, redirecting to next question');
-                window.location.href = '/test/question?index=' + (index + 1);
-              } else {
-                console.error('Failed to save answer:', result);
-              }
-            } catch (error) {
-              console.error('Error in saveAndNext:', error);
-            }
-          }
-
-          function showConfirm(index) {
-            document.getElementById('confirm-modal').style.display = 'block';
-          }
-
-          function hideConfirm() {
-            document.getElementById('confirm-modal').style.display = 'none';
-          }
-
-          async function finishTest(index) {
-            console.log('Finish Test button clicked for index:', index);
-            try {
-              let answers = selectedOptions;
-              if (document.querySelector('input[name="q' + index + '"]')) {
-                answers = document.getElementById('q' + index + '_input').value;
-              } else if (document.getElementById('sortable-options')) {
-                answers = Array.from(document.querySelectorAll('#sortable-options .option-box')).map(el => el.dataset.value);
-              }
-              const responseTime = Date.now() - questionStartTime;
-              console.log('Finishing test with data:', { index, answers, timeAway, switchCount, responseTime, activityCount });
-              const response = await fetch('/answer', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ index, answer: answers, timeAway, switchCount, responseTime, activityCount, _csrf: "${res.locals.csrfToken}" })
-              });
-              const result = await response.json();
-              if (result.success) {
-                console.log('Answer saved successfully, redirecting to result');
-                hideConfirm();
+            const result = await response.json();
+            console.log('Server response:', result);
+            if (result.success) {
+              if (finish) {
                 window.location.href = '/result';
               } else {
-                console.error('Failed to save answer:', result);
+                window.location.href = '/test/question?index=' + (index + 1);
               }
-            } catch (error) {
-              console.error('Error in finishTest:', error);
+            } else {
+              alert('Помилка: ' + result.message);
             }
           }
 
-          const sortable = document.getElementById('sortable-options');
-          if (sortable) {
-            if (typeof Sortable === 'undefined') {
-              console.error('Sortable.js is not loaded');
+          async function logout() {
+            const csrfToken = document.getElementById('csrfToken').value;
+            const response = await fetch('/logout', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ _csrf: csrfToken })
+            });
+            const result = await response.json();
+            if (result.success) {
+              window.location.href = '/';
             } else {
-              new Sortable(sortable, {
-                animation: 150,
-                onStart: function(evt) {
-                  console.log('Drag started on:', evt.item.dataset.value);
-                },
-                onEnd: function(evt) {
-                  console.log('Drag ended:', evt.item.dataset.value, 'from index:', evt.oldIndex, 'to index:', evt.newIndex);
-                }
-              });
+              alert('Помилка при виході');
             }
-          } else {
-            console.log('Sortable options not found');
+          }
+
+          // Drag-and-drop для ordering
+          if (${question.type === 'ordering'}) {
+            const sortableList = document.querySelector('.sortable');
+            let draggedItem = null;
+
+            sortableList.addEventListener('dragstart', (e) => {
+              draggedItem = e.target;
+              setTimeout(() => draggedItem.style.display = 'none', 0);
+            });
+
+            sortableList.addEventListener('dragend', (e) => {
+              setTimeout(() => {
+                draggedItem.style.display = 'block';
+                draggedItem = null;
+              }, 0);
+            });
+
+            sortableList.addEventListener('dragover', (e) => e.preventDefault());
+
+            sortableList.addEventListener('dragenter', (e) => {
+              e.preventDefault();
+              if (e.target.classList.contains('sortable') || e.target.tagName === 'LI') {
+                e.target.classList.add('drag-over');
+              }
+            });
+
+            sortableList.addEventListener('dragleave', (e) => {
+              if (e.target.classList.contains('sortable') || e.target.tagName === 'LI') {
+                e.target.classList.remove('drag-over');
+              }
+            });
+
+            sortableList.addEventListener('drop', (e) => {
+              e.preventDefault();
+              const target = e.target.classList.contains('sortable') ? e.target : e.target.closest('li');
+              if (target && target !== draggedItem) {
+                const allItems = Array.from(sortableList.children);
+                const draggedIndex = allItems.indexOf(draggedItem);
+                const targetIndex = allItems.indexOf(target);
+                if (draggedIndex < targetIndex) {
+                  target.after(draggedItem);
+                } else {
+                  target.before(draggedItem);
+                }
+              }
+              sortableList.querySelectorAll('.drag-over').forEach(item => item.classList.remove('drag-over'));
+            });
           }
         </script>
       </body>
     </html>
-  `;
-  res.send(html);
+  `);
 });
 
 // Збереження відповіді на питання
