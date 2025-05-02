@@ -13,6 +13,8 @@ const crypto = require('crypto');
 
 const app = express();
 
+console.log('App.js loaded - Version 8');
+
 // Налаштування для хешування паролів
 const saltRounds = 10;
 
@@ -314,7 +316,7 @@ app.get('/api/test', (req, res) => {
 
 // Головна сторінка (форма входу)
 app.get('/', (req, res) => {
-  console.log('Rendering login page with CSRF token (Updated Version 2):', res.locals.csrfToken);
+  console.log('Rendering login page with CSRF token (Updated Version 3):', res.locals.csrfToken);
   res.send(`
     <!DOCTYPE html>
     <html lang="uk">
@@ -336,7 +338,7 @@ app.get('/', (req, res) => {
         </style>
       </head>
       <body>
-        <h1>Введіть пароль для входу (Updated Version 2)</h1>
+        <h1>Введіть пароль для входу (Updated Version 3)</h1>
         <input type="password" id="password" placeholder="Пароль">
         <br>
         <input type="hidden" id="csrfToken" value="${res.locals.csrfToken || 'undefined'}">
@@ -344,12 +346,12 @@ app.get('/', (req, res) => {
         <div id="error" class="error"></div>
 
         <script>
-          console.log('Login page loaded (Updated Version 2) with CSRF token:', document.getElementById('csrfToken').value);
+          console.log('Login page loaded (Updated Version 3) with CSRF token:', document.getElementById('csrfToken').value);
           async function login() {
-            console.log('Login function called (Updated Version 2)');
+            console.log('Login function called (Updated Version 3)');
             const password = document.getElementById('password').value;
             const csrfToken = document.getElementById('csrfToken').value;
-            console.log('CSRF Token being sent (Updated Version 2):', csrfToken);
+            console.log('CSRF Token being sent (Updated Version 3):', csrfToken);
             if (csrfToken === 'undefined') {
               document.getElementById('error').textContent = 'CSRF-токен відсутній. Оновіть сторінку.';
               return;
