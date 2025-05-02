@@ -15,6 +15,10 @@ const { body, validationResult } = require('express-validator');
 // Ініціалізація додатка
 const app = express();
 
+// Налаштування шаблонізатора
+app.set('view engine', 'ejs');
+app.set('views', path.join(__dirname, 'public'));
+
 // Конфігурація MongoDB
 const MONGO_URL = process.env.MONGO_URL || 'mongodb+srv://romanhaleckij7:DNMaH9w2X4gel3Xc@cluster0.r93r1p8.mongodb.net/testdb?retryWrites=true&w=majority';
 const client = new MongoClient(MONGO_URL, { connectTimeoutMS: 5000, serverSelectionTimeoutMS: 5000 });
@@ -94,7 +98,7 @@ app.use(session({
   resave: false,
   saveUninitialized: false,
   cookie: { 
-    secure: true, // Вимагає HTTPS
+    secure: process.env.NODE_ENV === 'production', // Увімкнути secure лише у продакшені
     httpOnly: true,
     sameSite: 'lax',
     maxAge: 24 * 60 * 60 * 1000
@@ -341,7 +345,7 @@ app.get('/api/test', (req, res) => {
 // Головна сторінка
 app.get('/', (req, res) => {
   console.log('Serving index.html');
-  res.sendFile(path.join(__dirname, 'public', 'index.html'));
+  res.render('index', { csrfToken: res.locals.csrfToken });
 });
 
 // Логування дій користувача

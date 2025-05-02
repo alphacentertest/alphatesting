@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html lang="uk">
+  <head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Введіть пароль</title>
+    <style>
+      body {
+        font-family: Arial, sans-serif;
+        text-align: center;
+        padding: 50px;
+      }
+      h1 {
+        font-size: 24px;
+        margin-bottom: 20px;
+      }
+      input[type="password"] {
+        padding: 10px;
+        font-size: 16px;
+        margin-bottom: 10px;
+        width: 200px;
+      }
+      button {
+        padding: 10px 20px;
+        font-size: 16px;
+        cursor: pointer;
+        background-color: #4CAF50;
+        color: white;
+        border: none;
+        border-radius: 5px;
+      }
+      button:hover {
+        background-color: #45a049;
+      }
+      .error {
+        color: red;
+        margin-top: 10px;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>Введіть пароль</h1>
+    <form id="login-form" method="POST" action="/login">
+      <input type="password" name="password" placeholder="Введіть пароль" required><br>
+      <input type="hidden" name="csrfToken" value="<%= csrfToken %>">
+      <button type="submit">Увійти</button>
+    </form>
+    <div id="error" class="error"></div>
+
+    <script>
+      document.getElementById('login-form').addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const formData = new FormData(e.target);
+        try {
+          const response = await fetch('/login', {
+            method: 'POST',
+            body: new URLSearchParams(formData).toString(),
+            headers: {
+              'Content-Type': 'application/x-www-form-urlencoded'
+            },
+            credentials: 'same-origin'
+          });
+          const result = await response.json();
+          if (result.success) {
+            window.location.href = result.redirect;
+          } else {
+            document.getElementById('error').textContent = result.message || 'Помилка входу';
+          }
+        } catch (error) {
+          document.getElementById('error').textContent = 'Помилка: ' + error.message;
+        }
+      });
+    </script>
+  </body>
+</html>
