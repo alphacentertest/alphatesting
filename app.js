@@ -466,19 +466,6 @@ app.get('/select-test', checkAuth, (req, res) => {
             });
             window.location.href = '/';
           }
-
-          // Логування при закритті вкладки
-          window.addEventListener('unload', async () => {
-            try {
-              await fetch('/logout', { 
-                method: 'POST',
-                keepalive: true,
-                credentials: 'same-origin'
-              });
-            } catch (error) {
-              console.error('Error during unload logout:', error);
-            }
-          });
         </script>
       </body>
     </html>
@@ -1075,19 +1062,6 @@ app.get('/test/question', checkAuth, (req, res) => {
           } else {
             console.log('Sortable options not found');
           }
-
-          // Логування при закритті вкладки
-          window.addEventListener('unload', async () => {
-            try {
-              await fetch('/logout', { 
-                method: 'POST',
-                keepalive: true,
-                credentials: 'same-origin'
-              });
-            } catch (error) {
-              console.error('Error during unload logout:', error);
-            }
-          });
         </script>
       </body>
     </html>
@@ -1280,19 +1254,6 @@ app.get('/result', checkAuth, async (req, res) => {
           document.getElementById('restart').addEventListener('click', () => {
             console.log('Restart button clicked');
             window.location.href = '/select-test';
-          });
-
-          // Логування при закритті вкладки
-          window.addEventListener('unload', async () => {
-            try {
-              await fetch('/logout', { 
-                method: 'POST',
-                keepalive: true,
-                credentials: 'same-origin'
-              });
-            } catch (error) {
-              console.error('Error during unload logout:', error);
-            }
           });
         </script>
       </body>
