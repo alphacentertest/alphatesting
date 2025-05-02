@@ -59,9 +59,32 @@ app.use(session({
       console.error('MongoStore client connection error:', err.message, err.stack);
       throw err;
     }),
-    // Додаємо логування для дебагінгу
+    // Додаємо дебаг-логування
     onError: (err) => {
       console.error('MongoStore error:', err.message, err.stack);
+    },
+    // Логуємо успішне збереження сесії
+    set: (sid, session, callback) => {
+      console.log(`MongoStore: Saving session ${sid} with data:`, session);
+      MongoStore.create({ mongoUrl: MONGO_URL }).set(sid, session, (err) => {
+        if (err) {
+          console.error(`MongoStore: Failed to save session ${sid}:`, err.message);
+        } else {
+          console.log(`MongoStore: Session ${sid} saved successfully`);
+        }
+        callback(err);
+      });
+    },
+    get: (sid, callback) => {
+      console.log(`MongoStore: Retrieving session ${sid}`);
+      MongoStore.create({ mongoUrl: MONGO_URL }).get(sid, (err, session) => {
+        if (err) {
+          console.error(`MongoStore: Failed to retrieve session ${sid}:`, err.message);
+        } else {
+          console.log(`MongoStore: Session ${sid} retrieved:`, session);
+        }
+        callback(err, session);
+      });
     }
   }),
   secret: process.env.SESSION_SECRET || 'a1b2c3d4e5f6g7h8i9j0k1l2m3n4o5p6q7r8s9t0',
@@ -315,20 +338,25 @@ app.post('/login', async (req, res) => {
     console.log('Session ID after setting user:', req.sessionID);
     console.log('Cookies after setting session:', req.cookies);
 
-    req.session.save(err => {
-      if (err) {
-        console.error('Error saving session in /login:', err.message, err.stack);
-        return res.status(500).json({ success: false, message: 'Помилка сервера' });
-      }
-      console.log('Session saved successfully');
-      if (user === 'admin') {
-        console.log('Redirecting to /admin for user:', user);
-        res.json({ success: true, redirect: '/admin' });
-      } else {
-        console.log('Redirecting to /select-test for user:', user);
-        res.json({ success: true, redirect: '/select-test' });
-      }
+    // Використовуємо Promise для коректного збереження сесії
+    await new Promise((resolve, reject) => {
+      req.session.save(err => {
+        if (err) {
+          console.error('Error saving session in /login:', err.message, err.stack);
+          return reject(err);
+        }
+        console.log('Session saved successfully');
+        resolve();
+      });
     });
+
+    if (user === 'admin') {
+      console.log('Redirecting to /admin for user:', user);
+      res.json({ success: true, redirect: '/admin' });
+    } else {
+      console.log('Redirecting to /select-test for user:', user);
+      res.json({ success: true, redirect: '/select-test' });
+    }
   } catch (error) {
     console.error('Ошибка в /login:', error.message, error.stack);
     res.status(500).json({ success: false, message: 'Помилка сервера' });
