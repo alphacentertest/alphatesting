@@ -23,7 +23,7 @@ beforeAll(async () => {
   // Підміна глобального db у додатку
   global.db = db;
 
-  // Створюємо фіктивний файл users.xlsx для тестів
+  // Створюємо фіктивний файл test-users.xlsx для тестів
   const workbook = new ExcelJS.Workbook();
   const sheet = workbook.addWorksheet('Users');
   sheet.columns = [
@@ -32,9 +32,9 @@ beforeAll(async () => {
   ];
   sheet.addRow({ username: 'User1', password: 'pass111' });
   sheet.addRow({ username: 'admin', password: 'passadmin' });
-  await workbook.xlsx.writeFile(path.join(__dirname, '../users.xlsx'));
+  await workbook.xlsx.writeFile(path.join(__dirname, '../test-users.xlsx'));
 
-  // Створюємо фіктивний файл questions1.xlsx
+  // Створюємо фіктивний файл test-questions1.xlsx
   const questionsWorkbook = new ExcelJS.Workbook();
   const questionSheet = questionsWorkbook.addWorksheet('Questions');
   questionSheet.columns = [
@@ -59,26 +59,29 @@ beforeAll(async () => {
     type: 'multiple',
     points: 2
   });
-  await questionsWorkbook.xlsx.writeFile(path.join(__dirname, '../questions1.xlsx'));
+  await questionsWorkbook.xlsx.writeFile(path.join(__dirname, '../test-questions1.xlsx'));
 
   // Запускаємо сервер
   server = app.listen(0); // Використовуємо випадковий порт
 });
 
 afterAll(async () => {
-  // Закриваємо сервер
-  await new Promise(resolve => server.close(resolve));
-  
-  // Очистка після тестів
-  await client.close();
-  await mongoServer.stop();
-  if (fs.existsSync(path.join(__dirname, '../users.xlsx'))) {
-    fs.unlinkSync(path.join(__dirname, '../users.xlsx'));
-  }
-  if (fs.existsSync(path.join(__dirname, '../questions1.xlsx'))) {
-    fs.unlinkSync(path.join(__dirname, '../questions1.xlsx'));
-  }
-});
+    // Закриваємо сервер
+    await new Promise(resolve => server.close(resolve));
+    
+    // Очистка після тестів
+    await client.close();
+    await mongoServer.stop();
+    // Видаляємо лише тестові файли
+    const usersFilePath = path.join(__dirname, '../test-users.xlsx');
+    const questionsFilePath = path.join(__dirname, '../test-questions1.xlsx');
+    if (fs.existsSync(usersFilePath)) {
+      fs.unlinkSync(usersFilePath);
+    }
+    if (fs.existsSync(questionsFilePath)) {
+      fs.unlinkSync(questionsFilePath);
+    }
+  });
 
 // Юніт-тести
 describe('Unit Tests', () => {
@@ -102,34 +105,22 @@ describe('Integration Tests', () => {
 
   beforeEach(async () => {
     agent = request.agent(server);
-    // Отримуємо CSRF-токен через спеціальний маршрут (не потрібно, оскільки CSRF відключений у тестовому режимі)
     await agent.get('/');
   });
 
   test('should fail login with invalid password', async () => {
     const response = await agent
       .post('/login')
-      .send({ password: 'wrongpass' }) // Видалили передачу csrfToken
+      .send({ password: 'wrongpass' })
       .set('Accept', 'application/json');
     expect(response.status).toBe(401);
-    expect(response.body).toEqual({ success: false, message: 'Невірний пароль' });
-  });
-
-  test('should fail login with invalid CSRF token', async () => {
-    // Цей тест більше не актуальний у тестовому режимі, оскільки CSRF відключений
-    // Але ми залишимо його для демонстрації
-    const response = await agent
-      .post('/login')
-      .send({ password: 'pass111', csrfToken: 'invalid-token' })
-      .set('Accept', 'application/json');
-    expect(response.status).toBe(401); // Очікуємо 401, оскільки CSRF відключений
     expect(response.body).toEqual({ success: false, message: 'Невірний пароль' });
   });
 
   test('should login successfully and redirect to /select-test', async () => {
     const response = await agent
       .post('/login')
-      .send({ password: 'pass111' }) // Видалили передачу csrfToken
+      .send({ password: 'pass111' })
       .set('Accept', 'application/json');
     expect(response.status).toBe(200);
     expect(response.body).toEqual({ success: true, redirect: '/select-test' });

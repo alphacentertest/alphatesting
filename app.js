@@ -151,16 +151,18 @@ app.get('/get-csrf-token', (req, res) => {
 
 // Завантаження користувачів із хешуванням паролів
 const loadUsers = () => {
-  const filePath = path.join(__dirname, 'users.xlsx');
+  const filePath = process.env.NODE_ENV === 'test'
+    ? path.join(__dirname, 'test-users.xlsx')
+    : path.join(__dirname, 'users.xlsx');
   console.log('Attempting to load users from:', filePath);
 
   if (!fs.existsSync(filePath)) {
-    throw new Error(`File users.xlsx not found at path: ${filePath}`);
+    throw new Error(`File ${path.basename(filePath)} not found at path: ${filePath}`);
   }
-  console.log('File users.xlsx exists at:', filePath);
+  console.log(`File ${path.basename(filePath)} exists at:`, filePath);
 
   const workbook = new ExcelJS.Workbook();
-  console.log('Reading users.xlsx file...');
+  console.log(`Reading ${path.basename(filePath)} file...`);
   return workbook.xlsx.readFile(filePath)
     .then(() => {
       console.log('File read successfully');
@@ -169,7 +171,7 @@ const loadUsers = () => {
         console.warn('Worksheet "Users" not found, trying "Sheet1"');
         sheet = workbook.getWorksheet('Sheet1');
         if (!sheet) {
-          console.error('Worksheet "Sheet1" not found in users.xlsx');
+          console.error('Worksheet "Sheet1" not found in', path.basename(filePath));
           throw new Error('Ни один из листов ("Users" или "Sheet1") не найден');
         }
       }
@@ -188,37 +190,39 @@ const loadUsers = () => {
         }
       });
       if (Object.keys(users).length === 0) {
-        console.error('No valid users found in users.xlsx');
+        console.error('No valid users found in', path.basename(filePath));
         throw new Error('Не найдено пользователей в файле');
       }
       console.log('Loaded users from Excel (passwords hashed):', Object.keys(users));
       return users;
     })
     .catch(error => {
-      console.error('Error loading users from users.xlsx:', error.message, error.stack);
+      console.error('Error loading users from', path.basename(filePath), ':', error.message, error.stack);
       throw error;
     });
 };
 
 // Завантаження питань (оптимізований синтаксис)
 const loadQuestions = (testNumber) => {
-  const filePath = path.join(__dirname, `questions${testNumber}.xlsx`);
+  const filePath = process.env.NODE_ENV === 'test'
+    ? path.join(__dirname, `test-questions${testNumber}.xlsx`)
+    : path.join(__dirname, `questions${testNumber}.xlsx`);
   console.log(`Attempting to load questions from: ${filePath}`);
   if (!fs.existsSync(filePath)) {
-    console.error(`File questions${testNumber}.xlsx not found at path: ${filePath}`);
-    throw new Error(`File questions${testNumber}.xlsx not found at path: ${filePath}`);
+    console.error(`File ${path.basename(filePath)} not found at path: ${filePath}`);
+    throw new Error(`File ${path.basename(filePath)} not found at path: ${filePath}`);
   }
-  console.log(`File questions${testNumber}.xlsx exists at: ${filePath}`);
+  console.log(`File ${path.basename(filePath)} exists at: ${filePath}`);
   
   const workbook = new ExcelJS.Workbook();
-  console.log(`Reading questions${testNumber}.xlsx file...`);
+  console.log(`Reading ${path.basename(filePath)} file...`);
   return workbook.xlsx.readFile(filePath)
     .then(() => {
       console.log('File read successfully');
       const sheet = workbook.getWorksheet('Questions');
       if (!sheet) {
-        console.error(`Worksheet "Questions" not found in questions${testNumber}.xlsx`);
-        throw new Error(`Лист "Questions" не знайдено в questions${testNumber}.xlsx`);
+        console.error(`Worksheet "Questions" not found in ${path.basename(filePath)}`);
+        throw new Error(`Лист "Questions" не знайдено в ${path.basename(filePath)}`);
       }
       console.log('Worksheet found:', sheet.name);
 
@@ -245,8 +249,8 @@ const loadQuestions = (testNumber) => {
       });
       console.log(`Loaded questions for test ${testNumber}:`, jsonData);
       if (jsonData.length === 0) {
-        console.error(`No questions loaded from questions${testNumber}.xlsx`);
-        throw new Error(`No questions found in questions${testNumber}.xlsx`);
+        console.error(`No questions loaded from ${path.basename(filePath)}`);
+        throw new Error(`No questions found in ${path.basename(filePath)}`);
       }
       return jsonData;
     })
@@ -2062,7 +2066,10 @@ if (process.env.NODE_ENV !== 'test') {
           });
         });
       } else {
-        process.exit(0);
+        sessionStore.close(() => {
+          console.log('MongoStore closed.');
+          process.exit(0);
+        });
       }
     });
   });
@@ -2079,7 +2086,10 @@ if (process.env.NODE_ENV !== 'test') {
           });
         });
       } else {
-        process.exit(0);
+        sessionStore.close(() => {
+          console.log('MongoStore closed.');
+          process.exit(0);
+        });
       }
     });
   });
