@@ -327,6 +327,7 @@ app.get('/', (req, res) => {
           input { padding: 10px; font-size: 18px; width: 200px; margin-bottom: 10px; }
           button { padding: 10px 20px; font-size: 18px; cursor: pointer; background-color: #4CAF50; color: white; border: none; border-radius: 5px; }
           button:hover { background-color: #45a049; }
+          .error { color: red; margin-top: 10px; }
           @media (max-width: 600px) {
             h1 { font-size: 20px; }
             input, button { font-size: 16px; width: 90%; padding: 8px; }
@@ -339,12 +340,17 @@ app.get('/', (req, res) => {
         <br>
         <input type="hidden" id="csrfToken" value="${res.locals.csrfToken || 'undefined'}">
         <button onclick="login()">Увійти</button>
+        <div id="error" class="error"></div>
 
         <script>
           async function login() {
             const password = document.getElementById('password').value;
             const csrfToken = document.getElementById('csrfToken').value;
             console.log('CSRF Token being sent:', csrfToken);
+            if (csrfToken === 'undefined') {
+              document.getElementById('error').textContent = 'CSRF-токен відсутній. Оновіть сторінку.';
+              return;
+            }
             const response = await fetch('/login', {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
@@ -354,7 +360,7 @@ app.get('/', (req, res) => {
             if (result.success) {
               window.location.href = result.redirect;
             } else {
-              alert('Помилка: ' + result.message);
+              document.getElementById('error').textContent = 'Помилка: ' + result.message;
             }
           }
 
