@@ -314,6 +314,7 @@ app.get('/api/test', (req, res) => {
 
 // Головна сторінка (форма входу)
 app.get('/', (req, res) => {
+  console.log('Rendering login page with CSRF token:', res.locals.csrfToken);
   res.send(`
     <!DOCTYPE html>
     <html lang="uk">
@@ -343,6 +344,7 @@ app.get('/', (req, res) => {
         <div id="error" class="error"></div>
 
         <script>
+          console.log('Login page loaded with CSRF token:', document.getElementById('csrfToken').value);
           async function login() {
             const password = document.getElementById('password').value;
             const csrfToken = document.getElementById('csrfToken').value;
