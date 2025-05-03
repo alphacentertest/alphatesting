@@ -59,10 +59,10 @@ const connectToMongoDB = (attempt = 1, maxAttempts = 3) => {
 // Глобальні змінні для ініціалізації
 let isInitialized = false;
 let initializationError = null;
-let testNames = { 
-  '1': { name: 'Тест 1', timeLimit: 3600 },
-  '2': { name: 'Тест 2', timeLimit: 3600 },
-  '3': { name: 'Тест 3', timeLimit: 3600 }
+let testNames = {
+  1: { name: 'Тест 1', timeLimit: 3600, randomOrder: false, questionLimit: null },
+  2: { name: 'Тест 2', timeLimit: 3600, randomOrder: false, questionLimit: null },
+  3: { name: 'Тест 3', timeLimit: 3600, randomOrder: false, questionLimit: null }
 };
 const userTests = new Map();
 
@@ -214,7 +214,7 @@ const loadUsers = () => {
 };
 
 // Завантаження питань (оптимізований синтаксис)
-const loadQuestions = (testNumber) => {
+const loadQuestions = (testNumber, userVariant) => {
   const filePath = process.env.NODE_ENV === 'test'
     ? path.join(__dirname, `test-questions${testNumber}.xlsx`)
     : path.join(__dirname, `questions${testNumber}.xlsx`);
@@ -247,6 +247,13 @@ const loadQuestions = (testNumber) => {
           const correctAnswers = rowValues.slice(14, 26).filter(Boolean).map(String);
           const type = String(rowValues[26] || 'multiple').toLowerCase();
           const points = Number(rowValues[27]) || 1;
+          const variant = String(rowValues[28] || '').trim(); // Стовпець 29 (індекс 28, оскільки rowValues починається з 0)
+
+          // Фільтруємо питання за варіантом
+          const variantMatch = variant === '' || variant === `Variant ${userVariant}`;
+          if (!variantMatch) {
+            return; // Пропускаємо питання, які не відповідають варіанту
+          }
 
           jsonData.push({
             picture: picture.match(/^Picture (\d+)/i) ? `/images/Picture ${picture.match(/^Picture (\d+)/i)[1]}.png` : null,
@@ -254,16 +261,35 @@ const loadQuestions = (testNumber) => {
             options,
             correctAnswers,
             type,
-            points
+            points,
+            variant
           });
         }
       });
-      console.log(`Loaded questions for test ${testNumber}:`, jsonData);
+      console.log(`Loaded questions for test ${testNumber} (variant ${userVariant}):`, jsonData);
+
       if (jsonData.length === 0) {
-        console.error(`No questions loaded from ${path.basename(filePath)}`);
-        throw new Error(`No questions found in ${path.basename(filePath)}`);
+        console.error(`No questions loaded from ${path.basename(filePath)} for variant ${userVariant}`);
+        throw new Error(`No questions found in ${path.basename(filePath)} for variant ${userVariant}`);
       }
-      return jsonData;
+
+      // Застосовуємо randomOrder і questionLimit
+      const testConfig = testNames[testNumber];
+      let finalQuestions = jsonData;
+
+      // Якщо увімкнений випадковий порядок, перемішуємо питання
+      if (testConfig.randomOrder) {
+        finalQuestions = finalQuestions.sort(() => Math.random() - 0.5);
+        console.log(`Shuffled questions for test ${testNumber}`);
+      }
+
+      // Якщо є обмеження на кількість питань, обрізаємо масив
+      if (testConfig.questionLimit && testConfig.questionLimit < finalQuestions.length) {
+        finalQuestions = finalQuestions.slice(0, testConfig.questionLimit);
+        console.log(`Limited questions to ${testConfig.questionLimit} for test ${testNumber}`);
+      }
+
+      return finalQuestions;
     })
     .catch(error => {
       console.error(`Ошибка в loadQuestions (test ${testNumber}):`, error.message, error.stack);
@@ -348,6 +374,13 @@ app.get('/api/test', (req, res) => {
   console.log('Handling /api/test request...');
   res.json({ success: true, message: 'Express server is working on /api/test' });
 });
+
+// Тестовий маршрут для отримання testVariant (тільки у тестовому режимі)
+if (process.env.NODE_ENV === 'test') {
+  app.get('/get-test-variant', (req, res) => {
+    res.json({ testVariant: req.session.testVariant || null });
+  });
+}
 
 // Головна сторінка
 app.get('/', (req, res) => {
@@ -701,19 +734,20 @@ const saveResult = (user, testNumber, score, totalPoints, startTime, endTime, to
 
 // Початок тесту
 app.get('/test', checkAuth, (req, res) => {
-  if (req.user === 'admin') return res.redirect('/admin');
   const testNumber = req.query.test;
-  console.log(`Processing /test request for testNumber: ${testNumber}, user: ${req.user}`);
-  if (!testNumber) {
-    console.warn('Test number not provided in query');
-    return res.status(400).send('Номер тесту не вказано');
-  }
-  if (!testNames[testNumber]) {
-    console.warn(`Test ${testNumber} not found`);
-    return res.status(404).send('Тест не знайдено');
+  if (!testNumber || !testNames[testNumber]) {
+    return res.status(400).send('Тест не знайдено');
   }
 
-  return loadQuestions(testNumber)
+  // Призначаємо випадковий варіант (1, 2 або 3) і зберігаємо у сесії
+  if (!req.session.testVariant) {
+    req.session.testVariant = Math.floor(Math.random() * 3) + 1;
+    console.log(`Assigned variant ${req.session.testVariant} to user ${req.session.user}`);
+  }
+
+  const userVariant = req.session.testVariant;
+
+  return loadQuestions(testNumber, userVariant)
     .then(questions => {
       userTests.set(req.user, {
         testNumber,
@@ -731,7 +765,7 @@ app.get('/test', checkAuth, (req, res) => {
     })
     .catch(error => {
       console.error('Ошибка в /test:', error.message, error.stack);
-      res.status(500).send('Помилка при завантаженні тесту: ' + error.message);
+      res.status(500).send('Помилка при завантаженні тесту');
     });
 });
 
@@ -1493,6 +1527,37 @@ app.get('/results', checkAuth, (req, res) => {
   res.send(resultsHtml);
 });
 
+app.post('/save-result', checkCsrfToken, checkAuth, (req, res) => {
+  const { testNumber, score, totalPoints, answers, scoresPerQuestion, duration, startTime, endTime, suspiciousActivity } = req.body;
+  console.log('Saving test result for user:', req.session.user);
+
+  const result = {
+    user: req.session.user,
+    testNumber,
+    variant: req.session.testVariant, // Зберігаємо варіант користувача
+    score,
+    totalPoints,
+    answers,
+    scoresPerQuestion,
+    duration,
+    startTime,
+    endTime,
+    suspiciousActivity
+  };
+
+  return db.collection('test_results').insertOne(result)
+    .then(() => {
+      console.log('Test result saved to MongoDB:', result);
+      // Очищаємо testVariant після завершення тесту
+      delete req.session.testVariant;
+      res.json({ success: true });
+    })
+    .catch(error => {
+      console.error('Ошибка при сохранении результата:', error.message, error.stack);
+      res.status(500).json({ success: false, message: 'Помилка при збереженні результату' });
+    });
+});
+
 // Адмін-панель
 app.get('/admin', checkAuth, checkAdmin, (req, res) => {
   console.log('Serving /admin for user:', req.user);
@@ -1622,6 +1687,7 @@ app.get('/admin/results', checkAuth, checkAdmin, (req, res) => {
               <tr>
                 <th>Користувач</th>
                 <th>Тест</th>
+                <th>Варіант</th>
                 <th>Очки</th>
                 <th>Максимум</th>
                 <th>Початок</th>
@@ -1634,7 +1700,7 @@ app.get('/admin/results', checkAuth, checkAdmin, (req, res) => {
               </tr>
       `;
       if (!results || results.length === 0) {
-        adminHtml += '<tr><td colspan="11">Немає результатів</td></tr>';
+        adminHtml += '<tr><td colspan="12">Немає результатів</td></tr>';
         console.log('No results found in test_results');
       } else {
         results.forEach((r, index) => {
@@ -1679,6 +1745,7 @@ app.get('/admin/results', checkAuth, checkAdmin, (req, res) => {
             <tr>
               <td>${r.user || 'N/A'}</td>
               <td>${testNames[r.testNumber]?.name || 'N/A'}</td>
+              <td>${r.variant || 'N/A'}</td>
               <td>${r.score || '0'}</td>
               <td>${r.totalPoints || '0'}</td>
               <td>${formatDateTime(r.startTime)}</td>
@@ -1776,68 +1843,28 @@ app.get('/admin/delete-results', checkAuth, checkAdmin, (req, res) => {
 // Редагування назв тестів
 app.get('/admin/edit-tests', checkAuth, checkAdmin, (req, res) => {
   console.log('Serving /admin/edit-tests for user:', req.user);
-  res.send(`
-    <!DOCTYPE html>
-    <html lang="uk">
-      <head>
-        <meta charset="UTF-8">
-        <title>Редагувати назви тестів</title>
-        <style>
-          body { font-size: 24px; margin: 20px; }
-          input { font-size: 24px; padding: 5px; margin: 5px; }
-          button { font-size: 24px; padding: 10px 20px; margin: 5px; }
-          .delete-btn { background-color: #ff4d4d; color: white; }
-          .test-row { display: flex; align-items: center; margin-bottom: 10px; }
-        </style>
-      </head>
-      <body>
-        <h1>Редагувати назви та час тестів</h1>
-        <form method="POST" action="/admin/edit-tests">
-          <input type="hidden" name="csrfToken" value="${res.locals.csrfToken}">
-          ${Object.entries(testNames).map(([num, data]) => `
-            <div class="test-row">
-              <label for="test${num}">Назва Тесту ${num}:</label>
-              <input type="text" id="test${num}" name="test${num}" value="${data.name}" required>
-              <label for="time${num}">Час (сек):</label>
-              <input type="number" id="time${num}" name="time${num}" value="${data.timeLimit}" required min="1">
-              <button type="button" class="delete-btn" onclick="deleteTest('${num}')">Видалити</button>
-            </div>
-          `).join('')}
-          <button type="submit">Зберегти</button>
-        </form>
-        <button onclick="window.location.href='/admin'">Повернутися до адмін-панелі</button>
-        <script>
-          async function deleteTest(testNumber) {
-            if (confirm('Ви впевнені, що хочете видалити Тест ' + testNumber + '?')) {
-              await fetch('/admin/delete-test', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ testNumber, csrfToken: "${res.locals.csrfToken}" }),
-                credentials: 'same-origin'
-              });
-              window.location.reload();
-            }
-          }
-        </script>
-      </body>
-    </html>
-  `);
+  res.render('edit-tests', { testNames: testNames, csrfToken: res.locals.csrfToken });
 });
 
 // Збереження змін у назвах тестів
 app.post('/admin/edit-tests', checkCsrfToken, checkAuth, checkAdmin, (req, res) => {
-  console.log('Updating test names and time limits...');
+  console.log('Updating test names, time limits, random order, and question limits...');
   Object.keys(testNames).forEach(num => {
     const testName = req.body[`test${num}`];
     const timeLimit = req.body[`time${num}`];
+    const randomOrder = req.body[`random${num}`] === 'on'; // Чекбокс повертає 'on', якщо увімкнений
+    const questionLimit = req.body[`limit${num}`] ? parseInt(req.body[`limit${num}`]) : null;
+
     if (testName && timeLimit) {
       testNames[num] = {
         name: testName,
-        timeLimit: parseInt(timeLimit) || testNames[num].timeLimit
+        timeLimit: parseInt(timeLimit) || testNames[num].timeLimit,
+        randomOrder: randomOrder,
+        questionLimit: questionLimit
       };
     }
   });
-  console.log('Updated test names and time limits:', testNames);
+  console.log('Updated test names, time limits, random order, and question limits:', testNames);
   res.send(`
     <!DOCTYPE html>
     <html lang="uk">
@@ -1846,7 +1873,7 @@ app.post('/admin/edit-tests', checkCsrfToken, checkAuth, checkAdmin, (req, res) 
         <title>Назви оновлено</title>
       </head>
       <body>
-        <h1>Назви та час тестів успішно оновлено</h1>
+        <h1>Назви, час, порядок та кількість питань тестів успішно оновлено</h1>
         <button onclick="window.location.href='/admin'">Повернутися до адмін-панелі</button>
       </body>
     </html>
