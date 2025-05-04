@@ -771,7 +771,7 @@ app.get('/test/question', checkAuth, (req, res) => {
 
           const leftColumn = document.getElementById('left-column');
           const rightColumn = document.getElementById('right-column');
-          if (leftColumn && rightColumn) {
+          if (leftColumn && rightColumn && '${q.type}' === 'matching') {
             new Sortable(leftColumn, {
               group: 'matching',
               animation: 150,
@@ -814,7 +814,7 @@ app.get('/test/question', checkAuth, (req, res) => {
                     const rightValue = item.dataset.value || '';
                     console.log('Dropped:', { leftValue, rightValue });
                     if (leftValue && rightValue) {
-                      item.innerHTML = \`${rightValue} <span class="matched"> (Зіставлено: ${leftValue})</span>\`;
+                      item.innerHTML = rightValue + ' <span class="matched"> (Зіставлено: ' + leftValue + ')</span>';
                       updateMatchingPairs();
                     } else {
                       console.warn('Missing leftValue or rightValue:', { leftValue, rightValue });
