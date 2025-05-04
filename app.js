@@ -26,24 +26,15 @@ app.set('views', path.join(__dirname, 'public'));
 const MONGO_URL = process.env.MONGO_URL || 'mongodb+srv://romanhaleckij7:DNMaH9w2X4gel3Xc@cluster0.r93r1p8.mongodb.net/testdb?retryWrites=true&w=majority';
 const client = new MongoClient(MONGO_URL, { connectTimeoutMS: 5000, serverSelectionTimeoutMS: 5000 });
 
-// Перевіряємо, чи db вже ініціалізований (для тестів)
-let db = global.db;
-
 // Підключення до MongoDB із повторними спробами
+let db;
 const connectToMongoDB = (attempt = 1, maxAttempts = 3) => {
-  // Якщо db вже ініціалізований (наприклад, у тестах), пропускаємо підключення
-  if (db) {
-    console.log('Using pre-initialized database (likely in test environment)');
-    return Promise.resolve();
-  }
-
   console.log(`Attempting to connect to MongoDB (Attempt ${attempt} of ${maxAttempts}) with URL:`, MONGO_URL);
   return client.connect()
     .then(() => {
       console.log('Connected to MongoDB successfully');
       db = client.db('testdb');
       console.log('Database initialized:', db.databaseName);
-      // Видалили перевірку sessionStore.ready
     })
     .catch(error => {
       console.error('Failed to connect to MongoDB:', error.message, error.stack);
@@ -59,10 +50,10 @@ const connectToMongoDB = (attempt = 1, maxAttempts = 3) => {
 // Глобальні змінні для ініціалізації
 let isInitialized = false;
 let initializationError = null;
-let testNames = {
-  1: { name: 'Тест 1', timeLimit: 3600, randomOrder: false, questionLimit: null },
-  2: { name: 'Тест 2', timeLimit: 3600, randomOrder: false, questionLimit: null },
-  3: { name: 'Тест 3', timeLimit: 3600, randomOrder: false, questionLimit: null }
+let testNames = { 
+  '1': { name: 'Тест 1', timeLimit: 3600 },
+  '2': { name: 'Тест 2', timeLimit: 3600 },
+  '3': { name: 'Тест 3', timeLimit: 3600 }
 };
 const userTests = new Map();
 
@@ -101,9 +92,9 @@ app.use(session({
   resave: false,
   saveUninitialized: false,
   cookie: { 
-    secure: process.env.NODE_ENV === 'production',
+    secure: true, // Для HTTPS на Heroku
     httpOnly: true,
-    sameSite: process.env.NODE_ENV === 'production' ? 'none' : 'lax',
+    sameSite: 'none', // Змінено для крос-доменних запитів
     maxAge: 24 * 60 * 60 * 1000
   }
 }));
@@ -123,11 +114,6 @@ app.use((req, res, next) => {
 
 // Middleware для перевірки CSRF-токена
 const checkCsrfToken = (req, res, next) => {
-  // Пропускаємо перевірку CSRF у тестовому режимі
-  if (process.env.NODE_ENV === 'test') {
-    return next();
-  }
-
   if (['POST', 'PUT', 'DELETE'].includes(req.method)) {
     const token = req.body.csrfToken || req.headers['x-csrf-token'];
     if (!token || token !== req.session.csrfToken) {
@@ -137,7 +123,7 @@ const checkCsrfToken = (req, res, next) => {
   next();
 };
 
-// Middleware для дебаг-логування сесій (видалено зайвий асинхронний синтаксис)
+// Middleware для дебаг-логування сесій
 app.use((req, res, next) => {
   console.log(`Session ID: ${req.sessionID}, Session data before request:`, req.session);
   const originalSave = req.session.save;
@@ -155,16 +141,9 @@ app.use((req, res, next) => {
   next();
 });
 
-// Маршрут для отримання CSRF-токена (використовується у тестах)
-app.get('/get-csrf-token', (req, res) => {
-  res.json({ csrfToken: req.session.csrfToken });
-});
-
 // Завантаження користувачів із хешуванням паролів
 const loadUsers = () => {
-  const filePath = process.env.NODE_ENV === 'test'
-    ? path.join(__dirname, 'test-users.xlsx')
-    : path.join(__dirname, 'users.xlsx');
+  const filePath = path.join(__dirname, 'users.xlsx');
   console.log('Attempting to load users from:', filePath);
 
   if (!fs.existsSync(filePath)) {
@@ -213,11 +192,9 @@ const loadUsers = () => {
     });
 };
 
-// Завантаження питань (оптимізований синтаксис)
-const loadQuestions = (testNumber, userVariant) => {
-  const filePath = process.env.NODE_ENV === 'test'
-    ? path.join(__dirname, `test-questions${testNumber}.xlsx`)
-    : path.join(__dirname, `questions${testNumber}.xlsx`);
+// Завантаження питань
+const loadQuestions = (testNumber) => {
+  const filePath = path.join(__dirname, `questions${testNumber}.xlsx`);
   console.log(`Attempting to load questions from: ${filePath}`);
   if (!fs.existsSync(filePath)) {
     console.error(`File ${path.basename(filePath)} not found at path: ${filePath}`);
@@ -247,13 +224,6 @@ const loadQuestions = (testNumber, userVariant) => {
           const correctAnswers = rowValues.slice(14, 26).filter(Boolean).map(String);
           const type = String(rowValues[26] || 'multiple').toLowerCase();
           const points = Number(rowValues[27]) || 1;
-          const variant = String(rowValues[28] || '').trim(); // Стовпець 29 (індекс 28, оскільки rowValues починається з 0)
-
-          // Фільтруємо питання за варіантом
-          const variantMatch = variant === '' || variant === `Variant ${userVariant}`;
-          if (!variantMatch) {
-            return; // Пропускаємо питання, які не відповідають варіанту
-          }
 
           jsonData.push({
             picture: picture.match(/^Picture (\d+)/i) ? `/images/Picture ${picture.match(/^Picture (\d+)/i)[1]}.png` : null,
@@ -261,35 +231,16 @@ const loadQuestions = (testNumber, userVariant) => {
             options,
             correctAnswers,
             type,
-            points,
-            variant
+            points
           });
         }
       });
-      console.log(`Loaded questions for test ${testNumber} (variant ${userVariant}):`, jsonData);
-
+      console.log(`Loaded questions for test ${testNumber}:`, jsonData);
       if (jsonData.length === 0) {
-        console.error(`No questions loaded from ${path.basename(filePath)} for variant ${userVariant}`);
-        throw new Error(`No questions found in ${path.basename(filePath)} for variant ${userVariant}`);
+        console.error(`No questions loaded from ${path.basename(filePath)}`);
+        throw new Error(`No questions found in ${path.basename(filePath)}`);
       }
-
-      // Застосовуємо randomOrder і questionLimit
-      const testConfig = testNames[testNumber];
-      let finalQuestions = jsonData;
-
-      // Якщо увімкнений випадковий порядок, перемішуємо питання
-      if (testConfig.randomOrder) {
-        finalQuestions = finalQuestions.sort(() => Math.random() - 0.5);
-        console.log(`Shuffled questions for test ${testNumber}`);
-      }
-
-      // Якщо є обмеження на кількість питань, обрізаємо масив
-      if (testConfig.questionLimit && testConfig.questionLimit < finalQuestions.length) {
-        finalQuestions = finalQuestions.slice(0, testConfig.questionLimit);
-        console.log(`Limited questions to ${testConfig.questionLimit} for test ${testNumber}`);
-      }
-
-      return finalQuestions;
+      return jsonData;
     })
     .catch(error => {
       console.error(`Ошибка в loadQuestions (test ${testNumber}):`, error.message, error.stack);
@@ -374,13 +325,6 @@ app.get('/api/test', (req, res) => {
   console.log('Handling /api/test request...');
   res.json({ success: true, message: 'Express server is working on /api/test' });
 });
-
-// Тестовий маршрут для отримання testVariant (тільки у тестовому режимі)
-if (process.env.NODE_ENV === 'test') {
-  app.get('/get-test-variant', (req, res) => {
-    res.json({ testVariant: req.session.testVariant || null });
-  });
-}
 
 // Головна сторінка
 app.get('/', (req, res) => {
@@ -734,20 +678,19 @@ const saveResult = (user, testNumber, score, totalPoints, startTime, endTime, to
 
 // Початок тесту
 app.get('/test', checkAuth, (req, res) => {
+  if (req.user === 'admin') return res.redirect('/admin');
   const testNumber = req.query.test;
-  if (!testNumber || !testNames[testNumber]) {
-    return res.status(400).send('Тест не знайдено');
+  console.log(`Processing /test request for testNumber: ${testNumber}, user: ${req.user}`);
+  if (!testNumber) {
+    console.warn('Test number not provided in query');
+    return res.status(400).send('Номер тесту не вказано');
+  }
+  if (!testNames[testNumber]) {
+    console.warn(`Test ${testNumber} not found`);
+    return res.status(404).send('Тест не знайдено');
   }
 
-  // Призначаємо випадковий варіант (1, 2 або 3) і зберігаємо у сесії
-  if (!req.session.testVariant) {
-    req.session.testVariant = Math.floor(Math.random() * 3) + 1;
-    console.log(`Assigned variant ${req.session.testVariant} to user ${req.session.user}`);
-  }
-
-  const userVariant = req.session.testVariant;
-
-  return loadQuestions(testNumber, userVariant)
+  return loadQuestions(testNumber)
     .then(questions => {
       userTests.set(req.user, {
         testNumber,
@@ -765,7 +708,7 @@ app.get('/test', checkAuth, (req, res) => {
     })
     .catch(error => {
       console.error('Ошибка в /test:', error.message, error.stack);
-      res.status(500).send('Помилка при завантаженні тесту');
+      res.status(500).send('Помилка при завантаженні тесту: ' + error.message);
     });
 });
 
@@ -1527,37 +1470,6 @@ app.get('/results', checkAuth, (req, res) => {
   res.send(resultsHtml);
 });
 
-app.post('/save-result', checkCsrfToken, checkAuth, (req, res) => {
-  const { testNumber, score, totalPoints, answers, scoresPerQuestion, duration, startTime, endTime, suspiciousActivity } = req.body;
-  console.log('Saving test result for user:', req.session.user);
-
-  const result = {
-    user: req.session.user,
-    testNumber,
-    variant: req.session.testVariant, // Зберігаємо варіант користувача
-    score,
-    totalPoints,
-    answers,
-    scoresPerQuestion,
-    duration,
-    startTime,
-    endTime,
-    suspiciousActivity
-  };
-
-  return db.collection('test_results').insertOne(result)
-    .then(() => {
-      console.log('Test result saved to MongoDB:', result);
-      // Очищаємо testVariant після завершення тесту
-      delete req.session.testVariant;
-      res.json({ success: true });
-    })
-    .catch(error => {
-      console.error('Ошибка при сохранении результата:', error.message, error.stack);
-      res.status(500).json({ success: false, message: 'Помилка при збереженні результату' });
-    });
-});
-
 // Адмін-панель
 app.get('/admin', checkAuth, checkAdmin, (req, res) => {
   console.log('Serving /admin for user:', req.user);
@@ -1687,7 +1599,6 @@ app.get('/admin/results', checkAuth, checkAdmin, (req, res) => {
               <tr>
                 <th>Користувач</th>
                 <th>Тест</th>
-                <th>Варіант</th>
                 <th>Очки</th>
                 <th>Максимум</th>
                 <th>Початок</th>
@@ -1700,7 +1611,7 @@ app.get('/admin/results', checkAuth, checkAdmin, (req, res) => {
               </tr>
       `;
       if (!results || results.length === 0) {
-        adminHtml += '<tr><td colspan="12">Немає результатів</td></tr>';
+        adminHtml += '<tr><td colspan="11">Немає результатів</td></tr>';
         console.log('No results found in test_results');
       } else {
         results.forEach((r, index) => {
@@ -1745,7 +1656,6 @@ app.get('/admin/results', checkAuth, checkAdmin, (req, res) => {
             <tr>
               <td>${r.user || 'N/A'}</td>
               <td>${testNames[r.testNumber]?.name || 'N/A'}</td>
-              <td>${r.variant || 'N/A'}</td>
               <td>${r.score || '0'}</td>
               <td>${r.totalPoints || '0'}</td>
               <td>${formatDateTime(r.startTime)}</td>
@@ -1843,28 +1753,68 @@ app.get('/admin/delete-results', checkAuth, checkAdmin, (req, res) => {
 // Редагування назв тестів
 app.get('/admin/edit-tests', checkAuth, checkAdmin, (req, res) => {
   console.log('Serving /admin/edit-tests for user:', req.user);
-  res.render('edit-tests', { testNames: testNames, csrfToken: res.locals.csrfToken });
+  res.send(`
+    <!DOCTYPE html>
+    <html lang="uk">
+      <head>
+        <meta charset="UTF-8">
+        <title>Редагувати назви тестів</title>
+        <style>
+          body { font-size: 24px; margin: 20px; }
+          input { font-size: 24px; padding: 5px; margin: 5px; }
+          button { font-size: 24px; padding: 10px 20px; margin: 5px; }
+          .delete-btn { background-color: #ff4d4d; color: white; }
+          .test-row { display: flex; align-items: center; margin-bottom: 10px; }
+        </style>
+      </head>
+      <body>
+        <h1>Редагувати назви та час тестів</h1>
+        <form method="POST" action="/admin/edit-tests">
+          <input type="hidden" name="csrfToken" value="${res.locals.csrfToken}">
+          ${Object.entries(testNames).map(([num, data]) => `
+            <div class="test-row">
+              <label for="test${num}">Назва Тесту ${num}:</label>
+              <input type="text" id="test${num}" name="test${num}" value="${data.name}" required>
+              <label for="time${num}">Час (сек):</label>
+              <input type="number" id="time${num}" name="time${num}" value="${data.timeLimit}" required min="1">
+              <button type="button" class="delete-btn" onclick="deleteTest('${num}')">Видалити</button>
+            </div>
+          `).join('')}
+          <button type="submit">Зберегти</button>
+        </form>
+        <button onclick="window.location.href='/admin'">Повернутися до адмін-панелі</button>
+        <script>
+          async function deleteTest(testNumber) {
+            if (confirm('Ви впевнені, що хочете видалити Тест ' + testNumber + '?')) {
+              await fetch('/admin/delete-test', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ testNumber, csrfToken: "${res.locals.csrfToken}" }),
+                credentials: 'same-origin'
+              });
+              window.location.reload();
+            }
+          }
+        </script>
+      </body>
+    </html>
+  `);
 });
 
 // Збереження змін у назвах тестів
 app.post('/admin/edit-tests', checkCsrfToken, checkAuth, checkAdmin, (req, res) => {
-  console.log('Updating test names, time limits, random order, and question limits...');
+  console.log('Updating test names and time limits...');
   Object.keys(testNames).forEach(num => {
     const testName = req.body[`test${num}`];
     const timeLimit = req.body[`time${num}`];
-    const randomOrder = req.body[`random${num}`] === 'on'; // Чекбокс повертає 'on', якщо увімкнений
-    const questionLimit = req.body[`limit${num}`] ? parseInt(req.body[`limit${num}`]) : null;
-
     if (testName && timeLimit) {
       testNames[num] = {
         name: testName,
-        timeLimit: parseInt(timeLimit) || testNames[num].timeLimit,
-        randomOrder: randomOrder,
-        questionLimit: questionLimit
+        timeLimit: parseInt(timeLimit) || testNames[num].timeLimit
       };
     }
   });
-  console.log('Updated test names, time limits, random order, and question limits:', testNames);
+  console.log('Updated test names and time limits:', testNames);
   res.send(`
     <!DOCTYPE html>
     <html lang="uk">
@@ -1873,7 +1823,7 @@ app.post('/admin/edit-tests', checkCsrfToken, checkAuth, checkAdmin, (req, res) 
         <title>Назви оновлено</title>
       </head>
       <body>
-        <h1>Назви, час, порядок та кількість питань тестів успішно оновлено</h1>
+        <h1>Назви та час тестів успішно оновлено</h1>
         <button onclick="window.location.href='/admin'">Повернутися до адмін-панелі</button>
       </body>
     </html>
@@ -2082,54 +2032,5 @@ app.post('/admin/delete-activity-log', checkCsrfToken, checkAuth, checkAdmin, (r
       res.status(500).json({ success: false, message: 'Помилка при видаленні записів журналу' });
     });
 });
-
-// Запуск сервера (тільки якщо не у тестовому режимі)
-if (process.env.NODE_ENV !== 'test') {
-  const PORT = process.env.PORT || 3000;
-  const server = app.listen(PORT, () => {
-    console.log(`Server is running on port ${PORT}`);
-  });
-
-  // Graceful shutdown
-  process.on('SIGTERM', () => {
-    console.log('Received SIGTERM. Performing graceful shutdown...');
-    server.close(() => {
-      if (client) {
-        client.close().then(() => {
-          console.log('MongoDB connection closed.');
-          sessionStore.close(() => {
-            console.log('MongoStore closed.');
-            process.exit(0);
-          });
-        });
-      } else {
-        sessionStore.close(() => {
-          console.log('MongoStore closed.');
-          process.exit(0);
-        });
-      }
-    });
-  });
-
-  process.on('SIGINT', () => {
-    console.log('Received SIGINT. Performing graceful shutdown...');
-    server.close(() => {
-      if (client) {
-        client.close().then(() => {
-          console.log('MongoDB connection closed.');
-          sessionStore.close(() => {
-            console.log('MongoStore closed.');
-            process.exit(0);
-          });
-        });
-      } else {
-        sessionStore.close(() => {
-          console.log('MongoStore closed.');
-          process.exit(0);
-        });
-      }
-    });
-  });
-}
 
 module.exports = app;
