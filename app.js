@@ -130,8 +130,8 @@ const loadQuestions = async (testNumber) => {
     sheet.eachRow({ includeEmpty: false }, (row, rowNumber) => {
       if (rowNumber > 1) {
         const rowValues = row.values.slice(1);
+        console.log(`Row ${rowNumber} raw values:`, rowValues); // Додаємо повне логування рядка
         let questionText = rowValues[1];
-        // Діагностика типу даних
         console.log(`Row ${rowNumber} question text raw value:`, questionText, typeof questionText);
         if (typeof questionText === 'object' && questionText !== null) {
           console.warn(`Invalid question text in row ${rowNumber}: ${JSON.stringify(questionText)}. Converting to string.`);
@@ -398,9 +398,9 @@ const saveResult = async (user, testNumber, score, totalPoints, startTime, endTi
       answers: Object.fromEntries(Object.entries(answers).sort((a, b) => parseInt(a[0]) - parseInt(b[0]))),
       scoresPerQuestion,
       suspiciousActivity,
-      variant: `Variant ${variant}` // Сохраняем вариант
+      variant: `Variant ${variant}`
     };
-    console.log('Saving result to MongoDB:', result);
+    console.log('Saving result to MongoDB with answers:', result.answers); // Додаємо логування
     if (!db) {
       throw new Error('MongoDB connection not established');
     }
@@ -855,6 +855,7 @@ app.post('/answer', checkAuth, (req, res) => {
     if (!userTest) {
       return res.status(400).json({ error: 'Тест не розпочато' });
     }
+    console.log(`Saving answer for question ${index}:`, answer); // Додаємо логування
     userTest.answers[index] = answer;
     userTest.suspiciousActivity = userTest.suspiciousActivity || { timeAway: 0, switchCount: 0, responseTimes: [], activityCounts: [] };
     userTest.suspiciousActivity.timeAway = (userTest.suspiciousActivity.timeAway || 0) + (timeAway || 0);
@@ -1297,12 +1298,12 @@ app.get('/admin/results', checkAuth, checkAdmin, async (req, res) => {
           answersArray[idx] = r.answers[key];
         });
       }
-      // Оновлюємо логіку відображення відповідей
+      console.log(`User ${r.user} answers:`, answersArray); // Додаємо логування для діагностики
       const answersDisplay = answersArray.length > 0
         ? answersArray.map((a, i) => {
             if (!a) return null;
             let userAnswer;
-            if (Array.isArray(a) && Array.isArray(a[0])) {
+            if (Array.isArray(a) && a.length > 0 && Array.isArray(a[0])) {
               // Для типу matching: відображаємо пари
               userAnswer = a.map(pair => `${pair[0]} -> ${pair[1]}`).join(', ');
             } else if (Array.isArray(a)) {
@@ -1313,7 +1314,7 @@ app.get('/admin/results', checkAuth, checkAdmin, async (req, res) => {
               userAnswer = a;
             }
             const questionScore = r.scoresPerQuestion[i] || 0;
-            return `Питання ${i + 1}: ${userAnswer.replace(/\\'/g, "'")} (${questionScore} балів)`;
+            return `Питання ${i + 1}: ${userAnswer ? userAnswer.replace(/\\'/g, "'") : 'Немає відповіді'} (${questionScore} балів)`;
           }).filter(line => line !== null).join('\n')
         : 'Немає відповідей';
       const formatDateTime = (isoString) => {
