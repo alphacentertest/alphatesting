@@ -791,7 +791,7 @@ app.get('/test/question', checkAuth, (req, res) => {
               matchingPairs = [];
               const rightItems = document.querySelectorAll('#right-column .droppable');
               rightItems.forEach(item => {
-                const rightValue = item.dataset.value;
+                const rightValue = item.dataset.value || '';
                 const matchedText = item.querySelector('.matched')?.textContent || '';
                 const leftMatch = matchedText.match(/Зіставлено: (.+)/)?.[1] || '';
                 if (leftMatch && rightValue) {
@@ -803,19 +803,27 @@ app.get('/test/question', checkAuth, (req, res) => {
 
             const droppableItems = document.querySelectorAll('.droppable');
             if (droppableItems.length > 0) {
+              console.log('Adding dragover and drop listeners to', droppableItems.length, 'droppable items');
               droppableItems.forEach(item => {
                 item.addEventListener('dragover', (e) => e.preventDefault());
                 item.addEventListener('drop', (e) => {
                   e.preventDefault();
                   const draggable = document.querySelector('.dragging');
                   if (draggable && draggable.classList.contains('draggable')) {
-                    const leftValue = draggable.dataset.value;
-                    const rightValue = item.dataset.value;
-                    item.innerHTML = \`${rightValue} <span class="matched"> (Зіставлено: \${leftValue})</span>\`;
-                    updateMatchingPairs();
+                    const leftValue = draggable.dataset.value || '';
+                    const rightValue = item.dataset.value || '';
+                    console.log('Dropped:', { leftValue, rightValue });
+                    if (leftValue && rightValue) {
+                      item.innerHTML = \`${rightValue} <span class="matched"> (Зіставлено: ${leftValue})</span>\`;
+                      updateMatchingPairs();
+                    } else {
+                      console.warn('Missing leftValue or rightValue:', { leftValue, rightValue });
+                    }
                   }
                 });
               });
+            } else {
+              console.warn('No droppable items found for matching question');
             }
           }
         </script>
