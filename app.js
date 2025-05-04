@@ -136,8 +136,8 @@ const loadQuestions = async (testNumber) => {
         const correctAnswers = rowValues.slice(14, 26).filter(Boolean).map(String);
         const type = String(rowValues[26] || 'multiple').toLowerCase();
         const points = Number(rowValues[27]) || 1;
-        const variant = String(rowValues[28] || '').trim(); // Столбец 29 (Variant)
-        jsonData.push({
+        const variant = String(rowValues[28] || '').trim();
+        let questionData = {
           picture: picture.match(/^Picture (\d+)/i) ? `/images/Picture ${picture.match(/^Picture (\d+)/i)[1]}.png` : null,
           text: questionText,
           options,
@@ -145,7 +145,16 @@ const loadQuestions = async (testNumber) => {
           type,
           points,
           variant
-        });
+        };
+        if (type === 'matching') {
+          // Для типу matching створюємо пари: options — ліва частина, correctAnswers — права частина
+          questionData.pairs = options.map((opt, idx) => ({
+            left: opt,
+            right: correctAnswers[idx] || ''
+          })).filter(pair => pair.left && pair.right);
+          questionData.correctPairs = questionData.pairs.map(pair => [pair.left, pair.right]);
+        }
+        jsonData.push(questionData);
       }
     });
     if (jsonData.length === 0) {
@@ -397,24 +406,23 @@ app.get('/test', checkAuth, async (req, res) => {
   }
   try {
     let questions = await loadQuestions(testNumber);
-    // Фильтрация вопросов по варианту
     const userVariant = req.session.testVariant;
     questions = questions.filter(q => !q.variant || q.variant === '' || q.variant === `Variant ${userVariant}`);
-    // Ограничение количества вопросов
     const questionLimit = testNames[testNumber].questionLimit;
     if (questionLimit && questions.length > questionLimit) {
       questions = shuffleArray([...questions]).slice(0, questionLimit);
     }
-    // Случайный порядок вопросов
     if (testNames[testNumber].randomQuestions) {
       questions = shuffleArray([...questions]);
     }
-    // Случайный порядок ответов
     if (testNames[testNumber].randomAnswers) {
       questions = questions.map(q => {
-        if (q.options && q.options.length > 0 && q.type !== 'ordering') {
+        if (q.options && q.options.length > 0 && q.type !== 'ordering' && q.type !== 'matching') {
           const shuffledOptions = shuffleArray([...q.options]);
           return { ...q, options: shuffledOptions };
+        } else if (q.type === 'matching' && q.pairs) {
+          const shuffledPairs = shuffleArray([...q.pairs]);
+          return { ...q, pairs: shuffledPairs };
         }
         return q;
       });
@@ -497,16 +505,22 @@ app.get('/test/question', checkAuth, (req, res) => {
           .option-box.dragging { opacity: 0.5; }
           #question-container { background-color: white; padding: 20px; border-radius: 8px; box-shadow: 0 0 10px rgba(0, 0, 0, 0.1); width: calc(100% - 40px); margin: 0 auto 20px auto; box-sizing: border-box; }
           #answers { margin-bottom: 20px; }
+          .matching-container { display: flex; justify-content: space-between; flex-wrap: wrap; }
+          .matching-column { width: 45%; }
+          .matching-item { border: 2px solid #ccc; padding: 10px; margin: 5px 0; border-radius: 5px; cursor: move; font-size: 16px; }
+          .matching-item.matched { background-color: #90ee90; }
           @media (max-width: 600px) {
             h1 { font-size: 28px; }
             .progress-bar { flex-direction: column; }
             .progress-circle { width: 20px; height: 20px; font-size: 10px; }
             .progress-line { width: 5px; }
             .progress-row { justify-content: center; gap: 2px; flex-wrap: wrap; }
-            .option-box { font-size: 18px; padding: 15px; }
+            .option-box, .matching-item { font-size: 18px; padding: 15px; }
             button { font-size: 18px; padding: 15px; }
             #timer { font-size: 20px; }
             .question-box h2 { font-size: 20px; }
+            .matching-container { flex-direction: column; }
+            .matching-column { width: 100%; }
           }
           @media (min-width: 601px) {
             .progress-bar { flex-direction: row; justify-content: center; }
@@ -552,7 +566,8 @@ app.get('/test/question', checkAuth, (req, res) => {
   }
   const instructionText = q.type === 'multiple' ? 'Виберіть усі правильні відповіді' :
                          q.type === 'input' ? 'Введіть правильну відповідь' :
-                         q.type === 'ordering' ? 'Розташуйте відповіді у правильній послідовності' : '';
+                         q.type === 'ordering' ? 'Розташуйте відповіді у правильній послідовності' :
+                         q.type === 'matching' ? 'Складіть правильні пари, перетягуючи елементи' : '';
   html += `
           <div class="question-box">
             <h2 id="question-text">${index + 1}. ${q.text}</h2>
@@ -560,7 +575,32 @@ app.get('/test/question', checkAuth, (req, res) => {
           <p id="instruction" class="instruction">${instructionText}</p>
           <div id="answers">
   `;
-  if (!q.options || q.options.length === 0) {
+  if (q.type === 'matching' && q.pairs) {
+    const leftItems = shuffleArray([...q.pairs.map(p => p.left)]);
+    const rightItems = shuffleArray([...q.pairs.map(p => p.right)]);
+    const userPairs = Array.isArray(answers[index]) ? answers[index] : [];
+    html += `
+      <div class="matching-container">
+        <div class="matching-column" id="left-column">
+          ${leftItems.map((item, idx) => {
+            const escapedItem = item.replace(/'/g, "\\'").replace(/"/g, '\\"');
+            return `<div class="matching-item draggable" data-value="${escapedItem}">${item}</div>`;
+          }).join('')}
+        </div>
+        <div class="matching-column" id="right-column">
+          ${rightItems.map((item, idx) => {
+            const escapedItem = item.replace(/'/g, "\\'").replace(/"/g, '\\"');
+            const matchedLeft = userPairs.find(pair => pair[1] === item)?.[0] || '';
+            return `
+              <div class="matching-item droppable" data-value="${escapedItem}">
+                ${item}${matchedLeft ? `<span class="matched"> (Зіставлено: ${matchedLeft})</span>` : ''}
+              </div>
+            `;
+          }).join('')}
+        </div>
+      </div>
+    `;
+  } else if (!q.options || q.options.length === 0) {
     const userAnswer = answers[index] || '';
     html += `
       <input type="text" name="q${index}" id="q${index}_input" value="${userAnswer}" placeholder="Введіть відповідь" class="answer-option"><br>
@@ -617,6 +657,7 @@ app.get('/test/question', checkAuth, (req, res) => {
           const debounceDelay = 100;
           const questionStartTime = ${userTest.answerTimestamps[index] || Date.now()};
           let selectedOptions = ${selectedOptionsString};
+          let matchingPairs = ${JSON.stringify(answers[index] || [])};
 
           function updateTimer() {
             const elapsedTime = Math.floor((Date.now() - startTime) / 1000);
@@ -678,6 +719,8 @@ app.get('/test/question', checkAuth, (req, res) => {
                 answers = document.getElementById('q' + index + '_input').value;
               } else if (document.getElementById('sortable-options')) {
                 answers = Array.from(document.querySelectorAll('#sortable-options .option-box')).map(el => el.dataset.value);
+              } else if (document.getElementById('left-column')) {
+                answers = matchingPairs;
               }
               const responseTime = Date.now() - questionStartTime;
               await fetch('/answer', {
@@ -706,6 +749,8 @@ app.get('/test/question', checkAuth, (req, res) => {
                 answers = document.getElementById('q' + index + '_input').value;
               } else if (document.getElementById('sortable-options')) {
                 answers = Array.from(document.querySelectorAll('#sortable-options .option-box')).map(el => el.dataset.value);
+              } else if (document.getElementById('left-column')) {
+                answers = matchingPairs;
               }
               const responseTime = Date.now() - questionStartTime;
               await fetch('/answer', {
@@ -722,6 +767,54 @@ app.get('/test/question', checkAuth, (req, res) => {
           const sortable = document.getElementById('sortable-options');
           if (sortable) {
             new Sortable(sortable, { animation: 150 });
+          }
+
+          const leftColumn = document.getElementById('left-column');
+          const rightColumn = document.getElementById('right-column');
+          if (leftColumn && rightColumn) {
+            new Sortable(leftColumn, {
+              group: 'matching',
+              animation: 150,
+              onEnd: function(evt) {
+                updateMatchingPairs();
+              }
+            });
+            new Sortable(rightColumn, {
+              group: 'matching',
+              animation: 150,
+              onEnd: function(evt) {
+                updateMatchingPairs();
+              }
+            });
+
+            function updateMatchingPairs() {
+              matchingPairs = [];
+              const rightItems = document.querySelectorAll('#right-column .droppable');
+              rightItems.forEach(rightItem => {
+                const rightValue = rightItem.dataset.value;
+                const leftMatch = rightItem.querySelector('.matched')?.textContent.match(/Зіставлено: (.+)/)?.[1] || '';
+                const leftItems = Array.from(document.querySelectorAll('#left-column .draggable')).map(el => el.dataset.value);
+                const leftValue = leftItems.find(item => item === leftMatch) || '';
+                if (leftValue && rightValue) {
+                  matchingPairs.push([leftValue, rightValue]);
+                }
+              });
+              console.log('Updated matching pairs:', matchingPairs);
+            }
+
+            document.querySelectorAll('.droppable').forEach(droppable => {
+              droppable.addEventListener('dragover', (e) => e.preventDefault());
+              droppable.addEventListener('drop', (e) => {
+                e.preventDefault();
+                const draggable = document.querySelector('.dragging');
+                if (draggable && draggable.classList.contains('draggable')) {
+                  const leftValue = draggable.dataset.value;
+                  const rightValue = droppable.dataset.value;
+                  droppable.innerHTML = \`${droppable.dataset.value} <span class="matched"> (Зіставлено: \${leftValue})</span>\`;
+                  updateMatchingPairs();
+                }
+              });
+            });
           }
         </script>
       </body>
@@ -783,6 +876,14 @@ app.get('/result', checkAuth, async (req, res) => {
       const userAnswers = userAnswer.map(val => String(val).trim().toLowerCase());
       const correctAnswers = q.correctAnswers.map(val => String(val).trim().toLowerCase());
       const isCorrect = userAnswers.join(',') === correctAnswers.join(',');
+      if (isCorrect) {
+        questionScore = q.points;
+      }
+    } else if (q.type === 'matching' && userAnswer && Array.isArray(userAnswer)) {
+      const userPairs = userAnswer.map(pair => [String(pair[0]).trim().toLowerCase(), String(pair[1]).trim().toLowerCase()]);
+      const correctPairs = q.correctPairs.map(pair => [String(pair[0]).trim().toLowerCase(), String(pair[1]).trim().toLowerCase()]);
+      const isCorrect = userPairs.length === correctPairs.length &&
+        userPairs.every(userPair => correctPairs.some(correctPair => userPair[0] === correctPair[0] && userPair[1] === correctPair[1]));
       if (isCorrect) {
         questionScore = q.points;
       }
@@ -945,6 +1046,13 @@ app.get('/results', checkAuth, async (req, res) => {
         if (userAnswers.join(',') === correctAnswers.join(',')) {
           questionScore = q.points;
         }
+      } else if (q.type === 'matching' && userAnswer && Array.isArray(userAnswer)) {
+        const userPairs = userAnswer.map(pair => [String(pair[0]).trim().toLowerCase(), String(pair[1]).trim().toLowerCase()]);
+        const correctPairs = q.correctPairs.map(pair => [String(pair[0]).trim().toLowerCase(), String(pair[1]).trim().toLowerCase()]);
+        if (userPairs.length === correctPairs.length &&
+            userPairs.every(userPair => correctPairs.some(correctPair => userPair[0] === correctPair[0] && userPair[1] === correctPair[1]))) {
+          questionScore = q.points;
+        }
       }
       return questionScore;
     });
@@ -985,12 +1093,13 @@ app.get('/results', checkAuth, async (req, res) => {
     `;
     questions.forEach((q, index) => {
       const userAnswer = answers[index] || 'Не відповіли';
-      const correctAnswer = q.correctAnswers.join(', ');
+      const correctAnswer = q.type === 'matching' ? q.correctPairs.map(pair => `${pair[0]} -> ${pair[1]}`).join(', ') : q.correctAnswers.join(', ');
       const questionScore = scoresPerQuestion[index];
+      const userAnswerDisplay = q.type === 'matching' && Array.isArray(userAnswer) ? userAnswer.map(pair => `${pair[0]} -> ${pair[1]}`).join(', ') : Array.isArray(userAnswer) ? userAnswer.join(', ') : userAnswer;
       resultsHtml += `
         <tr>
           <td>${q.text}</td>
-          <td>${Array.isArray(userAnswer) ? userAnswer.join(', ') : userAnswer}</td>
+          <td>${userAnswerDisplay}</td>
           <td>${correctAnswer}</td>
           <td>${questionScore} з ${q.points}</td>
         </tr>
@@ -1167,7 +1276,7 @@ app.get('/admin/results', checkAuth, checkAdmin, async (req, res) => {
       const answersDisplay = answersArray.length > 0
         ? answersArray.map((a, i) => {
             if (!a) return null;
-            const userAnswer = Array.isArray(a) ? a.join(', ') : a;
+            const userAnswer = Array.isArray(a) && Array.isArray(a[0]) ? a.map(pair => `${pair[0]} -> ${pair[1]}`).join(', ') : Array.isArray(a) ? a.join(', ') : a;
             const questionScore = r.scoresPerQuestion[i] || 0;
             return `Питання ${i + 1}: ${userAnswer.replace(/\\'/g, "'")} (${questionScore} балів)`;
           }).filter(line => line !== null).join('\n')
@@ -1199,7 +1308,7 @@ app.get('/admin/results', checkAuth, checkAdmin, async (req, res) => {
       adminHtml += `
         <tr>
           <td>${r.user || 'N/A'}</td>
-          <td>${testNames[r.testNumber]?.name || 'N/A'}</td>
+          < browsersync@2.27.10>td>${testNames[r.testNumber]?.name || 'N/A'}</td>
           <td>${r.variant || 'N/A'}</td>
           <td>${r.score || '0'}</td>
           <td>${r.totalPoints || '0'}</td>
