@@ -300,9 +300,6 @@ const initializeServer = () => {
     });
 };
 
-// Запуск ініціалізації сервера
-initializeServer();
-
 // Тестовий маршрут для перевірки MongoDB
 app.get('/test-mongo', (req, res) => {
   console.log('Testing MongoDB connection...');
@@ -394,7 +391,7 @@ app.post('/login', checkCsrfToken, validateLogin, (req, res) => {
         .then(() => {
           console.log('Session after setting user:', req.session);
           console.log('Session ID after setting user:', req.sessionID);
-          console.log('Cookies after setting session:', req.cookies);
+          console.log('Cookies after setting session:', req TOMOMcookies);
 
           return new Promise((resolve, reject) => {
             req.session.save(err => {
@@ -1068,6 +1065,7 @@ app.get('/test/question', checkAuth, (req, res) => {
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ index, answer: answers, timeAway, switchCount, responseTime, activityCount, csrfToken }),
                 credentials: 'same-origin'
+me-origin'
               });
               console.log('Response status:', response.status);
               if (response.status === 302 || response.redirected) {
@@ -1470,49 +1468,60 @@ app.get('/results', checkAuth, (req, res) => {
   res.send(resultsHtml);
 });
 
-// Запуск сервера
-const PORT = process.env.PORT || 3000;
-const server = app.listen(PORT, () => {
-  console.log(`Server is running on port ${PORT}`);
-});
+// Запуск сервера після ініціалізації
+const startServer = async () => {
+  try {
+    await initializeServer(); // Чекаємо завершення ініціалізації
+    const PORT = process.env.PORT || 3000;
+    const server = app.listen(PORT, () => {
+      console.log(`Server is running on port ${PORT}`);
+    });
 
-// Graceful shutdown для Heroku
-process.on('SIGTERM', () => {
-  console.log('Received SIGTERM. Performing graceful shutdown...');
-  server.close(() => {
-    if (client) {
-      client.close().then(() => {
-        console.log('MongoDB connection closed.');
-        sessionStore.close(() => {
-          console.log('MongoStore closed.');
-          process.exit(0);
-        });
+    // Graceful shutdown для Heroku
+    process.on('SIGTERM', () => {
+      console.log('Received SIGTERM. Performing graceful shutdown...');
+      server.close(() => {
+        if (client) {
+          client.close().then(() => {
+            console.log('MongoDB connection closed.');
+            sessionStore.close(() => {
+              console.log('MongoStore closed.');
+              process.exit(0);
+            });
+          });
+        } else {
+          sessionStore.close(() => {
+            console.log('MongoStore closed.');
+            process.exit(0);
+          });
+        }
       });
-    } else {
-      sessionStore.close(() => {
-        console.log('MongoStore closed.');
-        process.exit(0);
-      });
-    }
-  });
-});
+    });
 
-process.on('SIGINT', () => {
-  console.log('Received SIGINT. Performing graceful shutdown...');
-  server.close(() => {
-    if (client) {
-      client.close().then(() => {
-        console.log('MongoDB connection closed.');
-        sessionStore.close(() => {
-          console.log('MongoStore closed.');
-          process.exit(0);
-        });
+    process.on('SIGINT', () => {
+      console.log('Received SIGINT. Performing graceful shutdown...');
+      server.close(() => {
+        if (client) {
+          client.close().then(() => {
+            console.log('MongoDB connection closed.');
+            sessionStore.close(() => {
+              console.log('MongoStore closed.');
+              process.exit(0);
+            });
+          });
+        } else {
+          sessionStore.close(() => {
+            console.log('MongoStore closed.');
+            process.exit(0);
+          });
+        }
       });
-    } else {
-      sessionStore.close(() => {
-        console.log('MongoStore closed.');
-        process.exit(0);
-      });
-    }
-  });
-});
+    });
+  } catch (error) {
+    console.error('Failed to start server:', error);
+    process.exit(1);
+  }
+};
+
+// Викликаємо функцію запуску сервера
+startServer();
