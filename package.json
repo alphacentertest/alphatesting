@@ -21,15 +21,12 @@
   },
   "scripts": {
     "start": "node app.js",
-    "test": "jest",
     "clean": "rimraf node_modules package-lock.json && npm cache clean --force && npm install"
   },
   "devDependencies": {
     "@babel/preset-env": "^7.27.1",
-    "jest": "^29.7.0",
     "mongodb-memory-server": "^10.1.4",
-    "rimraf": "^6.0.1",
-    "supertest": "^7.1.0"
+    "rimraf": "^6.0.1"
   },
   "engines": {
     "node": "22.x",
