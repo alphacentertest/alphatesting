@@ -5,12 +5,12 @@ const path = require('path');
 const ExcelJS = require('exceljs');
 const session = require('express-session');
 const MongoStore = require('connect-mongo');
-const { MongoClient, ObjectId } = require('mongodb'); // Импортируем ObjectId
+const { MongoClient, ObjectId } = require('mongodb');
 const fs = require('fs');
 
 const app = express();
 
-// Подключение к MongoDB с повторными попытками
+// Подключение к MongoDB
 const MONGO_URL = process.env.MONGO_URL || 'mongodb+srv://romanhaleckij7:DNMaH9w2X4gel3Xc@cluster0.r93r1p8.mongodb.net/testdb?retryWrites=true&w=majority';
 const client = new MongoClient(MONGO_URL, { connectTimeoutMS: 5000, serverSelectionTimeoutMS: 5000 });
 let db;
@@ -35,10 +35,10 @@ const connectToMongoDB = async (attempt = 1, maxAttempts = 3) => {
 
 let isInitialized = false;
 let initializationError = null;
-let testNames = { 
-  '1': { name: 'Тест 1', timeLimit: 3600 },
-  '2': { name: 'Тест 2', timeLimit: 3600 },
-  '3': { name: 'Тест 3', timeLimit: 3600 }
+let testNames = {
+  '1': { name: 'Тест 1', timeLimit: 3600, randomQuestions: false, randomAnswers: false, questionLimit: null },
+  '2': { name: 'Тест 2', timeLimit: 3600, randomQuestions: false, randomAnswers: false, questionLimit: null },
+  '3': { name: 'Тест 3', timeLimit: 3600, randomQuestions: false, randomAnswers: false, questionLimit: null }
 };
 
 app.use(express.urlencoded({ extended: true }));
@@ -46,9 +46,8 @@ app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
 app.use(cookieParser());
 
-// Используем MongoStore для сессий
 app.use(session({
-  store: MongoStore.create({ 
+  store: MongoStore.create({
     mongoUrl: MONGO_URL,
     collectionName: 'sessions',
     ttl: 24 * 60 * 60,
@@ -63,7 +62,7 @@ app.use(session({
   secret: process.env.SESSION_SECRET || 'a1b2c3d4e5f6g7h8i9j0k1l2m3n4o5p6q7r8s9t0',
   resave: false,
   saveUninitialized: false,
-  cookie: { 
+  cookie: {
     secure: false,
     httpOnly: true,
     sameSite: 'lax',
@@ -75,28 +74,15 @@ const loadUsers = async () => {
   try {
     const filePath = path.join(__dirname, 'users.xlsx');
     console.log('Attempting to load users from:', filePath);
-
     if (!fs.existsSync(filePath)) {
       throw new Error(`File users.xlsx not found at path: ${filePath}`);
     }
-    console.log('File users.xlsx exists at:', filePath);
-
     const workbook = new ExcelJS.Workbook();
-    console.log('Reading users.xlsx file...');
     await workbook.xlsx.readFile(filePath);
-    console.log('File read successfully');
-
-    let sheet = workbook.getWorksheet('Users');
+    let sheet = workbook.getWorksheet('Users') || workbook.getWorksheet('Sheet1');
     if (!sheet) {
-      console.warn('Worksheet "Users" not found, trying "Sheet1"');
-      sheet = workbook.getWorksheet('Sheet1');
-      if (!sheet) {
-        console.error('Worksheet "Sheet1" not found in users.xlsx');
-        throw new Error('Ни один из листов ("Users" или "Sheet1") не найден');
-      }
+      throw new Error('Ни один из листов ("Users" или "Sheet1") не найден');
     }
-    console.log('Worksheet found:', sheet.name);
-
     const users = {};
     sheet.eachRow({ includeEmpty: false }, (row, rowNumber) => {
       if (rowNumber > 1) {
@@ -108,7 +94,6 @@ const loadUsers = async () => {
       }
     });
     if (Object.keys(users).length === 0) {
-      console.error('No valid users found in users.xlsx');
       throw new Error('Не найдено пользователей в файле');
     }
     console.log('Loaded users from Excel:', users);
@@ -119,28 +104,28 @@ const loadUsers = async () => {
   }
 };
 
+// Функция для случайного перемешивания массива (Fisher-Yates)
+const shuffleArray = (array) => {
+  for (let i = array.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [array[i], array[j]] = [array[j], array[i]];
+  }
+  return array;
+};
+
 const loadQuestions = async (testNumber) => {
   try {
     const filePath = path.join(__dirname, `questions${testNumber}.xlsx`);
     console.log(`Attempting to load questions from: ${filePath}`);
     if (!fs.existsSync(filePath)) {
-      console.error(`File questions${testNumber}.xlsx not found at path: ${filePath}`);
       throw new Error(`File questions${testNumber}.xlsx not found at path: ${filePath}`);
     }
-    console.log(`File questions${testNumber}.xlsx exists at: ${filePath}`);
-    
     const workbook = new ExcelJS.Workbook();
-    console.log(`Reading questions${testNumber}.xlsx file...`);
     await workbook.xlsx.readFile(filePath);
-    console.log('File read successfully');
-
     const sheet = workbook.getWorksheet('Questions');
     if (!sheet) {
-      console.error(`Worksheet "Questions" not found in questions${testNumber}.xlsx`);
       throw new Error(`Лист "Questions" не знайдено в questions${testNumber}.xlsx`);
     }
-    console.log('Worksheet found:', sheet.name);
-
     const jsonData = [];
     sheet.eachRow({ includeEmpty: false }, (row, rowNumber) => {
       if (rowNumber > 1) {
@@ -151,22 +136,22 @@ const loadQuestions = async (testNumber) => {
         const correctAnswers = rowValues.slice(14, 26).filter(Boolean).map(String);
         const type = String(rowValues[26] || 'multiple').toLowerCase();
         const points = Number(rowValues[27]) || 1;
-
+        const variant = String(rowValues[28] || '').trim(); // Столбец 29 (Variant)
         jsonData.push({
           picture: picture.match(/^Picture (\d+)/i) ? `/images/Picture ${picture.match(/^Picture (\d+)/i)[1]}.png` : null,
           text: questionText,
           options,
           correctAnswers,
           type,
-          points
+          points,
+          variant
         });
       }
     });
-    console.log(`Loaded questions for test ${testNumber}:`, jsonData);
     if (jsonData.length === 0) {
-      console.error(`No questions loaded from questions${testNumber}.xlsx`);
       throw new Error(`No questions found in questions${testNumber}.xlsx`);
     }
+    console.log(`Loaded questions for test ${testNumber}:`, jsonData);
     return jsonData;
   } catch (error) {
     console.error(`Ошибка в loadQuestions (test ${testNumber}):`, error.message, error.stack);
@@ -189,15 +174,11 @@ const ensureInitialized = (req, res, next) => {
 const initializeServer = async () => {
   let attempt = 1;
   const maxAttempts = 5;
-
-  // Инициализация MongoDB
   try {
     await connectToMongoDB();
   } catch (error) {
-    console.error('Failed to initialize server due to MongoDB connection error:', error.message, error.stack);
     throw error;
   }
-
   while (attempt <= maxAttempts) {
     try {
       console.log(`Starting server initialization (Attempt ${attempt} of ${maxAttempts})...`);
@@ -230,15 +211,12 @@ const initializeServer = async () => {
   }
 })();
 
-// Тестовый маршрут для проверки MongoDB
 app.get('/test-mongo', async (req, res) => {
   try {
-    console.log('Testing MongoDB connection...');
     if (!db) {
       throw new Error('MongoDB connection not established');
     }
     await db.collection('users').findOne();
-    console.log('MongoDB test successful');
     res.json({ success: true, message: 'MongoDB connection successful' });
   } catch (error) {
     console.error('MongoDB test failed:', error.message, error.stack);
@@ -246,7 +224,6 @@ app.get('/test-mongo', async (req, res) => {
   }
 });
 
-// Тестовый маршрут с префиксом /api
 app.get('/api/test', (req, res) => {
   console.log('Handling /api/test request...');
   res.json({ success: true, message: 'Express server is working on /api/test' });
@@ -257,12 +234,10 @@ app.get('/', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
 
-// Функция для логирования действий
 const logActivity = async (user, action) => {
   try {
     const timestamp = new Date();
-    // Добавляем смещение +3 часа (UTC+3)
-    const timeOffset = 3 * 60 * 60 * 1000; // 3 часа в миллисекундах
+    const timeOffset = 3 * 60 * 60 * 1000;
     const adjustedTimestamp = new Date(timestamp.getTime() + timeOffset);
     await db.collection('activity_log').insertOne({
       user,
@@ -277,45 +252,27 @@ const logActivity = async (user, action) => {
 
 app.post('/login', async (req, res) => {
   try {
-    console.log('Handling /login request...');
     const { password } = req.body;
     if (!password) {
-      console.warn('Password not provided in /login request');
       return res.status(400).json({ success: false, message: 'Пароль не вказано' });
     }
-
-    console.log('Loading users from Excel for authentication...');
     const validPasswords = await loadUsers();
-    console.log('Checking password:', password, 'against validPasswords:', validPasswords);
-    
-    const user = Object.keys(validPasswords).find(u => {
-      const match = validPasswords[u] === password;
-      console.log(`Comparing ${u}: ${validPasswords[u]} with ${password} -> ${match}`);
-      return match;
-    });
-
+    const user = Object.keys(validPasswords).find(u => validPasswords[u] === password);
     if (!user) {
-      console.warn('Password not found in validPasswords');
       return res.status(401).json({ success: false, message: 'Невірний пароль' });
     }
-
     req.session.user = user;
-    await logActivity(user, 'увійшов на сайт'); // Ждём завершения логирования
-    console.log('Session after setting user:', req.session);
-    console.log('Session ID after setting user:', req.sessionID);
-    console.log('Cookies after setting session:', req.cookies);
-
+    req.session.testVariant = Math.floor(Math.random() * 3) + 1; // Случайный выбор варианта (1, 2 или 3)
+    console.log(`Assigned variant ${req.session.testVariant} to user ${user}`);
+    await logActivity(user, 'увійшов на сайт');
     req.session.save(err => {
       if (err) {
         console.error('Error saving session in /login:', err.message, err.stack);
         return res.status(500).json({ success: false, message: 'Помилка сервера' });
       }
-      console.log('Session saved successfully');
       if (user === 'admin') {
-        console.log('Redirecting to /admin for user:', user);
         res.json({ success: true, redirect: '/admin' });
       } else {
-        console.log('Redirecting to /select-test for user:', user);
         res.json({ success: true, redirect: '/select-test' });
       }
     });
@@ -326,13 +283,8 @@ app.post('/login', async (req, res) => {
 });
 
 const checkAuth = (req, res, next) => {
-  console.log('checkAuth: Session data:', req.session);
-  console.log('checkAuth: Cookies:', req.cookies);
-  console.log('checkAuth: Session ID:', req.sessionID);
   const user = req.session.user;
-  console.log('checkAuth: user from session:', user);
   if (!user) {
-    console.log('checkAuth: No valid auth, redirecting to /');
     return res.redirect('/');
   }
   req.user = user;
@@ -341,9 +293,7 @@ const checkAuth = (req, res, next) => {
 
 const checkAdmin = (req, res, next) => {
   const user = req.session.user;
-  console.log('checkAdmin: user from session:', user);
   if (user !== 'admin') {
-    console.log('checkAdmin: Not admin, returning 403');
     return res.status(403).send('Доступно тільки для адміністратора (403 Forbidden)');
   }
   next();
@@ -351,7 +301,6 @@ const checkAdmin = (req, res, next) => {
 
 app.get('/select-test', checkAuth, (req, res) => {
   if (req.user === 'admin') return res.redirect('/admin');
-  console.log('Serving /select-test for user:', req.user);
   res.send(`
     <!DOCTYPE html>
     <html lang="uk">
@@ -360,57 +309,16 @@ app.get('/select-test', checkAuth, (req, res) => {
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
         <title>Вибір тесту</title>
         <style>
-          body { 
-            font-family: Arial, sans-serif; 
-            text-align: center; 
-            padding: 20px; 
-            padding-bottom: 80px;
-            margin: 0; 
-          }
-          h1 { 
-            font-size: 24px; 
-            margin-bottom: 20px; 
-          }
-          .test-buttons { 
-            display: flex; 
-            flex-direction: column; 
-            align-items: center; 
-            gap: 10px; 
-          }
-          button { 
-            padding: 10px; 
-            font-size: 18px; 
-            cursor: pointer; 
-            width: 200px; 
-            border: none; 
-            border-radius: 5px; 
-            background-color: #4CAF50; 
-            color: white; 
-          }
-          button:hover { 
-            background-color: #45a049; 
-          }
-          #logout { 
-            background-color: #ef5350; 
-            color: white; 
-            position: fixed; 
-            bottom: 20px; 
-            left: 50%; 
-            transform: translateX(-50%); 
-            width: 200px; 
-          }
+          body { font-family: Arial, sans-serif; text-align: center; padding: 20px; padding-bottom: 80px; margin: 0; }
+          h1 { font-size: 24px; margin-bottom: 20px; }
+          .test-buttons { display: flex; flex-direction: column; align-items: center; gap: 10px; }
+          button { padding: 10px; font-size: 18px; cursor: pointer; width: 200px; border: none; border-radius: 5px; background-color: #4CAF50; color: white; }
+          button:hover { background-color: #45a049; }
+          #logout { background-color: #ef5350; color: white; position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%); width: 200px; }
           @media (max-width: 600px) {
-            h1 { 
-              font-size: 28px; 
-            }
-            button { 
-              font-size: 20px; 
-              width: 90%; 
-              padding: 15px; 
-            }
-            #logout { 
-              width: 90%; 
-            }
+            h1 { font-size: 28px; }
+            button { font-size: 20px; width: 90%; padding: 15px; }
+            #logout { width: 90%; }
           }
         </style>
       </head>
@@ -433,7 +341,6 @@ app.get('/select-test', checkAuth, (req, res) => {
   `);
 });
 
-// Добавим маршрут для выхода
 app.post('/logout', (req, res) => {
   req.session.destroy(err => {
     if (err) {
@@ -446,116 +353,17 @@ app.post('/logout', (req, res) => {
 
 const userTests = new Map();
 
-const saveResult = async (user, testNumber, score, totalPoints, startTime, endTime, totalClicks, correctClicks, totalQuestions, percentage) => {
+const saveResult = async (user, testNumber, score, totalPoints, startTime, endTime, totalClicks, correctClicks, totalQuestions, percentage, suspiciousActivity, answers, scoresPerQuestion, variant) => {
   try {
-    console.log('Starting saveResult for user:', user, 'testNumber:', testNumber);
     const duration = Math.round((endTime - startTime) / 1000);
-    const userTest = userTests.get(user);
-    console.log('User test data:', userTest);
-    const answers = userTest ? userTest.answers : {};
-    const questions = userTest ? userTest.questions : [];
-    const suspiciousActivity = userTest ? userTest.suspiciousActivity : { timeAway: 0, switchCount: 0, responseTimes: [], activityCounts: [] };
-    console.log('Answers:', answers, 'Questions:', questions);
-    console.log('Suspicious activity:', suspiciousActivity);
-
-    const scoresPerQuestion = questions.map((q, index) => {
-      const userAnswer = answers[index];
-      let questionScore = 0;
-      if (q.type === 'multiple' && userAnswer && Array.isArray(userAnswer)) {
-        const correctAnswers = q.correctAnswers.map(val => String(val).trim().toLowerCase());
-        const userAnswers = userAnswer.map(val => String(val).trim().toLowerCase().replace(/\\'/g, "'"));
-        const isCorrect = correctAnswers.length === userAnswers.length &&
-          correctAnswers.every(val => userAnswers.includes(val)) &&
-          userAnswers.every(val => correctAnswers.includes(val));
-        console.log(`Question ${index + 1} (multiple): userAnswer=${userAnswers}, correctAnswer=${correctAnswers}, isCorrect=${isCorrect}`);
-        if (isCorrect) {
-          questionScore = q.points;
-        }
-      } else if (q.type === 'input' && userAnswer) {
-        const normalizedUserAnswer = String(userAnswer).trim().toLowerCase().replace(/\s+/g, '').replace(',', '.');
-        const normalizedCorrectAnswer = String(q.correctAnswers[0]).trim().toLowerCase().replace(/\s+/g, '').replace(',', '.');
-        const isCorrect = normalizedUserAnswer === normalizedCorrectAnswer;
-        console.log(`Question ${index + 1} (input): userAnswer=${normalizedUserAnswer}, correctAnswer=${normalizedCorrectAnswer}, isCorrect=${isCorrect}`);
-        if (isCorrect) {
-          questionScore = q.points;
-        }
-      } else if (q.type === 'ordering' && userAnswer && Array.isArray(userAnswer)) {
-        const userAnswers = userAnswer.map(val => String(val).trim().toLowerCase());
-        const correctAnswers = q.correctAnswers.map(val => String(val).trim().toLowerCase());
-        const isCorrect = userAnswers.join(',') === correctAnswers.join(',');
-        console.log(`Question ${index + 1} (ordering): userAnswer=${userAnswers}, correctAnswer=${correctAnswers}, isCorrect=${isCorrect}`);
-        if (isCorrect) {
-          questionScore = q.points;
-        }
-      }
-      return questionScore;
-    });
-
-    const calculatedScore = scoresPerQuestion.reduce((sum, s) => sum + s, 0);
-    console.log(`Calculated score: ${calculatedScore}, Provided score: ${score}`);
-
-    let suspiciousScore = 0;
-    const timeAwayPercent = suspiciousActivity.timeAway ? 
-      Math.round((suspiciousActivity.timeAway / (duration * 1000)) * 100) : 0;
-    suspiciousScore += timeAwayPercent;
-
-    const switchCount = suspiciousActivity.switchCount || 0;
-    if (switchCount > totalQuestions * 2) {
-      suspiciousScore += 20;
-    }
-
-    const responseTimes = suspiciousActivity.responseTimes || [];
-    const avgResponseTime = responseTimes.length > 0 ? 
-      (responseTimes.reduce((sum, time) => sum + (time || 0), 0) / responseTimes.length / 1000).toFixed(2) : 0;
-    responseTimes.forEach(time => {
-      if (time < 5000) {
-        suspiciousScore += 10;
-      } else if (time > 5 * 60 * 1000) {
-        suspiciousScore += 10;
-      }
-    });
-
-    const activityCounts = suspiciousActivity.activityCounts || [];
-    const avgActivityCount = activityCounts.length > 0 ? 
-      (activityCounts.reduce((sum, count) => sum + (count || 0), 0) / activityCounts.length).toFixed(2) : 0;
-    activityCounts.forEach((count, idx) => {
-      if (count < 5 && responseTimes[idx] > 30 * 1000) {
-        suspiciousScore += 10;
-      }
-    });
-
-    let typicalResponseTime = 30 * 1000;
-    let typicalSwitchCount = totalQuestions;
-    try {
-      const allResults = await db.collection('test_results').find({}).toArray();
-      if (allResults.length > 0) {
-        const allResponseTimes = allResults.flatMap(r => r.suspiciousActivity.responseTimes || []);
-        typicalResponseTime = allResponseTimes.length > 0 ? 
-          allResponseTimes.reduce((sum, time) => sum + (time || 0), 0) / allResponseTimes.length : typicalResponseTime;
-        const allSwitchCounts = allResults.map(r => r.suspiciousActivity.switchCount || 0);
-        typicalSwitchCount = allSwitchCounts.length > 0 ? 
-          allSwitchCounts.reduce((sum, count) => sum + count, 0) / allSwitchCounts.length : typicalSwitchCount;
-      }
-    } catch (error) {
-      console.error('Error calculating typical behavior:', error);
-    }
-    if (avgResponseTime < typicalResponseTime * 0.5 || avgResponseTime > typicalResponseTime * 1.5) {
-      suspiciousScore += 15;
-    }
-    if (switchCount > typicalSwitchCount * 1.5) {
-      suspiciousScore += 15;
-    }
-
-    suspiciousScore = Math.min(suspiciousScore, 100);
-
-    const timeOffset = 3 * 60 * 60 * 1000; // 3 часа в миллисекундах
+    const timeOffset = 3 * 60 * 60 * 1000;
     const adjustedStartTime = new Date(startTime + timeOffset);
     const adjustedEndTime = new Date(endTime + timeOffset);
 
     const result = {
       user,
       testNumber,
-      score: calculatedScore,
+      score,
       totalPoints,
       totalClicks,
       correctClicks,
@@ -564,16 +372,10 @@ const saveResult = async (user, testNumber, score, totalPoints, startTime, endTi
       startTime: adjustedStartTime.toISOString(),
       endTime: adjustedEndTime.toISOString(),
       duration,
-      answers: Object.fromEntries(Object.entries(answers).sort((a, b) => parseInt(a[0]) - parseInt(b[0]))), // Сортируем ключи
-      scoresPerQuestion: scoresPerQuestion.map((score, idx) => {
-        console.log(`Saving score for question ${idx + 1}: ${score}`);
-        return score;
-      }),
-      suspiciousActivity: {
-        ...suspiciousActivity,
-        suspiciousScore,
-        responseTimes: responseTimes.map(time => Math.min(time, 5 * 60 * 1000)) // Ограничиваем время ответа 5 минутами
-      }
+      answers: Object.fromEntries(Object.entries(answers).sort((a, b) => parseInt(a[0]) - parseInt(b[0]))),
+      scoresPerQuestion,
+      suspiciousActivity,
+      variant: `Variant ${variant}` // Сохраняем вариант
     };
     console.log('Saving result to MongoDB:', result);
     if (!db) {
@@ -590,27 +392,42 @@ const saveResult = async (user, testNumber, score, totalPoints, startTime, endTi
 app.get('/test', checkAuth, async (req, res) => {
   if (req.user === 'admin') return res.redirect('/admin');
   const testNumber = req.query.test;
-  console.log(`Processing /test request for testNumber: ${testNumber}, user: ${req.user}`);
-  if (!testNumber) {
-    console.warn('Test number not provided in query');
-    return res.status(400).send('Номер тесту не вказано');
-  }
-  if (!testNames[testNumber]) {
-    console.warn(`Test ${testNumber} not found`);
-    return res.status(404).send('Тест не знайдено');
+  if (!testNumber || !testNames[testNumber]) {
+    return res.status(400).send('Номер тесту не вказано або тест не знайдено');
   }
   try {
-    console.log(`Loading questions for test ${testNumber}...`);
-    const questions = await loadQuestions(testNumber);
+    let questions = await loadQuestions(testNumber);
+    // Фильтрация вопросов по варианту
+    const userVariant = req.session.testVariant;
+    questions = questions.filter(q => !q.variant || q.variant === '' || q.variant === `Variant ${userVariant}`);
+    // Ограничение количества вопросов
+    const questionLimit = testNames[testNumber].questionLimit;
+    if (questionLimit && questions.length > questionLimit) {
+      questions = shuffleArray([...questions]).slice(0, questionLimit);
+    }
+    // Случайный порядок вопросов
+    if (testNames[testNumber].randomQuestions) {
+      questions = shuffleArray([...questions]);
+    }
+    // Случайный порядок ответов
+    if (testNames[testNumber].randomAnswers) {
+      questions = questions.map(q => {
+        if (q.options && q.options.length > 0 && q.type !== 'ordering') {
+          const shuffledOptions = shuffleArray([...q.options]);
+          return { ...q, options: shuffledOptions };
+        }
+        return q;
+      });
+    }
     userTests.set(req.user, {
       testNumber,
       questions,
       answers: {},
       currentQuestion: 0,
       startTime: Date.now(),
-      timeLimit: testNames[testNumber].timeLimit * 1000
+      timeLimit: testNames[testNumber].timeLimit * 1000,
+      variant: userVariant
     });
-    console.log(`Redirecting to first question for user ${req.user}`);
     res.redirect(`/test/question?index=0`);
   } catch (error) {
     console.error('Ошибка в /test:', error.message, error.stack);
@@ -622,34 +439,25 @@ app.get('/test/question', checkAuth, (req, res) => {
   if (req.user === 'admin') return res.redirect('/admin');
   const userTest = userTests.get(req.user);
   if (!userTest) {
-    console.warn(`Test not started for user ${req.user}`);
     return res.status(400).send('Тест не розпочато');
   }
-
   const { questions, testNumber, answers, currentQuestion, startTime, timeLimit } = userTest;
   const index = parseInt(req.query.index) || 0;
-
   if (index < 0 || index >= questions.length) {
-    console.warn(`Invalid question index ${index} for user ${req.user}`);
     return res.status(400).send('Невірний номер питання');
   }
-
   userTest.currentQuestion = index;
   userTest.answerTimestamps = userTest.answerTimestamps || {};
   userTest.answerTimestamps[index] = userTest.answerTimestamps[index] || Date.now();
   const q = questions[index];
-  console.log('Rendering question:', { index, picture: q.picture, text: q.text, options: q.options });
-
   const progress = Array.from({ length: questions.length }, (_, i) => ({
     number: i + 1,
     answered: answers[i] && (Array.isArray(answers[i]) ? answers[i].length > 0 : answers[i].trim() !== '')
   }));
-
   const elapsedTime = Math.floor((Date.now() - startTime) / 1000);
   const remainingTime = Math.max(0, Math.floor(timeLimit / 1000) - elapsedTime);
   const minutes = Math.floor(remainingTime / 60).toString().padStart(2, '0');
   const seconds = (remainingTime % 60).toString().padStart(2, '0');
-
   const selectedOptions = answers[index] || [];
   const selectedOptionsString = JSON.stringify(selectedOptions).replace(/'/g, "\\'");
 
@@ -660,49 +468,18 @@ app.get('/test/question', checkAuth, (req, res) => {
         <meta charset="UTF-8">
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
         <title>${testNames[testNumber].name}</title>
-        <script src="https://cdnjs.cloudflare.com/ajax/libs/Sortable/1.15.0/Sortable.min.js" onerror="console.error('Failed to load Sortable.js')"></script>
+        <script src="https://cdnjs.cloudflare.com/ajax/libs/Sortable/1.15.0/Sortable.min.js"></script>
         <style>
           body { font-family: Arial, sans-serif; margin: 0; padding: 20px; padding-bottom: 80px; background-color: #f0f0f0; }
           h1 { font-size: 24px; text-align: center; }
           img { max-width: 100%; margin-bottom: 10px; display: block; margin-left: auto; margin-right: auto; }
-          .progress-bar { 
-            display: flex; 
-            flex-direction: column; 
-            gap: 5px; 
-            margin-bottom: 20px; 
-            width: calc(100% - 40px); 
-            margin-left: auto; 
-            margin-right: auto; 
-            box-sizing: border-box; 
-          }
-          .progress-circle { 
-            width: 40px; 
-            height: 40px; 
-            border-radius: 50%; 
-            display: flex; 
-            align-items: center; 
-            justify-content: center; 
-            font-size: 14px; 
-            flex-shrink: 0; 
-          }
+          .progress-bar { display: flex; flex-direction: column; gap: 5px; margin-bottom: 20px; width: calc(100% - 40px); margin-left: auto; margin-right: auto; box-sizing: border-box; }
+          .progress-circle { width: 40px; height: 40px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 14px; flex-shrink: 0; }
           .progress-circle.unanswered { background-color: red; color: white; }
           .progress-circle.answered { background-color: green; color: white; }
-          .progress-line { 
-            width: 5px; 
-            height: 2px; 
-            background-color: #ccc; 
-            margin: 0 2px; 
-            align-self: center; 
-            flex-shrink: 0; 
-          }
+          .progress-line { width: 5px; height: 2px; background-color: #ccc; margin: 0 2px; align-self: center; flex-shrink: 0; }
           .progress-line.answered { background-color: green; }
-          .progress-row { 
-            display: flex; 
-            align-items: center; 
-            justify-content: space-around; 
-            gap: 2px; 
-            flex-wrap: wrap; 
-          }
+          .progress-row { display: flex; align-items: center; justify-content: space-around; gap: 2px; flex-wrap: wrap; }
           .option-box { border: 2px solid #ccc; padding: 10px; margin: 5px 0; border-radius: 5px; cursor: pointer; font-size: 16px; user-select: none; }
           .option-box.selected { background-color: #90ee90; }
           .button-container { position: fixed; bottom: 20px; left: 20px; right: 20px; display: flex; justify-content: space-between; }
@@ -773,7 +550,6 @@ app.get('/test/question', checkAuth, (req, res) => {
   if (q.picture) {
     html += `<img src="${q.picture}" alt="Picture" onerror="this.src='/images/placeholder.png'; console.log('Image failed to load: ${q.picture}')"><br>`;
   }
-
   const instructionText = q.type === 'multiple' ? 'Виберіть усі правильні відповіді' :
                          q.type === 'input' ? 'Введіть правильну відповідь' :
                          q.type === 'ordering' ? 'Розташуйте відповіді у правильній послідовності' : '';
@@ -784,7 +560,6 @@ app.get('/test/question', checkAuth, (req, res) => {
           <p id="instruction" class="instruction">${instructionText}</p>
           <div id="answers">
   `;
-
   if (!q.options || q.options.length === 0) {
     const userAnswer = answers[index] || '';
     html += `
@@ -816,7 +591,6 @@ app.get('/test/question', checkAuth, (req, res) => {
       });
     }
   }
-
   html += `
           </div>
         </div>
@@ -840,7 +614,7 @@ app.get('/test/question', checkAuth, (req, res) => {
           let lastActivityTime = Date.now();
           let activityCount = 0;
           let lastMouseMoveTime = 0;
-          const debounceDelay = 100; // 100 миллисекунд
+          const debounceDelay = 100;
           const questionStartTime = ${userTest.answerTimestamps[index] || Date.now()};
           let selectedOptions = ${selectedOptionsString};
 
@@ -860,14 +634,11 @@ app.get('/test/question', checkAuth, (req, res) => {
           window.addEventListener('blur', () => {
             lastBlurTime = Date.now();
             switchCount++;
-            console.log('Tab blurred, switch count:', switchCount);
           });
 
           window.addEventListener('focus', () => {
             if (lastBlurTime) {
-              const timeSpentAway = Date.now() - lastBlurTime;
-              timeAway += timeSpentAway;
-              console.log('Tab focused, time away:', timeAway);
+              timeAway += Date.now() - lastBlurTime;
             }
           });
 
@@ -877,16 +648,13 @@ app.get('/test/question', checkAuth, (req, res) => {
               lastMouseMoveTime = now;
               lastActivityTime = now;
               activityCount++;
-              console.log('Mouse activity detected, count:', activityCount);
             }
           }
 
           document.addEventListener('mousemove', debounceMouseMove);
-
           document.addEventListener('keydown', () => {
             lastActivityTime = Date.now();
             activityCount++;
-            console.log('Keyboard activity detected, count:', activityCount);
           });
 
           document.querySelectorAll('.option-box:not(.draggable)').forEach(box => {
@@ -900,12 +668,10 @@ app.get('/test/question', checkAuth, (req, res) => {
                 selectedOptions.splice(idx, 1);
                 box.classList.remove('selected');
               }
-              console.log('Selected options for question ${index}:', selectedOptions);
             });
           });
 
           async function saveAndNext(index) {
-            console.log('Save and Next button clicked for index:', index);
             try {
               let answers = selectedOptions;
               if (document.querySelector('input[name="q' + index + '"]')) {
@@ -914,19 +680,12 @@ app.get('/test/question', checkAuth, (req, res) => {
                 answers = Array.from(document.querySelectorAll('#sortable-options .option-box')).map(el => el.dataset.value);
               }
               const responseTime = Date.now() - questionStartTime;
-              console.log('Sending answer with data:', { index, answers, timeAway, switchCount, responseTime, activityCount });
-              const response = await fetch('/answer', {
+              await fetch('/answer', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ index, answer: answers, timeAway, switchCount, responseTime, activityCount })
               });
-              const result = await response.json();
-              if (result.success) {
-                console.log('Answer saved successfully, redirecting to next question');
-                window.location.href = '/test/question?index=' + (index + 1);
-              } else {
-                console.error('Failed to save answer:', result);
-              }
+              window.location.href = '/test/question?index=' + (index + 1);
             } catch (error) {
               console.error('Error in saveAndNext:', error);
             }
@@ -941,7 +700,6 @@ app.get('/test/question', checkAuth, (req, res) => {
           }
 
           async function finishTest(index) {
-            console.log('Finish Test button clicked for index:', index);
             try {
               let answers = selectedOptions;
               if (document.querySelector('input[name="q' + index + '"]')) {
@@ -950,20 +708,12 @@ app.get('/test/question', checkAuth, (req, res) => {
                 answers = Array.from(document.querySelectorAll('#sortable-options .option-box')).map(el => el.dataset.value);
               }
               const responseTime = Date.now() - questionStartTime;
-              console.log('Finishing test with data:', { index, answers, timeAway, switchCount, responseTime, activityCount });
-              const response = await fetch('/answer', {
+              await fetch('/answer', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ index, answer: answers, timeAway, switchCount, responseTime, activityCount })
               });
-              const result = await response.json();
-              if (result.success) {
-                console.log('Answer saved successfully, redirecting to result');
-                hideConfirm();
-                window.location.href = '/result';
-              } else {
-                console.error('Failed to save answer:', result);
-              }
+              window.location.href = '/result';
             } catch (error) {
               console.error('Error in finishTest:', error);
             }
@@ -971,21 +721,7 @@ app.get('/test/question', checkAuth, (req, res) => {
 
           const sortable = document.getElementById('sortable-options');
           if (sortable) {
-            if (typeof Sortable === 'undefined') {
-              console.error('Sortable.js is not loaded');
-            } else {
-              new Sortable(sortable, {
-                animation: 150,
-                onStart: function(evt) {
-                  console.log('Drag started on:', evt.item.dataset.value);
-                },
-                onEnd: function(evt) {
-                  console.log('Drag ended:', evt.item.dataset.value, 'from index:', evt.oldIndex, 'to index:', evt.newIndex);
-                }
-              });
-            }
-          } else {
-            console.log('Sortable options not found');
+            new Sortable(sortable, { animation: 150 });
           }
         </script>
       </body>
@@ -998,10 +734,8 @@ app.post('/answer', checkAuth, (req, res) => {
   if (req.user === 'admin') return res.redirect('/admin');
   try {
     const { index, answer, timeAway, switchCount, responseTime, activityCount } = req.body;
-    console.log('Received answer data:', { index, answer, timeAway, switchCount, responseTime, activityCount });
     const userTest = userTests.get(req.user);
     if (!userTest) {
-      console.warn(`Test not started for user ${req.user} in /answer`);
       return res.status(400).json({ error: 'Тест не розпочато' });
     }
     userTest.answers[index] = answer;
@@ -1010,8 +744,6 @@ app.post('/answer', checkAuth, (req, res) => {
     userTest.suspiciousActivity.switchCount = (userTest.suspiciousActivity.switchCount || 0) + (switchCount || 0);
     userTest.suspiciousActivity.responseTimes[index] = responseTime || 0;
     userTest.suspiciousActivity.activityCounts[index] = activityCount || 0;
-    console.log(`Saved answer for user ${req.user}, question ${index}:`, answer);
-    console.log(`Updated suspicious activity for user ${req.user}:`, userTest.suspiciousActivity);
     res.json({ success: true });
   } catch (error) {
     console.error('Ошибка в /answer:', error.message, error.stack);
@@ -1023,14 +755,11 @@ app.get('/result', checkAuth, async (req, res) => {
   if (req.user === 'admin') return res.redirect('/admin');
   const userTest = userTests.get(req.user);
   if (!userTest) {
-    console.warn(`Test not started for user ${req.user} in /result`);
     return res.status(400).json({ error: 'Тест не розпочато' });
   }
-
-  const { questions, answers, testNumber, startTime } = userTest;
+  const { questions, answers, testNumber, startTime, suspiciousActivity, variant } = userTest;
   let score = 0;
   const totalPoints = questions.reduce((sum, q) => sum + q.points, 0);
-
   const scoresPerQuestion = questions.map((q, index) => {
     const userAnswer = answers[index];
     let questionScore = 0;
@@ -1040,7 +769,6 @@ app.get('/result', checkAuth, async (req, res) => {
       const isCorrect = correctAnswers.length === userAnswers.length &&
         correctAnswers.every(val => userAnswers.includes(val)) &&
         userAnswers.every(val => correctAnswers.includes(val));
-      console.log(`Question ${index + 1} (multiple): userAnswer=${userAnswers}, correctAnswer=${correctAnswers}, isCorrect=${isCorrect}`);
       if (isCorrect) {
         questionScore = q.points;
       }
@@ -1048,7 +776,6 @@ app.get('/result', checkAuth, async (req, res) => {
       const normalizedUserAnswer = String(userAnswer).trim().toLowerCase().replace(/\s+/g, '').replace(',', '.');
       const normalizedCorrectAnswer = String(q.correctAnswers[0]).trim().toLowerCase().replace(/\s+/g, '').replace(',', '.');
       const isCorrect = normalizedUserAnswer === normalizedCorrectAnswer;
-      console.log(`Question ${index + 1} (input): userAnswer=${normalizedUserAnswer}, correctAnswer=${normalizedCorrectAnswer}, isCorrect=${isCorrect}`);
       if (isCorrect) {
         questionScore = q.points;
       }
@@ -1056,14 +783,12 @@ app.get('/result', checkAuth, async (req, res) => {
       const userAnswers = userAnswer.map(val => String(val).trim().toLowerCase());
       const correctAnswers = q.correctAnswers.map(val => String(val).trim().toLowerCase());
       const isCorrect = userAnswers.join(',') === correctAnswers.join(',');
-      console.log(`Question ${index + 1} (ordering): userAnswer=${userAnswers}, correctAnswer=${correctAnswers}, isCorrect=${isCorrect}`);
       if (isCorrect) {
         questionScore = q.points;
       }
     }
     return questionScore;
   });
-
   score = scoresPerQuestion.reduce((sum, s) => sum + s, 0);
   const endTime = Date.now();
   const percentage = (score / totalPoints) * 100;
@@ -1072,16 +797,14 @@ app.get('/result', checkAuth, async (req, res) => {
   const totalQuestions = questions.length;
 
   try {
-    await saveResult(req.user, testNumber, score, totalPoints, startTime, endTime, totalClicks, correctClicks, totalQuestions, percentage);
+    await saveResult(req.user, testNumber, score, totalPoints, startTime, endTime, totalClicks, correctClicks, totalQuestions, percentage, suspiciousActivity, answers, scoresPerQuestion, variant);
   } catch (error) {
-    console.error('Error saving result in /result:', error.message, error.stack);
     return res.status(500).send('Помилка при збереженні результату');
   }
 
   const endDateTime = new Date(endTime);
   const formattedTime = endDateTime.toLocaleTimeString('uk-UA', { hour12: false });
   const formattedDate = endDateTime.toLocaleDateString('uk-UA');
-
   const imagePath = path.join(__dirname, 'public', 'images', 'A.png');
   let imageBase64 = '';
   try {
@@ -1089,7 +812,6 @@ app.get('/result', checkAuth, async (req, res) => {
     imageBase64 = imageBuffer.toString('base64');
   } catch (error) {
     console.error('Error reading image A.png:', error.message, error.stack);
-    imageBase64 = '';
   }
 
   const resultHtml = `
@@ -1106,8 +828,8 @@ app.get('/result', checkAuth, async (req, res) => {
           #exportPDF { background-color: #ffeb3b; }
           #restart { background-color: #ef5350; }
         </style>
-        <script src="https://cdnjs.cloudflare.com/ajax/libs/pdfmake/0.2.7/pdfmake.min.js" onerror="console.error('Failed to load pdfmake.min.js')"></script>
-        <script src="https://cdnjs.cloudflare.com/ajax/libs/pdfmake/0.2.7/vfs_fonts.js" onerror="console.error('Failed to load vfs_fonts.js')"></script>
+        <script src="https://cdnjs.cloudflare.com/ajax/libs/pdfmake/0.2.7/pdfmake.min.js"></script>
+        <script src="https://cdnjs.cloudflare.com/ajax/libs/pdfmake/0.2.7/vfs_fonts.js"></script>
       </head>
       <body>
         <h1>Результат тесту</h1>
@@ -1123,12 +845,6 @@ app.get('/result', checkAuth, async (req, res) => {
           <button id="restart">Вихід</button>
         </div>
         <script>
-          if (typeof pdfMake === 'undefined') {
-            console.error('pdfMake is not loaded');
-            document.getElementById('exportPDF').disabled = true;
-            document.getElementById('exportPDF').textContent = 'PDF не доступно';
-          }
-
           const user = "${req.user}";
           const testName = "${testNames[testNumber].name}";
           const totalQuestions = ${totalQuestions};
@@ -1141,42 +857,35 @@ app.get('/result', checkAuth, async (req, res) => {
           const imageBase64 = "${imageBase64}";
 
           document.getElementById('exportPDF').addEventListener('click', () => {
-            console.log('Export PDF button clicked');
-            try {
-              const docDefinition = {
-                content: [
-                  imageBase64 ? {
-                    image: 'data:image/png;base64,' + imageBase64,
-                    width: 50,
-                    alignment: 'center',
-                    margin: [0, 0, 0, 20]
-                  } : { text: 'Логотип відсутній', alignment: 'center', margin: [0, 0, 0, 20], lineHeight: 2 },
-                  { text: 'Результат тесту користувача ' + user + ' з тесту ' + testName + ' складає ' + percentage + '%', style: 'header' },
-                  { text: 'Кількість питань: ' + totalQuestions, lineHeight: 2 },
-                  { text: 'Правильних відповідей: ' + correctClicks, lineHeight: 2 },
-                  { text: 'Набрано балів: ' + score, lineHeight: 2 },
-                  { text: 'Максимально можлива кількість балів: ' + totalPoints, lineHeight: 2 },
-                  {
-                    columns: [
-                      { text: 'Час: ' + time, width: '50%', lineHeight: 2 },
-                      { text: 'Дата: ' + date, width: '50%', alignment: 'right', lineHeight: 2 }
-                    ],
-                    margin: [0, 10, 0, 0]
-                  }
-                ],
-                styles: {
-                  header: { fontSize: 14, bold: true, margin: [0, 0, 0, 10], lineHeight: 2 }
+            const docDefinition = {
+              content: [
+                imageBase64 ? {
+                  image: 'data:image/png;base64,' + imageBase64,
+                  width: 50,
+                  alignment: 'center',
+                  margin: [0, 0, 0, 20]
+                } : { text: 'Логотип відсутній', alignment: 'center', margin: [0, 0, 0, 20], lineHeight: 2 },
+                { text: 'Результат тесту користувача ' + user + ' з тесту ' + testName + ' складає ' + percentage + '%', style: 'header' },
+                { text: 'Кількість питань: ' + totalQuestions, lineHeight: 2 },
+                { text: 'Правильних відповідей: ' + correctClicks, lineHeight: 2 },
+                { text: 'Набрано балів: ' + score, lineHeight: 2 },
+                { text: 'Максимально можлива кількість балів: ' + totalPoints, lineHeight: 2 },
+                {
+                  columns: [
+                    { text: 'Час: ' + time, width: '50%', lineHeight: 2 },
+                    { text: 'Дата: ' + date, width: '50%', alignment: 'right', lineHeight: 2 }
+                  ],
+                  margin: [0, 10, 0, 0]
                 }
-              };
-              pdfMake.createPdf(docDefinition).download('result.pdf');
-              console.log('PDF generated successfully');
-            } catch (error) {
-              console.error('Error generating PDF:', error);
-            }
+              ],
+              styles: {
+                header: { fontSize: 14, bold: true, margin: [0, 0, 0, 10], lineHeight: 2 }
+              }
+            };
+            pdfMake.createPdf(docDefinition).download('result.pdf');
           });
 
           document.getElementById('restart').addEventListener('click', () => {
-            console.log('Restart button clicked');
             window.location.href = '/select-test';
           });
         </script>
@@ -1211,20 +920,18 @@ app.get('/results', checkAuth, async (req, res) => {
       <body>
         <h1>Результати</h1>
   `;
-
   if (userTest) {
-    const { questions, answers, testNumber, startTime } = userTest;
+    const { questions, answers, testNumber, startTime, variant } = userTest;
     let score = 0;
     const totalPoints = questions.reduce((sum, q) => sum + q.points, 0);
-
     const scoresPerQuestion = questions.map((q, index) => {
       const userAnswer = answers[index];
       let questionScore = 0;
       if (q.type === 'multiple' && userAnswer && Array.isArray(userAnswer)) {
-        const correctAnswers = q.correctAnswers.map(String).map(val => val.trim().toLowerCase());
-        const userAnswers = userAnswer.map(String).map(val => val.trim().toLowerCase());
-        if (correctAnswers.length === userAnswers.length && 
-            correctAnswers.every(val => userAnswers.includes(val)) && 
+        const correctAnswers = q.correctAnswers.map(val => String(val).trim().toLowerCase());
+        const userAnswers = userAnswer.map(val => String(val).trim().toLowerCase());
+        if (correctAnswers.length === userAnswers.length &&
+            correctAnswers.every(val => userAnswers.includes(val)) &&
             userAnswers.every(val => correctAnswers.includes(val))) {
           questionScore = q.points;
         }
@@ -1233,15 +940,14 @@ app.get('/results', checkAuth, async (req, res) => {
           questionScore = q.points;
         }
       } else if (q.type === 'ordering' && userAnswer && Array.isArray(userAnswer)) {
-        const userAnswers = userAnswer.map(String).map(val => val.trim().toLowerCase());
-        const correctAnswers = q.correctAnswers.map(String).map(val => val.trim().toLowerCase());
+        const userAnswers = userAnswer.map(val => String(val).trim().toLowerCase());
+        const correctAnswers = q.correctAnswers.map(val => String(val).trim().toLowerCase());
         if (userAnswers.join(',') === correctAnswers.join(',')) {
           questionScore = q.points;
         }
       }
       return questionScore;
     });
-
     score = scoresPerQuestion.reduce((sum, s) => sum + s, 0);
     const endTime = Date.now();
     const duration = Math.round((endTime - startTime) / 1000);
@@ -1249,11 +955,8 @@ app.get('/results', checkAuth, async (req, res) => {
     const totalClicks = Object.keys(answers).length;
     const correctClicks = scoresPerQuestion.filter(s => s > 0).length;
     const totalQuestions = questions.length;
-
-    const endDateTime = new Date(endTime);
-    const formattedTime = endDateTime.toLocaleTimeString('uk-UA', { hour12: false });
-    const formattedDate = endDateTime.toLocaleDateString('uk-UA');
-
+    const formattedTime = new Date(endTime).toLocaleTimeString('uk-UA', { hour12: false });
+    const formattedDate = new Date(endTime).toLocaleDateString('uk-UA');
     const imagePath = path.join(__dirname, 'public', 'images', 'A.png');
     let imageBase64 = '';
     try {
@@ -1280,7 +983,6 @@ app.get('/results', checkAuth, async (req, res) => {
           <th>Бали</th>
         </tr>
     `;
-
     questions.forEach((q, index) => {
       const userAnswer = answers[index] || 'Не відповіли';
       const correctAnswer = q.correctAnswers.join(', ');
@@ -1294,7 +996,6 @@ app.get('/results', checkAuth, async (req, res) => {
         </tr>
       `;
     });
-
     resultsHtml += `
       </table>
       <div class="buttons">
@@ -1349,12 +1050,10 @@ app.get('/results', checkAuth, async (req, res) => {
         });
       </script>
     `;
-
     userTests.delete(req.user);
   } else {
     resultsHtml += '<p>Немає завершених тестів</p>';
   }
-
   resultsHtml += `
       </body>
     </html>
@@ -1363,7 +1062,6 @@ app.get('/results', checkAuth, async (req, res) => {
 });
 
 app.get('/admin', checkAuth, checkAdmin, (req, res) => {
-  console.log('Serving /admin for user:', req.user);
   res.send(`
     <!DOCTYPE html>
     <html lang="uk">
@@ -1372,55 +1070,16 @@ app.get('/admin', checkAuth, checkAdmin, (req, res) => {
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
         <title>Адмін-панель</title>
         <style>
-          body { 
-            font-family: Arial, sans-serif; 
-            text-align: center; 
-            padding: 50px; 
-            font-size: 24px; 
-            margin: 0; 
-          }
-          h1 { 
-            font-size: 36px; 
-            margin-bottom: 20px; 
-          }
-          button { 
-            padding: 15px 30px; 
-            margin: 10px; 
-            font-size: 24px; 
-            cursor: pointer; 
-            width: 300px; 
-            border: none; 
-            border-radius: 5px; 
-            background-color: #4CAF50; 
-            color: white; 
-          }
-          button:hover { 
-            background-color: #45a049; 
-          }
-          #logout { 
-            background-color: #ef5350; 
-            color: white; 
-          }
+          body { font-family: Arial, sans-serif; text-align: center; padding: 50px; font-size: 24px; margin: 0; }
+          h1 { font-size: 36px; margin-bottom: 20px; }
+          button { padding: 15px 30px; margin: 10px; font-size: 24px; cursor: pointer; width: 300px; border: none; border-radius: 5px; background-color: #4CAF50; color: white; }
+          button:hover { background-color: #45a049; }
+          #logout { background-color: #ef5350; color: white; }
           @media (max-width: 600px) {
-            body { 
-              padding: 20px; 
-              padding-bottom: 80px; 
-            }
-            h1 { 
-              font-size: 32px; 
-            }
-            button { 
-              font-size: 20px; 
-              width: 90%; 
-              padding: 15px; 
-            }
-            #logout { 
-              position: fixed; 
-              bottom: 20px; 
-              left: 50%; 
-              transform: translateX(-50%); 
-              width: 90%; 
-            }
+            body { padding: 20px; padding-bottom: 80px; }
+            h1 { font-size: 32px; }
+            button { font-size: 20px; width: 90%; padding: 15px; }
+            #logout { position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%); width: 90%; }
           }
         </style>
       </head>
@@ -1446,9 +1105,7 @@ app.get('/admin/results', checkAuth, checkAdmin, async (req, res) => {
   let results = [];
   let errorMessage = '';
   try {
-    console.log('Fetching test results from MongoDB...');
     results = await db.collection('test_results').find({}).sort({ endTime: -1 }).toArray();
-    console.log('Fetched results from MongoDB:', results);
   } catch (fetchError) {
     console.error('Ошибка при получении данных из MongoDB:', fetchError.message, fetchError.stack);
     errorMessage = `Ошибка MongoDB: ${fetchError.message}`;
@@ -1484,6 +1141,7 @@ app.get('/admin/results', checkAuth, checkAdmin, async (req, res) => {
           <tr>
             <th>Користувач</th>
             <th>Тест</th>
+            <th>Варіант</th>
             <th>Очки</th>
             <th>Максимум</th>
             <th>Початок</th>
@@ -1496,8 +1154,7 @@ app.get('/admin/results', checkAuth, checkAdmin, async (req, res) => {
           </tr>
   `;
   if (!results || results.length === 0) {
-    adminHtml += '<tr><td colspan="11">Немає результатів</td></tr>';
-    console.log('No results found in test_results');
+    adminHtml += '<tr><td colspan="12">Немає результатів</td></tr>';
   } else {
     results.forEach((r, index) => {
       const answersArray = [];
@@ -1507,13 +1164,11 @@ app.get('/admin/results', checkAuth, checkAdmin, async (req, res) => {
           answersArray[idx] = r.answers[key];
         });
       }
-
-      const answersDisplay = answersArray.length > 0 
+      const answersDisplay = answersArray.length > 0
         ? answersArray.map((a, i) => {
             if (!a) return null;
             const userAnswer = Array.isArray(a) ? a.join(', ') : a;
             const questionScore = r.scoresPerQuestion[i] || 0;
-            console.log(`Result ${index + 1}, Question ${i + 1}: userAnswer=${userAnswer}, savedScore=${questionScore}`);
             return `Питання ${i + 1}: ${userAnswer.replace(/\\'/g, "'")} (${questionScore} балів)`;
           }).filter(line => line !== null).join('\n')
         : 'Немає відповідей';
@@ -1522,15 +1177,19 @@ app.get('/admin/results', checkAuth, checkAdmin, async (req, res) => {
         const date = new Date(isoString);
         return `${date.toLocaleTimeString('uk-UA', { hour12: false })} ${date.toLocaleDateString('uk-UA')}`;
       };
-      const suspiciousActivityPercent = r.suspiciousActivity && r.suspiciousActivity.suspiciousScore ? 
-        Math.round(r.suspiciousActivity.suspiciousScore) : 0;
-      const timeAwayPercent = r.suspiciousActivity && r.suspiciousActivity.timeAway ? 
-        Math.round((r.suspiciousActivity.timeAway / (r.duration * 1000)) * 100) : 0;
+      const suspiciousActivityPercent = r.suspiciousActivity && r.suspiciousActivity.suspiciousScore
+        ? Math.round(r.suspiciousActivity.suspiciousScore)
+        : 0;
+      const timeAwayPercent = r.suspiciousActivity && r.suspiciousActivity.timeAway
+        ? Math.round((r.suspiciousActivity.timeAway / (r.duration * 1000)) * 100)
+        : 0;
       const switchCount = r.suspiciousActivity ? r.suspiciousActivity.switchCount || 0 : 0;
-      const avgResponseTime = r.suspiciousActivity && r.suspiciousActivity.responseTimes ? 
-        (r.suspiciousActivity.responseTimes.reduce((sum, time) => sum + (time || 0), 0) / r.suspiciousActivity.responseTimes.length / 1000).toFixed(2) : 0;
-      const totalActivityCount = r.suspiciousActivity && r.suspiciousActivity.activityCounts ? 
-        r.suspiciousActivity.activityCounts.reduce((sum, count) => sum + (count || 0), 0).toFixed(0) : 0;
+      const avgResponseTime = r.suspiciousActivity && r.suspiciousActivity.responseTimes
+        ? (r.suspiciousActivity.responseTimes.reduce((sum, time) => sum + (time || 0), 0) / r.suspiciousActivity.responseTimes.length / 1000).toFixed(2)
+        : 0;
+      const totalActivityCount = r.suspiciousActivity && r.suspiciousActivity.activityCounts
+        ? r.suspiciousActivity.activityCounts.reduce((sum, count) => sum + (count || 0), 0).toFixed(0)
+        : 0;
       const activityDetails = `
 Время вне вкладки: ${timeAwayPercent}%
 Переключения вкладок: ${switchCount}
@@ -1541,6 +1200,7 @@ app.get('/admin/results', checkAuth, checkAdmin, async (req, res) => {
         <tr>
           <td>${r.user || 'N/A'}</td>
           <td>${testNames[r.testNumber]?.name || 'N/A'}</td>
+          <td>${r.variant || 'N/A'}</td>
           <td>${r.score || '0'}</td>
           <td>${r.totalPoints || '0'}</td>
           <td>${formatDateTime(r.startTime)}</td>
@@ -1568,14 +1228,11 @@ app.get('/admin/results', checkAuth, checkAdmin, async (req, res) => {
                 });
                 const result = await response.json();
                 if (result.success) {
-                  console.log('Result deleted successfully');
                   window.location.reload();
                 } else {
-                  console.error('Failed to delete result:', result.message);
                   alert('Помилка при видаленні результату: ' + result.message);
                 }
               } catch (error) {
-                console.error('Error deleting result:', error);
                 alert('Помилка при видаленні результату');
               }
             }
@@ -1590,9 +1247,7 @@ app.get('/admin/results', checkAuth, checkAdmin, async (req, res) => {
 app.post('/admin/delete-result', checkAuth, checkAdmin, async (req, res) => {
   try {
     const { id } = req.body;
-    console.log(`Deleting result with id ${id}...`);
     await db.collection('test_results').deleteOne({ _id: new ObjectId(id) });
-    console.log(`Result with id ${id} deleted from MongoDB`);
     res.json({ success: true });
   } catch (error) {
     console.error('Ошибка при удалении результата:', error.message, error.stack);
@@ -1600,32 +1255,7 @@ app.post('/admin/delete-result', checkAuth, checkAdmin, async (req, res) => {
   }
 });
 
-app.get('/admin/delete-results', checkAuth, checkAdmin, async (req, res) => {
-  try {
-    console.log('Deleting all test results...');
-    await db.collection('test_results').deleteMany({});
-    console.log('Test results deleted from MongoDB');
-    res.send(`
-      <!DOCTYPE html>
-      <html lang="uk">
-        <head>
-          <meta charset="UTF-8">
-          <title>Видалено результати</title>
-        </head>
-        <body>
-          <h1>Результати успішно видалено</h1>
-          <button onclick="window.location.href='/admin'">Повернутися до адмін-панелі</button>
-        </body>
-      </html>
-    `);
-  } catch (error) {
-    console.error('Ошибка при удалении результатов:', error.message, error.stack);
-    res.status(500).send('Помилка при видаленні результатів');
-  }
-});
-
 app.get('/admin/edit-tests', checkAuth, checkAdmin, (req, res) => {
-  console.log('Serving /admin/edit-tests for user:', req.user);
   res.send(`
     <!DOCTYPE html>
     <html lang="uk">
@@ -1634,14 +1264,16 @@ app.get('/admin/edit-tests', checkAuth, checkAdmin, (req, res) => {
         <title>Редагувати назви тестів</title>
         <style>
           body { font-size: 24px; margin: 20px; }
-          input { font-size: 24px; padding: 5px; margin: 5px; }
+          input[type="text"], input[type="number"] { font-size: 24px; padding: 5px; margin: 5px; }
+          input[type="checkbox"] { width: 20px; height: 20px; margin: 5px; }
           button { font-size: 24px; padding: 10px 20px; margin: 5px; }
           .delete-btn { background-color: #ff4d4d; color: white; }
-          .test-row { display: flex; align-items: center; margin-bottom: 10px; }
+          .test-row { display: flex; align-items: center; margin-bottom: 10px; flex-wrap: wrap; }
+          label { margin-right: 10px; }
         </style>
       </head>
       <body>
-        <h1>Редагувати назви та час тестів</h1>
+        <h1>Редагувати назви та налаштування тестів</h1>
         <form method="POST" action="/admin/edit-tests">
           ${Object.entries(testNames).map(([num, data]) => `
             <div class="test-row">
@@ -1649,6 +1281,12 @@ app.get('/admin/edit-tests', checkAuth, checkAdmin, (req, res) => {
               <input type="text" id="test${num}" name="test${num}" value="${data.name}" required>
               <label for="time${num}">Час (сек):</label>
               <input type="number" id="time${num}" name="time${num}" value="${data.timeLimit}" required min="1">
+              <label for="randomQuestions${num}">Випадковий вибір питань:</label>
+              <input type="checkbox" id="randomQuestions${num}" name="randomQuestions${num}" ${data.randomQuestions ? 'checked' : ''}>
+              <label for="randomAnswers${num}">Випадковий вибір відповідей:</label>
+              <input type="checkbox" id="randomAnswers${num}" name="randomAnswers${num}" ${data.randomAnswers ? 'checked' : ''}>
+              <label for="questionLimit${num}">Кількість питань:</label>
+              <input type="number" id="questionLimit${num}" name="questionLimit${num}" value="${data.questionLimit || ''}" min="1" placeholder="Без обмеження">
               <button type="button" class="delete-btn" onclick="deleteTest('${num}')">Видалити</button>
             </div>
           `).join('')}
@@ -1674,18 +1312,22 @@ app.get('/admin/edit-tests', checkAuth, checkAdmin, (req, res) => {
 
 app.post('/admin/edit-tests', checkAuth, checkAdmin, (req, res) => {
   try {
-    console.log('Updating test names and time limits...');
     Object.keys(testNames).forEach(num => {
       const testName = req.body[`test${num}`];
       const timeLimit = req.body[`time${num}`];
+      const randomQuestions = req.body[`randomQuestions${num}`] === 'on';
+      const randomAnswers = req.body[`randomAnswers${num}`] === 'on';
+      const questionLimit = req.body[`questionLimit${num}`] ? parseInt(req.body[`questionLimit${num}`]) : null;
       if (testName && timeLimit) {
         testNames[num] = {
           name: testName,
-          timeLimit: parseInt(timeLimit) || testNames[num].timeLimit
+          timeLimit: parseInt(timeLimit) || testNames[num].timeLimit,
+          randomQuestions,
+          randomAnswers,
+          questionLimit
         };
       }
     });
-    console.log('Updated test names and time limits:', testNames);
     res.send(`
       <!DOCTYPE html>
       <html lang="uk">
@@ -1694,7 +1336,7 @@ app.post('/admin/edit-tests', checkAuth, checkAdmin, (req, res) => {
           <title>Назви оновлено</title>
         </head>
         <body>
-          <h1>Назви та час тестів успішно оновлено</h1>
+          <h1>Назви та налаштування тестів успішно оновлено</h1>
           <button onclick="window.location.href='/admin'">Повернутися до адмін-панелі</button>
         </body>
       </html>
@@ -1712,7 +1354,6 @@ app.post('/admin/delete-test', checkAuth, checkAdmin, async (req, res) => {
       return res.status(404).json({ success: false, message: 'Тест не знайдено' });
     }
     delete testNames[testNumber];
-    console.log(`Deleted test ${testNumber}, updated testNames:`, testNames);
     res.json({ success: true });
   } catch (error) {
     console.error('Ошибка при удалении теста:', error.message, error.stack);
@@ -1722,7 +1363,6 @@ app.post('/admin/delete-test', checkAuth, checkAdmin, async (req, res) => {
 
 app.get('/admin/create-test', checkAuth, checkAdmin, (req, res) => {
   const excelFiles = fs.readdirSync(__dirname).filter(file => file.endsWith('.xlsx') && file.startsWith('questions'));
-  console.log('Available Excel files:', excelFiles);
   res.send(`
     <!DOCTYPE html>
     <html lang="uk">
@@ -1768,12 +1408,13 @@ app.post('/admin/create-test', checkAuth, checkAdmin, async (req, res) => {
     if (!match) throw new Error('Невірний формат файлу Excel');
     const testNumber = match[1];
     if (testNames[testNumber]) throw new Error('Тест з таким номером вже існує');
-
     testNames[testNumber] = {
       name: testName,
-      timeLimit: parseInt(timeLimit) || 3600
+      timeLimit: parseInt(timeLimit) || 3600,
+      randomQuestions: false,
+      randomAnswers: false,
+      questionLimit: null
     };
-    console.log('Created new test:', { testNumber, testName, timeLimit, excelFile });
     res.send(`
       <!DOCTYPE html>
       <html lang="uk">
@@ -1797,14 +1438,11 @@ app.get('/admin/activity-log', checkAuth, checkAdmin, async (req, res) => {
   let activities = [];
   let errorMessage = '';
   try {
-    console.log('Fetching activity log from MongoDB...');
     activities = await db.collection('activity_log').find({}).sort({ timestamp: -1 }).toArray();
-    console.log('Fetched activities from MongoDB:', activities);
   } catch (fetchError) {
     console.error('Ошибка при получении данных из MongoDB:', fetchError.message, fetchError.stack);
     errorMessage = `Ошибка MongoDB: ${fetchError.message}`;
   }
-
   let adminHtml = `
     <!DOCTYPE html>
     <html lang="uk">
@@ -1839,7 +1477,6 @@ app.get('/admin/activity-log', checkAuth, checkAdmin, async (req, res) => {
   `;
   if (!activities || activities.length === 0) {
     adminHtml += '<tr><td colspan="4">Немає записів</td></tr>';
-    console.log('No activities found in activity_log');
   } else {
     activities.forEach(activity => {
       const timestamp = new Date(activity.timestamp);
@@ -1868,14 +1505,11 @@ app.get('/admin/activity-log', checkAuth, checkAdmin, async (req, res) => {
                 });
                 const result = await response.json();
                 if (result.success) {
-                  console.log('Activity log cleared successfully');
                   window.location.reload();
                 } else {
-                  console.error('Failed to clear activity log:', result.message);
                   alert('Помилка при видаленні записів журналу: ' + result.message);
                 }
               } catch (error) {
-                console.error('Error clearing activity log:', error);
                 alert('Помилка при видаленні записів журналу');
               }
             }
@@ -1889,9 +1523,7 @@ app.get('/admin/activity-log', checkAuth, checkAdmin, async (req, res) => {
 
 app.post('/admin/delete-activity-log', checkAuth, checkAdmin, async (req, res) => {
   try {
-    console.log('Deleting all activity log entries...');
     await db.collection('activity_log').deleteMany({});
-    console.log('Activity log cleared from MongoDB');
     res.json({ success: true });
   } catch (error) {
     console.error('Ошибка при удалении записей журнала действий:', error.message, error.stack);
