@@ -131,7 +131,8 @@ const loadQuestions = async (testNumber) => {
       if (rowNumber > 1) {
         const rowValues = row.values.slice(1);
         let questionText = rowValues[1];
-        // Перевірка, чи є questionText об’єктом, і приведення до рядка
+        // Діагностика типу даних
+        console.log(`Row ${rowNumber} question text raw value:`, questionText, typeof questionText);
         if (typeof questionText === 'object' && questionText !== null) {
           console.warn(`Invalid question text in row ${rowNumber}: ${JSON.stringify(questionText)}. Converting to string.`);
           questionText = questionText.text || questionText.value || '[Невірний текст питання]';
@@ -1296,10 +1297,21 @@ app.get('/admin/results', checkAuth, checkAdmin, async (req, res) => {
           answersArray[idx] = r.answers[key];
         });
       }
+      // Оновлюємо логіку відображення відповідей
       const answersDisplay = answersArray.length > 0
         ? answersArray.map((a, i) => {
             if (!a) return null;
-            const userAnswer = Array.isArray(a) && Array.isArray(a[0]) ? a.map(pair => `${pair[0]} -> ${pair[1]}`).join(', ') : Array.isArray(a) ? a.join(', ') : a;
+            let userAnswer;
+            if (Array.isArray(a) && Array.isArray(a[0])) {
+              // Для типу matching: відображаємо пари
+              userAnswer = a.map(pair => `${pair[0]} -> ${pair[1]}`).join(', ');
+            } else if (Array.isArray(a)) {
+              // Для типу ordering або multiple: відображаємо список
+              userAnswer = a.join(', ');
+            } else {
+              // Для типу input: відображаємо як є
+              userAnswer = a;
+            }
             const questionScore = r.scoresPerQuestion[i] || 0;
             return `Питання ${i + 1}: ${userAnswer.replace(/\\'/g, "'")} (${questionScore} балів)`;
           }).filter(line => line !== null).join('\n')
@@ -1373,7 +1385,7 @@ app.get('/admin/results', checkAuth, checkAdmin, async (req, res) => {
       </body>
     </html>
   `;
-  res.send(adminHtml.trim()); // Видаляємо можливі зайві пробіли чи переноси
+  res.send(adminHtml.trim());
 });
 
 app.post('/admin/delete-result', checkAuth, checkAdmin, async (req, res) => {
