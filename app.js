@@ -130,10 +130,20 @@ const loadQuestions = async (testNumber) => {
     sheet.eachRow({ includeEmpty: false }, (row, rowNumber) => {
       if (rowNumber > 1) {
         const rowValues = row.values.slice(1);
+        let questionText = rowValues[1];
+        // Перевірка, чи є questionText об’єктом, і приведення до рядка
+        if (typeof questionText === 'object' && questionText !== null) {
+          console.warn(`Invalid question text in row ${rowNumber}: ${JSON.stringify(questionText)}. Converting to string.`);
+          questionText = questionText.text || questionText.value || '[Невірний текст питання]';
+        }
+        questionText = String(questionText || '').trim();
+        if (questionText === '') {
+          console.warn(`Empty question text in row ${rowNumber}. Skipping.`);
+          return;
+        }
         const picture = String(rowValues[0] || '').trim();
-        const questionText = String(rowValues[1] || '').trim();
-        const options = rowValues.slice(2, 14).filter(Boolean).map(String);
-        const correctAnswers = rowValues.slice(14, 26).filter(Boolean).map(String);
+        const options = rowValues.slice(2, 14).filter(Boolean).map(val => String(val).trim());
+        const correctAnswers = rowValues.slice(14, 26).filter(Boolean).map(val => String(val).trim());
         const type = String(rowValues[26] || 'multiple').toLowerCase();
         const points = Number(rowValues[27]) || 1;
         const variant = String(rowValues[28] || '').trim();
@@ -147,11 +157,14 @@ const loadQuestions = async (testNumber) => {
           variant
         };
         if (type === 'matching') {
-          // Для типу matching створюємо пари: options — ліва частина, correctAnswers — права частина
           questionData.pairs = options.map((opt, idx) => ({
-            left: opt,
+            left: opt || '',
             right: correctAnswers[idx] || ''
           })).filter(pair => pair.left && pair.right);
+          if (questionData.pairs.length === 0) {
+            console.warn(`No valid pairs for matching question: ${questionText}`);
+            return;
+          }
           questionData.correctPairs = questionData.pairs.map(pair => [pair.left, pair.right]);
         }
         jsonData.push(questionData);
@@ -1318,7 +1331,7 @@ app.get('/admin/results', checkAuth, checkAdmin, async (req, res) => {
       adminHtml += `
         <tr>
           <td>${r.user || 'N/A'}</td>
-          < browsersync@2.27.10>td>${testNames[r.testNumber]?.name || 'N/A'}</td>
+          <td>${testNames[r.testNumber]?.name || 'N/A'}</td>
           <td>${r.variant || 'N/A'}</td>
           <td>${r.score || '0'}</td>
           <td>${r.totalPoints || '0'}</td>
@@ -1360,7 +1373,7 @@ app.get('/admin/results', checkAuth, checkAdmin, async (req, res) => {
       </body>
     </html>
   `;
-  res.send(adminHtml);
+  res.send(adminHtml.trim()); // Видаляємо можливі зайві пробіли чи переноси
 });
 
 app.post('/admin/delete-result', checkAuth, checkAdmin, async (req, res) => {
