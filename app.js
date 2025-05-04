@@ -790,31 +790,33 @@ app.get('/test/question', checkAuth, (req, res) => {
             function updateMatchingPairs() {
               matchingPairs = [];
               const rightItems = document.querySelectorAll('#right-column .droppable');
-              rightItems.forEach(rightItem => {
-                const rightValue = rightItem.dataset.value;
-                const leftMatch = rightItem.querySelector('.matched')?.textContent.match(/Зіставлено: (.+)/)?.[1] || '';
-                const leftItems = Array.from(document.querySelectorAll('#left-column .draggable')).map(el => el.dataset.value);
-                const leftValue = leftItems.find(item => item === leftMatch) || '';
-                if (leftValue && rightValue) {
-                  matchingPairs.push([leftValue, rightValue]);
+              rightItems.forEach(item => {
+                const rightValue = item.dataset.value;
+                const matchedText = item.querySelector('.matched')?.textContent || '';
+                const leftMatch = matchedText.match(/Зіставлено: (.+)/)?.[1] || '';
+                if (leftMatch && rightValue) {
+                  matchingPairs.push([leftMatch, rightValue]);
                 }
               });
               console.log('Updated matching pairs:', matchingPairs);
             }
 
-            document.querySelectorAll('.droppable').forEach(droppable => {
-              droppable.addEventListener('dragover', (e) => e.preventDefault());
-              droppable.addEventListener('drop', (e) => {
-                e.preventDefault();
-                const draggable = document.querySelector('.dragging');
-                if (draggable && draggable.classList.contains('draggable')) {
-                  const leftValue = draggable.dataset.value;
-                  const rightValue = droppable.dataset.value;
-                  droppable.innerHTML = \`${droppable.dataset.value} <span class="matched"> (Зіставлено: \${leftValue})</span>\`;
-                  updateMatchingPairs();
-                }
+            const droppableItems = document.querySelectorAll('.droppable');
+            if (droppableItems.length > 0) {
+              droppableItems.forEach(item => {
+                item.addEventListener('dragover', (e) => e.preventDefault());
+                item.addEventListener('drop', (e) => {
+                  e.preventDefault();
+                  const draggable = document.querySelector('.dragging');
+                  if (draggable && draggable.classList.contains('draggable')) {
+                    const leftValue = draggable.dataset.value;
+                    const rightValue = item.dataset.value;
+                    item.innerHTML = \`${rightValue} <span class="matched"> (Зіставлено: \${leftValue})</span>\`;
+                    updateMatchingPairs();
+                  }
+                });
               });
-            });
+            }
           }
         </script>
       </body>
