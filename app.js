@@ -187,6 +187,7 @@ const loadQuestions = async (testNumber) => {
             console.warn(`Mismatch in fillblank question: ${questionText}. Expected ${blankCount} answers, but got ${correctAnswers.length}`);
             return;
           }
+          console.log(`Fillblank question ${rowNumber}: text=${questionText}, blankCount=${blankCount}, correctAnswers=${correctAnswers}`); // Додаємо логування
           questionData.text = questionText; // Оновлюємо нормалізований текст
           questionData.blankCount = blankCount;
         }
@@ -1011,8 +1012,9 @@ app.get('/result', checkAuth, async (req, res) => {
         questionScore = q.points;
       }
     } else if (q.type === 'fillblank' && userAnswer && Array.isArray(userAnswer)) {
-      const userAnswers = userAnswer.map(val => String(val).trim().toLowerCase().replace(/\s+/g, ''));
-      const correctAnswers = q.correctAnswers.map(val => String(val).trim().toLowerCase().replace(/\s+/g, ''));
+      const userAnswers = userAnswer.map(val => String(val).trim().toLowerCase().replace(/\s+/g, '').replace(',', '.'));
+      const correctAnswers = q.correctAnswers.map(val => String(val).trim().toLowerCase().replace(/\s+/g, '').replace(',', '.'));
+      console.log(`Fillblank question ${index + 1}: userAnswers=${userAnswers}, correctAnswers=${correctAnswers}`); // Додаємо логування для дебагу
       const isCorrect = userAnswers.length === correctAnswers.length &&
         userAnswers.every((answer, idx) => answer === correctAnswers[idx]);
       if (isCorrect) {
@@ -1185,8 +1187,9 @@ app.get('/results', checkAuth, async (req, res) => {
           questionScore = q.points;
         }
       } else if (q.type === 'fillblank' && userAnswer && Array.isArray(userAnswer)) {
-        const userAnswers = userAnswer.map(val => String(val).trim().toLowerCase().replace(/\s+/g, ''));
-        const correctAnswers = q.correctAnswers.map(val => String(val).trim().toLowerCase().replace(/\s+/g, ''));
+        const userAnswers = userAnswer.map(val => String(val).trim().toLowerCase().replace(/\s+/g, '').replace(',', '.'));
+        const correctAnswers = q.correctAnswers.map(val => String(val).trim().toLowerCase().replace(/\s+/g, '').replace(',', '.'));
+        console.log(`Fillblank question ${index + 1} in /results: userAnswers=${userAnswers}, correctAnswers=${correctAnswers}`); // Додаємо логування для дебагу
         if (userAnswers.length === correctAnswers.length &&
             userAnswers.every((answer, idx) => answer === correctAnswers[idx])) {
           questionScore = q.points;
