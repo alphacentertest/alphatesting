@@ -6,6 +6,7 @@ const ExcelJS = require('exceljs');
 const session = require('express-session');
 const MongoStore = require('connect-mongo');
 const { MongoClient, ObjectId } = require('mongodb');
+const bcrypt = require('bcrypt');
 const fs = require('fs');
 
 const app = express();
@@ -84,21 +85,22 @@ const importUsersToMongoDB = async () => {
       throw new Error('Ни один из листов ("Users" или "Sheet1") не найден');
     }
     const users = [];
-    sheet.eachRow({ includeEmpty: false }, (row, rowNumber) => {
-      if (rowNumber > 1) {
-        const username = String(row.getCell(1).value || '').trim();
-        const password = String(row.getCell(2).value || '').trim();
-        if (username && password) {
-          users.push({ username, password });
-        }
+    const saltRounds = 10;
+    for (let rowNumber = 2; rowNumber <= sheet.rowCount; rowNumber++) {
+      const row = sheet.getRow(rowNumber);
+      const username = String(row.getCell(1).value || '').trim();
+      const password = String(row.getCell(2).value || '').trim();
+      if (username && password) {
+        const hashedPassword = await bcrypt.hash(password, saltRounds);
+        users.push({ username, password: hashedPassword });
       }
-    });
+    }
     if (users.length === 0) {
       throw new Error('Не найдено пользователей в файле');
     }
     await db.collection('users').deleteMany({});
     await db.collection('users').insertMany(users);
-    console.log(`Imported ${users.length} users to MongoDB`);
+    console.log(`Imported ${users.length} users to MongoDB with hashed passwords`);
   } catch (error) {
     console.error('Error importing users to MongoDB:', error.message, error.stack);
     throw error;
@@ -195,7 +197,7 @@ const loadUsers = async () => {
   try {
     const users = await db.collection('users').find({}).toArray();
     usersMap = users.reduce((acc, user) => {
-      acc[user.username] = user.password;
+      acc[user.username] = user.password; // Зберігаємо хеш пароля
       return acc;
     }, {});
     if (Object.keys(usersMap).length === 0) {
@@ -254,6 +256,8 @@ const initializeServer = async () => {
     await db.collection('test_results').createIndex({ user: 1, endTime: -1 });
     await db.collection('activity_log').createIndex({ user: 1, timestamp: -1 });
     console.log('MongoDB indexes created successfully');
+    // Оновлюємо паролі існуючих користувачів (якщо вони є)
+    await updateUserPasswords();
     // Імпортуємо користувачів і питання один раз
     await importUsersToMongoDB();
     await importQuestionsToMongoDB();
@@ -340,7 +344,15 @@ app.post('/login', async (req, res) => {
     if (!password) {
       return res.status(400).json({ success: false, message: 'Пароль не вказано' });
     }
-    const user = Object.keys(usersMap).find(u => usersMap[u] === password);
+    let user = null;
+    for (const username in usersMap) {
+      const hashedPassword = usersMap[username];
+      const isMatch = await bcrypt.compare(password, hashedPassword);
+      if (isMatch) {
+        user = username;
+        break;
+      }
+    }
     if (!user) {
       return res.status(401).json({ success: false, message: 'Невірний пароль' });
     }
@@ -1421,6 +1433,8 @@ app.get('/admin', checkAuth, checkAdmin, (req, res) => {
       </head>
       <body>
         <h1>Адмін-панель</h1>
+        <button onclick="window.location.href='/admin/users'">Керування користувачами</button><br>
+        <button onclick="window.location.href='/admin/questions'">Керування питаннями</button><br>
         <button onclick="window.location.href='/admin/results'">Перегляд результатів</button><br>
         <button onclick="window.location.href='/admin/edit-tests'">Редагувати назви тестів</button><br>
         <button onclick="window.location.href='/admin/create-test'">Створити новий тест</button><br>
@@ -1435,6 +1449,615 @@ app.get('/admin', checkAuth, checkAdmin, (req, res) => {
       </body>
     </html>
   `);
+});
+
+const updateUserPasswords = async () => {
+  const users = await db.collection('users').find({}).toArray();
+  const saltRounds = 10;
+  for (const user of users) {
+    if (!user.password.startsWith('$2b$')) { // Перевіряємо, чи пароль уже хешований
+      const hashedPassword = await bcrypt.hash(user.password, saltRounds);
+      await db.collection('users').updateOne(
+        { _id: user._id },
+        { $set: { password: hashedPassword } }
+      );
+    }
+  }
+  console.log('User passwords updated with hashes');
+};
+
+app.get('/admin/users', checkAuth, checkAdmin, async (req, res) => {
+  let users = [];
+  let errorMessage = '';
+  try {
+    users = await db.collection('users').find({}).toArray();
+  } catch (error) {
+    console.error('Error fetching users from MongoDB:', error.message, error.stack);
+    errorMessage = `Помилка MongoDB: ${error.message}`;
+  }
+
+  let adminHtml = `
+    <!DOCTYPE html>
+    <html lang="uk">
+      <head>
+        <meta charset="UTF-8">
+        <title>Керування користувачами</title>
+        <style>
+          body { font-family: Arial, sans-serif; padding: 20px; }
+          table { border-collapse: collapse; width: 100%; margin-top: 20px; }
+          th, td { border: 1px solid black; padding: 8px; text-align: left; }
+          th { background-color: #f2f2f2; }
+          .error { color: red; }
+          .nav-btn, .action-btn { padding: 10px 20px; margin: 5px; cursor: pointer; border: none; border-radius: 5px; }
+          .action-btn.edit { background-color: #4CAF50; color: white; }
+          .action-btn.delete { background-color: #ff4d4d; color: white; }
+          .nav-btn { background-color: #007bff; color: white; }
+        </style>
+      </head>
+      <body>
+        <h1>Керування користувачами</h1>
+        <button class="nav-btn" onclick="window.location.href='/admin'">Повернутися до адмін-панелі</button>
+        <button class="nav-btn" onclick="window.location.href='/admin/add-user'">Додати користувача</button>
+  `;
+  if (errorMessage) {
+    adminHtml += `<p class="error">${errorMessage}</p>`;
+  }
+  adminHtml += `
+        <table>
+          <tr>
+            <th>Ім'я користувача</th>
+            <th>Дії</th>
+          </tr>
+  `;
+  if (!users || users.length === 0) {
+    adminHtml += '<tr><td colspan="2">Немає користувачів</td></tr>';
+  } else {
+    users.forEach(user => {
+      adminHtml += `
+        <tr>
+          <td>${user.username}</td>
+          <td>
+            <button class="action-btn edit" onclick="window.location.href='/admin/edit-user?username=${user.username}'">Редагувати</button>
+            <button class="action-btn delete" onclick="deleteUser('${user.username}')">Видалити</button>
+          </td>
+        </tr>
+      `;
+    });
+  }
+  adminHtml += `
+        </table>
+        <script>
+          async function deleteUser(username) {
+            if (confirm('Ви впевнені, що хочете видалити користувача ' + username + '?')) {
+              try {
+                const response = await fetch('/admin/delete-user', {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ username })
+                });
+                const result = await response.json();
+                if (result.success) {
+                  window.location.reload();
+                } else {
+                  alert('Помилка при видаленні користувача: ' + result.message);
+                }
+              } catch (error) {
+                alert('Помилка при видаленні користувача');
+              }
+            }
+          }
+        </script>
+      </body>
+    </html>
+  `;
+  res.send(adminHtml);
+});
+
+app.get('/admin/add-user', checkAuth, checkAdmin, (req, res) => {
+  res.send(`
+    <!DOCTYPE html>
+    <html lang="uk">
+      <head>
+        <meta charset="UTF-8">
+        <title>Додати користувача</title>
+        <style>
+          body { font-family: Arial, sans-serif; padding: 20px; }
+          label { display: block; margin: 10px 0 5px; }
+          input { padding: 5px; width: 300px; margin-bottom: 10px; }
+          button { padding: 10px 20px; margin: 5px; cursor: pointer; border: none; border-radius: 5px; }
+          .nav-btn { background-color: #007bff; color: white; }
+          .submit-btn { background-color: #4CAF50; color: white; }
+        </style>
+      </head>
+      <body>
+        <h1>Додати користувача</h1>
+        <form method="POST" action="/admin/add-user">
+          <label for="username">Ім'я користувача:</label>
+          <input type="text" id="username" name="username" required>
+          <label for="password">Пароль:</label>
+          <input type="text" id="password" name="password" required>
+          <button type="submit" class="submit-btn">Додати</button>
+        </form>
+        <button class="nav-btn" onclick="window.location.href='/admin/users'">Повернутися до списку користувачів</button>
+      </body>
+    </html>
+  `);
+});
+
+app.post('/admin/add-user', checkAuth, checkAdmin, async (req, res) => {
+  try {
+    const { username, password } = req.body;
+    if (!username || !password) {
+      return res.status(400).send('Необхідно вказати ім’я користувача та пароль');
+    }
+    const existingUser = await db.collection('users').findOne({ username });
+    if (existingUser) {
+      return res.status(400).send('Користувач із таким ім’ям уже існує');
+    }
+    const saltRounds = 10;
+    const hashedPassword = await bcrypt.hash(password, saltRounds);
+    await db.collection('users').insertOne({ username, password: hashedPassword });
+    usersMap[username] = hashedPassword; // Оновлюємо usersMap
+    res.send(`
+      <!DOCTYPE html>
+      <html lang="uk">
+        <head>
+          <meta charset="UTF-8">
+          <title>Користувача додано</title>
+        </head>
+        <body>
+          <h1>Користувача ${username} успішно додано</h1>
+          <button onclick="window.location.href='/admin/users'">Повернутися до списку користувачів</button>
+        </body>
+      </html>
+    `);
+  } catch (error) {
+    console.error('Error adding user:', error.message, error.stack);
+    res.status(500).send('Помилка при додаванні користувача');
+  }
+});
+
+app.get('/admin/edit-user', checkAuth, checkAdmin, async (req, res) => {
+  const { username } = req.query;
+  const user = await db.collection('users').findOne({ username });
+  if (!user) {
+    return res.status(404).send('Користувача не знайдено');
+  }
+  res.send(`
+    <!DOCTYPE html>
+    <html lang="uk">
+      <head>
+        <meta charset="UTF-8">
+        <title>Редагувати користувача</title>
+        <style>
+          body { font-family: Arial, sans-serif; padding: 20px; }
+          label { display: block; margin: 10px 0 5px; }
+          input { padding: 5px; width: 300px; margin-bottom: 10px; }
+          button { padding: 10px 20px; margin: 5px; cursor: pointer; border: none; border-radius: 5px; }
+          .nav-btn { background-color: #007bff; color: white; }
+          .submit-btn { background-color: #4CAF50; color: white; }
+        </style>
+      </head>
+      <body>
+        <h1>Редагувати користувача: ${username}</h1>
+        <form method="POST" action="/admin/edit-user">
+          <input type="hidden" name="oldUsername" value="${username}">
+          <label for="username">Нове ім'я користувача:</label>
+          <input type="text" id="username" name="username" value="${username}" required>
+          <label for="password">Новий пароль (залиште порожнім, щоб не змінювати):</label>
+          <input type="text" id="password" name="password" placeholder="Введіть новий пароль">
+          <button type="submit" class="submit-btn">Зберегти</button>
+        </form>
+        <button class="nav-btn" onclick="window.location.href='/admin/users'">Повернутися до списку користувачів</button>
+      </body>
+    </html>
+  `);
+});
+
+app.post('/admin/edit-user', checkAuth, checkAdmin, async (req, res) => {
+  try {
+    const { oldUsername, username, password } = req.body;
+    if (!username) {
+      return res.status(400).send('Необхідно вказати ім’я користувача');
+    }
+    const existingUser = await db.collection('users').findOne({ username });
+    if (existingUser && username !== oldUsername) {
+      return res.status(400).send('Користувач із таким ім’ям уже існує');
+    }
+    const updateData = { username };
+    if (password) {
+      const saltRounds = 10;
+      const hashedPassword = await bcrypt.hash(password, saltRounds);
+      updateData.password = hashedPassword;
+    }
+    await db.collection('users').updateOne(
+      { username: oldUsername },
+      { $set: updateData }
+    );
+    delete usersMap[oldUsername];
+    usersMap[username] = updateData.password || usersMap[oldUsername];
+    res.send(`
+      <!DOCTYPE html>
+      <html lang="uk">
+        <head>
+          <meta charset="UTF-8">
+          <title>Користувача оновлено</title>
+        </head>
+        <body>
+          <h1>Користувача ${username} успішно оновлено</h1>
+          <button onclick="window.location.href='/admin/users'">Повернутися до списку користувачів</button>
+        </body>
+      </html>
+    `);
+  } catch (error) {
+    console.error('Error editing user:', error.message, error.stack);
+    res.status(500).send('Помилка при редагуванні користувача');
+  }
+});
+
+app.post('/admin/delete-user', checkAuth, checkAdmin, async (req, res) => {
+  try {
+    const { username } = req.body;
+    await db.collection('users').deleteOne({ username });
+    delete usersMap[username];
+    res.json({ success: true });
+  } catch (error) {
+    console.error('Error deleting user:', error.message, error.stack);
+    res.status(500).json({ success: false, message: 'Помилка при видаленні користувача' });
+  }
+});
+
+app.get('/admin/questions', checkAuth, checkAdmin, async (req, res) => {
+  let questions = [];
+  let errorMessage = '';
+  try {
+    questions = await db.collection('questions').find({}).sort({ testNumber: 1 }).toArray();
+  } catch (error) {
+    console.error('Error fetching questions from MongoDB:', error.message, error.stack);
+    errorMessage = `Помилка MongoDB: ${error.message}`;
+  }
+
+  let adminHtml = `
+    <!DOCTYPE html>
+    <html lang="uk">
+      <head>
+        <meta charset="UTF-8">
+        <title>Керування питаннями</title>
+        <style>
+          body { font-family: Arial, sans-serif; padding: 20px; }
+          table { border-collapse: collapse; width: 100%; margin-top: 20px; }
+          th, td { border: 1px solid black; padding: 8px; text-align: left; }
+          th { background-color: #f2f2f2; }
+          .error { color: red; }
+          .nav-btn, .action-btn { padding: 10px 20px; margin: 5px; cursor: pointer; border: none; border-radius: 5px; }
+          .action-btn.edit { background-color: #4CAF50; color: white; }
+          .action-btn.delete { background-color: #ff4d4d; color: white; }
+          .nav-btn { background-color: #007bff; color: white; }
+        </style>
+      </head>
+      <body>
+        <h1>Керування питаннями</h1>
+        <button class="nav-btn" onclick="window.location.href='/admin'">Повернутися до адмін-панелі</button>
+        <button class="nav-btn" onclick="window.location.href='/admin/add-question'">Додати питання</button>
+  `;
+  if (errorMessage) {
+    adminHtml += `<p class="error">${errorMessage}</p>`;
+  }
+  adminHtml += `
+        <table>
+          <tr>
+            <th>Тест</th>
+            <th>Текст питання</th>
+            <th>Тип</th>
+            <th>Варіант</th>
+            <th>Дії</th>
+          </tr>
+  `;
+  if (!questions || questions.length === 0) {
+    adminHtml += '<tr><td colspan="5">Немає питань</td></tr>';
+  } else {
+    questions.forEach(question => {
+      adminHtml += `
+        <tr>
+          <td>${testNames[question.testNumber]?.name || 'Невідомий тест'}</td>
+          <td>${question.text}</td>
+          <td>${question.type}</td>
+          <td>${question.variant || 'Немає'}</td>
+          <td>
+            <button class="action-btn edit" onclick="window.location.href='/admin/edit-question?id=${question._id}'">Редагувати</button>
+            <button class="action-btn delete" onclick="deleteQuestion('${question._id}')">Видалити</button>
+          </td>
+        </tr>
+      `;
+    });
+  }
+  adminHtml += `
+        </table>
+        <script>
+          async function deleteQuestion(id) {
+            if (confirm('Ви впевнені, що хочете видалити це питання?')) {
+              try {
+                const response = await fetch('/admin/delete-question', {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ id })
+                });
+                const result = await response.json();
+                if (result.success) {
+                  window.location.reload();
+                } else {
+                  alert('Помилка при видаленні питання: ' + result.message);
+                }
+              } catch (error) {
+                alert('Помилка при видаленні питання');
+              }
+            }
+          }
+        </script>
+      </body>
+    </html>
+  `;
+  res.send(adminHtml);
+});
+
+app.get('/admin/add-question', checkAuth, checkAdmin, (req, res) => {
+  res.send(`
+    <!DOCTYPE html>
+    <html lang="uk">
+      <head>
+        <meta charset="UTF-8">
+        <title>Додати питання</title>
+        <style>
+          body { font-family: Arial, sans-serif; padding: 20px; }
+          label { display: block; margin: 10px 0 5px; }
+          input, select, textarea { padding: 5px; width: 300px; margin-bottom: 10px; }
+          textarea { width: 500px; height: 100px; }
+          button { padding: 10px 20px; margin: 5px; cursor: pointer; border: none; border-radius: 5px; }
+          .nav-btn { background-color: #007bff; color: white; }
+          .submit-btn { background-color: #4CAF50; color: white; }
+        </style>
+      </head>
+      <body>
+        <h1>Додати питання</h1>
+        <form method="POST" action="/admin/add-question">
+          <label for="testNumber">Номер тесту:</label>
+          <select id="testNumber" name="testNumber" required>
+            ${Object.keys(testNames).map(num => `<option value="${num}">${testNames[num].name}</option>`).join('')}
+          </select>
+          <label for="text">Текст питання:</label>
+          <textarea id="text" name="text" required></textarea>
+          <label for="type">Тип питання:</label>
+          <select id="type" name="type" required>
+            <option value="multiple">Multiple Choice</option>
+            <option value="singlechoice">Single Choice</option>
+            <option value="truefalse">True/False</option>
+            <option value="input">Input</option>
+            <option value="ordering">Ordering</option>
+            <option value="matching">Matching</option>
+            <option value="fillblank">Fill in the Blank</option>
+          </select>
+          <label for="options">Варіанти відповідей (через кому):</label>
+          <textarea id="options" name="options" placeholder="Введіть варіанти через кому"></textarea>
+          <label for="correctAnswers">Правильні відповіді (через кому):</label>
+          <textarea id="correctAnswers" name="correctAnswers" required placeholder="Введіть правильні відповіді через кому"></textarea>
+          <label for="points">Бали за питання:</label>
+          <input type="number" id="points" name="points" value="1" min="1" required>
+          <label for="variant">Варіант (опціонально):</label>
+          <input type="text" id="variant" name="variant" placeholder="Наприклад, Variant 1">
+          <button type="submit" class="submit-btn">Додати</button>
+        </form>
+        <button class="nav-btn" onclick="window.location.href='/admin/questions'">Повернутися до списку питань</button>
+      </body>
+    </html>
+  `);
+});
+
+app.post('/admin/add-question', checkAuth, checkAdmin, async (req, res) => {
+  try {
+    const { testNumber, text, type, options, correctAnswers, points, variant } = req.body;
+    if (!testNumber || !text || !type || !correctAnswers) {
+      return res.status(400).send('Необхідно заповнити всі обов’язкові поля');
+    }
+
+    let questionData = {
+      testNumber,
+      text,
+      type: type.toLowerCase(),
+      options: options ? options.split(',').map(opt => opt.trim()).filter(Boolean) : [],
+      correctAnswers: correctAnswers.split(',').map(ans => ans.trim()).filter(Boolean),
+      points: Number(points) || 1,
+      variant: variant || ''
+    };
+
+    if (type === 'truefalse') {
+      questionData.options = ["Правда", "Неправда"];
+    }
+
+    if (type === 'matching') {
+      questionData.pairs = questionData.options.map((opt, idx) => ({
+        left: opt || '',
+        right: questionData.correctAnswers[idx] || ''
+      })).filter(pair => pair.left && pair.right);
+      if (questionData.pairs.length === 0) {
+        return res.status(400).send('Для типу Matching потрібні пари відповідей');
+      }
+      questionData.correctPairs = questionData.pairs.map(pair => [pair.left, pair.right]);
+    }
+
+    if (type === 'fillblank') {
+      questionData.text = questionData.text.replace(/\s*___\s*/g, '___');
+      const blankCount = (questionData.text.match(/___/g) || []).length;
+      if (blankCount === 0 || blankCount !== questionData.correctAnswers.length) {
+        return res.status(400).send('Кількість пропусків у тексті питання не відповідає кількості правильних відповідей');
+      }
+      questionData.blankCount = blankCount;
+    }
+
+    if (type === 'singlechoice') {
+      if (questionData.correctAnswers.length !== 1 || questionData.options.length < 2) {
+        return res.status(400).send('Для типу Single Choice потрібна одна правильна відповідь і мінімум 2 варіанти');
+      }
+      questionData.correctAnswer = questionData.correctAnswers[0];
+    }
+
+    await db.collection('questions').insertOne(questionData);
+    res.send(`
+      <!DOCTYPE html>
+      <html lang="uk">
+        <head>
+          <meta charset="UTF-8">
+          <title>Питання додано</title>
+        </head>
+        <body>
+          <h1>Питання успішно додано</h1>
+          <button onclick="window.location.href='/admin/questions'">Повернутися до списку питань</button>
+        </body>
+      </html>
+    `);
+  } catch (error) {
+    console.error('Error adding question:', error.message, error.stack);
+    res.status(500).send('Помилка при додаванні питання');
+  }
+});
+
+app.get('/admin/edit-question', checkAuth, checkAdmin, async (req, res) => {
+  const { id } = req.query;
+  const question = await db.collection('questions').findOne({ _id: new ObjectId(id) });
+  if (!question) {
+    return res.status(404).send('Питання не знайдено');
+  }
+  res.send(`
+    <!DOCTYPE html>
+    <html lang="uk">
+      <head>
+        <meta charset="UTF-8">
+        <title>Редагувати питання</title>
+        <style>
+          body { font-family: Arial, sans-serif; padding: 20px; }
+          label { display: block; margin: 10px 0 5px; }
+          input, select, textarea { padding: 5px; width: 300px; margin-bottom: 10px; }
+          textarea { width: 500px; height: 100px; }
+          button { padding: 10px 20px; margin: 5px; cursor: pointer; border: none; border-radius: 5px; }
+          .nav-btn { background-color: #007bff; color: white; }
+          .submit-btn { background-color: #4CAF50; color: white; }
+        </style>
+      </head>
+      <body>
+        <h1>Редагувати питання</h1>
+        <form method="POST" action="/admin/edit-question">
+          <input type="hidden" name="id" value="${id}">
+          <label for="testNumber">Номер тесту:</label>
+          <select id="testNumber" name="testNumber" required>
+            ${Object.keys(testNames).map(num => `<option value="${num}" ${num === question.testNumber ? 'selected' : ''}>${testNames[num].name}</option>`).join('')}
+          </select>
+          <label for="text">Текст питання:</label>
+          <textarea id="text" name="text" required>${question.text}</textarea>
+          <label for="type">Тип питання:</label>
+          <select id="type" name="type" required>
+            <option value="multiple" ${question.type === 'multiple' ? 'selected' : ''}>Multiple Choice</option>
+            <option value="singlechoice" ${question.type === 'singlechoice' ? 'selected' : ''}>Single Choice</option>
+            <option value="truefalse" ${question.type === 'truefalse' ? 'selected' : ''}>True/False</option>
+            <option value="input" ${question.type === 'input' ? 'selected' : ''}>Input</option>
+            <option value="ordering" ${question.type === 'ordering' ? 'selected' : ''}>Ordering</option>
+            <option value="matching" ${question.type === 'matching' ? 'selected' : ''}>Matching</option>
+            <option value="fillblank" ${question.type === 'fillblank' ? 'selected' : ''}>Fill in the Blank</option>
+          </select>
+          <label for="options">Варіанти відповідей (через кому):</label>
+          <textarea id="options" name="options">${question.options.join(', ')}</textarea>
+          <label for="correctAnswers">Правильні відповіді (через кому):</label>
+          <textarea id="correctAnswers" name="correctAnswers" required>${question.correctAnswers.join(', ')}</textarea>
+          <label for="points">Бали за питання:</label>
+          <input type="number" id="points" name="points" value="${question.points}" min="1" required>
+          <label for="variant">Варіант:</label>
+          <input type="text" id="variant" name="variant" value="${question.variant}">
+          <button type="submit" class="submit-btn">Зберегти</button>
+        </form>
+        <button class="nav-btn" onclick="window.location.href='/admin/questions'">Повернутися до списку питань</button>
+      </body>
+    </html>
+  `);
+});
+
+app.post('/admin/edit-question', checkAuth, checkAdmin, async (req, res) => {
+  try {
+    const { id, testNumber, text, type, options, correctAnswers, points, variant } = req.body;
+    if (!testNumber || !text || !type || !correctAnswers) {
+      return res.status(400).send('Необхідно заповнити всі обов’язкові поля');
+    }
+
+    let questionData = {
+      testNumber,
+      text,
+      type: type.toLowerCase(),
+      options: options ? options.split(',').map(opt => opt.trim()).filter(Boolean) : [],
+      correctAnswers: correctAnswers.split(',').map(ans => ans.trim()).filter(Boolean),
+      points: Number(points) || 1,
+      variant: variant || ''
+    };
+
+    if (type === 'truefalse') {
+      questionData.options = ["Правда", "Неправда"];
+    }
+
+    if (type === 'matching') {
+      questionData.pairs = questionData.options.map((opt, idx) => ({
+        left: opt || '',
+        right: questionData.correctAnswers[idx] || ''
+      })).filter(pair => pair.left && pair.right);
+      if (questionData.pairs.length === 0) {
+        return res.status(400).send('Для типу Matching потрібні пари відповідей');
+      }
+      questionData.correctPairs = questionData.pairs.map(pair => [pair.left, pair.right]);
+    }
+
+    if (type === 'fillblank') {
+      questionData.text = questionData.text.replace(/\s*___\s*/g, '___');
+      const blankCount = (questionData.text.match(/___/g) || []).length;
+      if (blankCount === 0 || blankCount !== questionData.correctAnswers.length) {
+        return res.status(400).send('Кількість пропусків у тексті питання не відповідає кількості правильних відповідей');
+      }
+      questionData.blankCount = blankCount;
+    }
+
+    if (type === 'singlechoice') {
+      if (questionData.correctAnswers.length !== 1 || questionData.options.length < 2) {
+        return res.status(400).send('Для типу Single Choice потрібна одна правильна відповідь і мінімум 2 варіанти');
+      }
+      questionData.correctAnswer = questionData.correctAnswers[0];
+    }
+
+    await db.collection('questions').updateOne(
+      { _id: new ObjectId(id) },
+      { $set: questionData }
+    );
+    res.send(`
+      <!DOCTYPE html>
+      <html lang="uk">
+        <head>
+          <meta charset="UTF-8">
+          <title>Питання оновлено</title>
+        </head>
+        <body>
+          <h1>Питання успішно оновлено</h1>
+          <button onclick="window.location.href='/admin/questions'">Повернутися до списку питань</button>
+        </body>
+      </html>
+    `);
+  } catch (error) {
+    console.error('Error editing question:', error.message, error.stack);
+    res.status(500).send('Помилка при редагуванні питання');
+  }
+});
+
+app.post('/admin/delete-question', checkAuth, checkAdmin, async (req, res) => {
+  try {
+    const { id } = req.body;
+    await db.collection('questions').deleteOne({ _id: new ObjectId(id) });
+    res.json({ success: true });
+  } catch (error) {
+    console.error('Error deleting question:', error.message, error.stack);
+    res.status(500).json({ success: false, message: 'Помилка при видаленні питання' });
+  }
 });
 
 app.get('/admin/results', checkAuth, checkAdmin, async (req, res) => {
