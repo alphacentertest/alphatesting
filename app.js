@@ -10,7 +10,6 @@ const bcrypt = require('bcrypt');
 const fs = require('fs');
 const multer = require('multer');
 const nodemailer = require('nodemailer');
-const crypto = require('crypto');
 
 const app = express();
 
@@ -46,11 +45,6 @@ const sendSuspiciousActivityEmail = async (user, activityDetails) => {
   } catch (error) {
     console.error('Error sending suspicious activity email:', error.message, error.stack);
   }
-};
-
-// Функція для генерації CSRF-токена
-const generateCsrfToken = () => {
-  return crypto.randomBytes(16).toString('hex');
 };
 
 // Підключення до MongoDB
@@ -120,33 +114,6 @@ app.use(session({
     maxAge: 24 * 60 * 60 * 1000
   }
 }));
-
-// Middleware для CSRF-токена
-app.use((req, res, next) => {
-  if (!req.session.csrfToken) {
-    req.session.csrfToken = generateCsrfToken();
-    console.log('Generated new CSRF token for session:', req.session.csrfToken);
-  } else {
-    console.log('Existing CSRF token in session:', req.session.csrfToken);
-  }
-  res.locals.csrfToken = req.session.csrfToken || '';
-  next();
-});
-
-// Middleware для перевірки CSRF-токена
-app.use((req, res, next) => {
-  if (req.method === 'POST') {
-    const csrfToken = req.body._csrf || req.headers['x-csrf-token'];
-    console.log('CSRF Token in request:', csrfToken);
-    console.log('CSRF Token in session:', req.session.csrfToken);
-    console.log('Session ID:', req.session.id);
-    if (!csrfToken || (req.session.csrfToken && csrfToken !== req.session.csrfToken)) {
-      console.error('CSRF token mismatch');
-      return res.status(403).json({ success: false, message: 'Невірний CSRF-токен' });
-    }
-  }
-  next();
-});
 
 const importUsersToMongoDB = async (filePath) => {
   try {
@@ -417,7 +384,6 @@ app.get('/', (req, res) => {
       <body>
         <h1>Введіть пароль</h1>
         <form id="login-form" method="POST" action="/login">
-          <input type="hidden" name="_csrf" id="csrf-token" value="${res.locals.csrfToken || ''}">
           <input type="password" id="password" name="password" placeholder="Пароль" required><br>
           <div class="checkbox-container">
             <input type="checkbox" id="show-password" onclick="togglePassword()">
@@ -430,15 +396,7 @@ app.get('/', (req, res) => {
           document.getElementById('login-form').addEventListener('submit', async (e) => {
             e.preventDefault();
             const password = document.getElementById('password').value;
-            const csrfToken = document.getElementById('csrf-token').value;
             const errorMessage = document.getElementById('error-message');
-
-            // Дебагінг CSRF-токена
-            console.log('CSRF Token from form:', csrfToken);
-            if (!csrfToken) {
-              errorMessage.textContent = 'CSRF-токен не знайдено у формі';
-              return;
-            }
 
             const formData = new URLSearchParams();
             formData.append('password', password);
@@ -446,10 +404,7 @@ app.get('/', (req, res) => {
             try {
               const response = await fetch('/login', {
                 method: 'POST',
-                headers: {
-                  'Content-Type': 'application/x-www-form-urlencoded',
-                  'X-CSRF-Token': csrfToken
-                },
+                headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
                 body: formData
               });
               const result = await response.json();
@@ -574,17 +529,12 @@ app.get('/select-test', checkAuth, (req, res) => {
           `).join('')}
         </div>
         <button id="logout" onclick="logout()">Вийти</button>
-        <input type="hidden" id="csrf-token" value="${res.locals.csrfToken || ''}">
         <script>
           async function logout() {
-            const csrfToken = document.getElementById('csrf-token').value;
             const formData = new URLSearchParams();
             await fetch('/logout', {
               method: 'POST',
-              headers: {
-                'Content-Type': 'application/x-www-form-urlencoded',
-                'X-CSRF-Token': csrfToken
-              },
+              headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
               body: formData
             });
             window.location.href = '/';
@@ -742,7 +692,7 @@ app.get('/test/question', checkAuth, (req, res) => {
           .progress-line { width: 5px; height: 2px; background-color: #ccc; margin: 0 2px; align-self: center; flex-shrink: 0; }
           .progress-line.answered { background-color: green; }
           .progress-row { display: flex; align-items: center; justify-content: space-around; gap: 2px; flex-wrap: wrap; }
-          .option-box { border: 2px solid #ccc; padding: 10px; margin: 5px 0; border-radius: 5px; cursor: pointer; font-size:wechat://msg 16px; user-select: none; }
+          .option-box { border: 2px solid #ccc; padding: 10px; margin: 5px 0; border-radius: 5px; cursor: pointer; font-size: 16px; user-select: none; }
           .option-box.selected { background-color: #90ee90; }
           .button-container { position: fixed; bottom: 20px; left: 20px; right: 20px; display: flex; justify-content: space-between; }
           button { padding: 10px 20px; margin: 5px; border: none; cursor: pointer; border-radius: 5px; font-size: 16px; }
@@ -924,7 +874,6 @@ app.get('/test/question', checkAuth, (req, res) => {
           <button onclick="finishTest(${index})">Так</button>
           <button onclick="hideConfirm()">Ні</button>
         </div>
-        <input type="hidden" id="csrf-token" value="${res.locals.csrfToken || ''}">
         <script>
           let startTime = ${startTime};
           let timeLimit = ${timeLimit};
@@ -1027,15 +976,9 @@ app.get('/test/question', checkAuth, (req, res) => {
               formData.append('responseTime', responseTime);
               formData.append('activityCount', activityCount);
 
-              const csrfToken = document.getElementById('csrf-token').value;
-              console.log('CSRF Token for /answer:', csrfToken);
-
               await fetch('/answer', {
                 method: 'POST',
-                headers: {
-                  'Content-Type': 'application/x-www-form-urlencoded',
-                  'X-CSRF-Token': csrfToken
-                },
+                headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
                 body: formData
               });
               window.location.href = '/test/question?index=' + (index + 1);
@@ -1079,15 +1022,9 @@ app.get('/test/question', checkAuth, (req, res) => {
               formData.append('responseTime', responseTime);
               formData.append('activityCount', activityCount);
 
-              const csrfToken = document.getElementById('csrf-token').value;
-              console.log('CSRF Token for /answer (finishTest):', csrfToken);
-
               await fetch('/answer', {
                 method: 'POST',
-                headers: {
-                  'Content-Type': 'application/x-www-form-urlencoded',
-                  'X-CSRF-Token': csrfToken
-                },
+                headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
                 body: formData
               });
               window.location.href = '/result';
@@ -1577,7 +1514,7 @@ app.get('/results', checkAuth, async (req, res) => {
 
         document.getElementById('exportPDF').addEventListener('click', () => {
           const docDefinition = {
-            content: [
+                         content: [
               {
                 image: 'data:image/png;base64,' + imageBase64,
                 width: 150,
@@ -1653,17 +1590,12 @@ app.get('/admin', checkAuth, checkAdmin, (req, res) => {
         <button onclick="window.location.href='/admin/create-test'">Створити новий тест</button><br>
         <button onclick="window.location.href='/admin/activity-log'">Журнал дій</button><br>
         <button id="logout" onclick="logout()">Вийти</button>
-        <input type="hidden" id="csrf-token" value="${res.locals.csrfToken || ''}">
         <script>
           async function logout() {
-            const csrfToken = document.getElementById('csrf-token').value;
             const formData = new URLSearchParams();
             await fetch('/logout', {
               method: 'POST',
-              headers: {
-                'Content-Type': 'application/x-www-form-urlencoded',
-                'X-CSRF-Token': csrfToken
-              },
+              headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
               body: formData
             });
             window.location.href = '/';
@@ -1734,20 +1666,15 @@ app.get('/admin/users', checkAuth, checkAdmin, async (req, res) => {
   }
   adminHtml += `
         </table>
-        <input type="hidden" id="csrf-token" value="${res.locals.csrfToken || ''}">
         <script>
           async function deleteUser(username) {
             if (confirm('Ви впевнені, що хочете видалити користувача ' + username + '?')) {
               try {
-                const csrfToken = document.getElementById('csrf-token').value;
                 const formData = new URLSearchParams();
                 formData.append('username', username);
                 const response = await fetch('/admin/delete-user', {
                   method: 'POST',
-                  headers: {
-                    'Content-Type': 'application/x-www-form-urlencoded',
-                    'X-CSRF-Token': csrfToken
-                  },
+                  headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
                   body: formData
                 });
                 const result = await response.json();
@@ -1788,7 +1715,6 @@ app.get('/admin/add-user', checkAuth, checkAdmin, (req, res) => {
       <body>
         <h1>Додати користувача</h1>
         <form method="POST" action="/admin/add-user" onsubmit="return validateForm()">
-          <input type="hidden" name="_csrf" id="csrf-token" value="${res.locals.csrfToken || ''}">
           <label for="username">Ім'я користувача:</label>
           <input type="text" id="username" name="username" required>
           <label for="password">Пароль:</label>
@@ -1824,7 +1750,7 @@ app.get('/admin/add-user', checkAuth, checkAdmin, (req, res) => {
 
 app.post('/admin/add-user', checkAuth, checkAdmin, async (req, res) => {
   try {
-    const { username, password, _csrf } = req.body;
+    const { username, password } = req.body;
     if (!username || username.length < 3 || username.length > 50) {
       return res.status(400).send('Ім’я користувача має бути від 3 до 50 символів');
     }
@@ -1886,7 +1812,6 @@ app.get('/admin/edit-user', checkAuth, checkAdmin, async (req, res) => {
       <body>
         <h1>Редагувати користувача: ${username}</h1>
         <form method="POST" action="/admin/edit-user" onsubmit="return validateForm()">
-          <input type="hidden" name="_csrf" id="csrf-token" value="${res.locals.csrfToken || ''}">
           <input type="hidden" name="oldUsername" value="${username}">
           <label for="username">Нове ім'я користувача:</label>
           <input type="text" id="username" name="username" value="${username}" required>
@@ -1923,7 +1848,7 @@ app.get('/admin/edit-user', checkAuth, checkAdmin, async (req, res) => {
 
 app.post('/admin/edit-user', checkAuth, checkAdmin, async (req, res) => {
   try {
-    const { oldUsername, username, password, _csrf } = req.body;
+    const { oldUsername, username, password } = req.body;
     if (!username || username.length < 3 || username.length > 50) {
       return res.status(400).send('Ім’я користувача має бути від 3 до 50 символів');
     }
@@ -2046,20 +1971,15 @@ app.get('/admin/questions', checkAuth, checkAdmin, async (req, res) => {
   }
   adminHtml += `
         </table>
-        <input type="hidden" id="csrf-token" value="${res.locals.csrfToken || ''}">
         <script>
           async function deleteQuestion(id) {
             if (confirm('Ви впевнені, що хочете видалити це питання?')) {
               try {
-                const csrfToken = document.getElementById('csrf-token').value;
                 const formData = new URLSearchParams();
                 formData.append('id', id);
                 const response = await fetch('/admin/delete-question', {
                   method: 'POST',
-                  headers: {
-                    'Content-Type': 'application/x-www-form-urlencoded',
-                    'X-CSRF-Token': csrfToken
-                  },
+                  headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
                   body: formData
                 });
                 const result = await response.json();
@@ -2101,7 +2021,6 @@ app.get('/admin/add-question', checkAuth, checkAdmin, (req, res) => {
       <body>
         <h1>Додати питання</h1>
         <form method="POST" action="/admin/add-question" onsubmit="return validateForm()">
-          <input type="hidden" name="_csrf" id="csrf-token" value="${res.locals.csrfToken || ''}">
           <label for="testNumber">Номер тесту:</label>
           <select id="testNumber" name="testNumber" required>
             ${Object.keys(testNames).map(num => `<option value="${num}">${testNames[num].name}</option>`).join('')}
@@ -2158,7 +2077,7 @@ app.get('/admin/add-question', checkAuth, checkAdmin, (req, res) => {
 
 app.post('/admin/add-question', checkAuth, checkAdmin, async (req, res) => {
   try {
-    const { testNumber, text, type, options, correctAnswers, points, variant, _csrf } = req.body;
+    const { testNumber, text, type, options, correctAnswers, points, variant } = req.body;
     if (!testNumber || !text || !type || !correctAnswers) {
       return res.status(400).send('Необхідно заповнити всі обов’язкові поля');
     }
@@ -2263,7 +2182,6 @@ app.get('/admin/edit-question', checkAuth, checkAdmin, async (req, res) => {
       <body>
         <h1>Редагувати питання</h1>
         <form method="POST" action="/admin/edit-question" onsubmit="return validateForm()">
-          <input type="hidden" name="_csrf" id="csrf-token" value="${res.locals.csrfToken || ''}">
           <input type="hidden" name="id" value="${id}">
           <label for="testNumber">Номер тесту:</label>
           <select id="testNumber" name="testNumber" required>
@@ -2321,7 +2239,7 @@ app.get('/admin/edit-question', checkAuth, checkAdmin, async (req, res) => {
 
 app.post('/admin/edit-question', checkAuth, checkAdmin, async (req, res) => {
   try {
-    const { id, testNumber, text, type, options, correctAnswers, points, variant, _csrf } = req.body;
+    const { id, testNumber, text, type, options, correctAnswers, points, variant } = req.body;
     if (!testNumber || !text || !type || !correctAnswers) {
       return res.status(400).send('Необхідно заповнити всі обов’язкові поля');
     }
@@ -2433,7 +2351,6 @@ app.get('/admin/import-users', checkAuth, checkAdmin, (req, res) => {
       <body>
         <h1>Імпорт користувачів із Excel</h1>
         <form method="POST" action="/admin/import-users" enctype="multipart/form-data">
-          <input type="hidden" name="_csrf" id="csrf-token" value="${res.locals.csrfToken || ''}">
           <label for="file">Виберіть файл users.xlsx:</label>
           <input type="file" id="file" name="file" accept=".xlsx" required>
           <button type="submit" class="submit-btn">Завантажити</button>
@@ -2494,7 +2411,6 @@ app.get('/admin/import-questions', checkAuth, checkAdmin, (req, res) => {
       <body>
         <h1>Імпорт питань із Excel</h1>
         <form method="POST" action="/admin/import-questions" enctype="multipart/form-data">
-          <input type="hidden" name="_csrf" id="csrf-token" value="${res.locals.csrfToken || ''}">
           <label for="file">Виберіть файл questions*.xlsx:</label>
           <input type="file" id="file" name="file" accept=".xlsx" required>
           <button type="submit" class="submit-btn">Завантажити</button>
@@ -2670,20 +2586,15 @@ app.get('/admin/results', checkAuth, checkAdmin, async (req, res) => {
   adminHtml += `
         </table>
         <button class="delete-all-btn" onclick="deleteAllResults()">Видалити всі результати</button>
-        <input type="hidden" id="csrf-token" value="${res.locals.csrfToken || ''}">
         <script>
           async function deleteResult(id) {
             if (confirm('Ви впевнені, що хочете видалити цей результат?')) {
               try {
-                const csrfToken = document.getElementById('csrf-token').value;
                 const formData = new URLSearchParams();
                 formData.append('id', id);
                 const response = await fetch('/admin/delete-result', {
                   method: 'POST',
-                  headers: {
-                    'Content-Type': 'application/x-www-form-urlencoded',
-                    'X-CSRF-Token': csrfToken
-                  },
+                  headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
                   body: formData
                 });
                 const result = await response.json();
@@ -2701,14 +2612,10 @@ app.get('/admin/results', checkAuth, checkAdmin, async (req, res) => {
           async function deleteAllResults() {
             if (confirm('Ви впевнені, що хочете видалити всі результати? Цю дію не можна скасувати!')) {
               try {
-                const csrfToken = document.getElementById('csrf-token').value;
                 const formData = new URLSearchParams();
                 const response = await fetch('/admin/delete-all-results', {
                   method: 'POST',
-                  headers: {
-                    'Content-Type': 'application/x-www-form-urlencoded',
-                    'X-CSRF-Token': csrfToken
-                  },
+                  headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
                   body: formData
                 });
                 const result = await response.json();
@@ -2774,7 +2681,6 @@ app.get('/admin/edit-tests', checkAuth, checkAdmin, (req, res) => {
       <body>
         <h1>Редагувати назви та налаштування тестів</h1>
         <form method="POST" action="/admin/edit-tests">
-          <input type="hidden" name="_csrf" id="csrf-token" value="${res.locals.csrfToken || ''}">
           ${Object.entries(testNames).map(([num, data]) => `
             <div class="test-row">
               <label for="test${num}">Назва Тесту ${num}:</label>
@@ -2793,19 +2699,14 @@ app.get('/admin/edit-tests', checkAuth, checkAdmin, (req, res) => {
           <button type="submit">Зберегти</button>
         </form>
         <button onclick="window.location.href='/admin'">Повернутися до адмін-панелі</button>
-        <input type="hidden" id="csrf-token" value="${res.locals.csrfToken || ''}">
         <script>
           async function deleteTest(testNumber) {
             if (confirm('Ви впевнені, що хочете видалити Тест ' + testNumber + '?')) {
-              const csrfToken = document.getElementById('csrf-token').value;
               const formData = new URLSearchParams();
               formData.append('testNumber', testNumber);
               await fetch('/admin/delete-test', {
                 method: 'POST',
-                headers: {
-                  'Content-Type': 'application/x-www-form-urlencoded',
-                  'X-CSRF-Token': csrfToken
-                },
+                headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
                 body: formData
               });
               window.location.reload();
@@ -2885,7 +2786,6 @@ app.get('/admin/create-test', checkAuth, checkAdmin, (req, res) => {
       <body>
         <h1>Створити новий тест</h1>
         <form method="POST" action="/admin/create-test">
-          <input type="hidden" name="_csrf" id="csrf-token" value="${res.locals.csrfToken || ''}">
           <div>
             <label for="testName">Назва нового тесту:</label>
             <input type="text" id="testName" name="testName" required>
@@ -3001,19 +2901,14 @@ app.get('/admin/activity-log', checkAuth, checkAdmin, async (req, res) => {
   adminHtml += `
         </table>
         <button class="clear-btn" onclick="clearActivityLog()">Видалити усі записи журналу</button>
-        <input type="hidden" id="csrf-token" value="${res.locals.csrfToken || ''}">
         <script>
           async function clearActivityLog() {
             if (confirm('Ви впевнені, що хочете видалити усі записи журналу дій?')) {
               try {
-                const csrfToken = document.getElementById('csrf-token').value;
                 const formData = new URLSearchParams();
                 const response = await fetch('/admin/delete-activity-log', {
                   method: 'POST',
-                  headers: {
-                    'Content-Type': 'application/x-www-form-urlencoded',
-                    'X-CSRF-Token': csrfToken
-                  },
+                  headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
                   body: formData
                 });
                 const result = await response.json();
