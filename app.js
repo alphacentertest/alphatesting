@@ -126,7 +126,10 @@ app.use((req, res, next) => {
 app.use((req, res, next) => {
   if (req.method === 'POST') {
     const csrfToken = req.body._csrf || req.headers['x-csrf-token'];
+    console.log('CSRF Token in request:', csrfToken);
+    console.log('CSRF Token in session:', req.session.csrfToken);
     if (!csrfToken || (req.session.csrfToken && csrfToken !== req.session.csrfToken)) {
+      console.error('CSRF token mismatch');
       return res.status(403).json({ success: false, message: 'Невірний CSRF-токен' });
     }
   }
@@ -415,12 +418,18 @@ app.get('/', (req, res) => {
           document.getElementById('login-form').addEventListener('submit', async (e) => {
             e.preventDefault();
             const password = document.getElementById('password').value;
+            const csrfToken = document.querySelector('input[name="_csrf"]').value;
             const errorMessage = document.getElementById('error-message');
+
+            const formData = new URLSearchParams();
+            formData.append('password', password);
+            formData.append('_csrf', csrfToken);
+
             try {
               const response = await fetch('/login', {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ password, _csrf: "${res.locals.csrfToken || ''}" })
+                headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                body: formData
               });
               const result = await response.json();
               if (result.success) {
@@ -546,7 +555,13 @@ app.get('/select-test', checkAuth, (req, res) => {
         <button id="logout" onclick="logout()">Вийти</button>
         <script>
           async function logout() {
-            await fetch('/logout', { method: 'POST' });
+            const formData = new URLSearchParams();
+            formData.append('_csrf', "${res.locals.csrfToken || ''}");
+            await fetch('/logout', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+              body: formData
+            });
             window.location.href = '/';
           }
         </script>
@@ -977,10 +992,20 @@ app.get('/test/question', checkAuth, (req, res) => {
               }
               console.log('Saving answer for question ' + index + ':', answers);
               const responseTime = Date.now() - questionStartTime;
+
+              const formData = new URLSearchParams();
+              formData.append('index', index);
+              formData.append('answer', JSON.stringify(answers));
+              formData.append('timeAway', timeAway);
+              formData.append('switchCount', switchCount);
+              formData.append('responseTime', responseTime);
+              formData.append('activityCount', activityCount);
+              formData.append('_csrf', "${res.locals.csrfToken || ''}");
+
               await fetch('/answer', {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ index, answer: answers, timeAway, switchCount, responseTime, activityCount })
+                headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                body: formData
               });
               window.location.href = '/test/question?index=' + (index + 1);
             } catch (error) {
@@ -1014,10 +1039,20 @@ app.get('/test/question', checkAuth, (req, res) => {
               }
               console.log('Finishing test, answer for question ' + index + ':', answers);
               const responseTime = Date.now() - questionStartTime;
+
+              const formData = new URLSearchParams();
+              formData.append('index', index);
+              formData.append('answer', JSON.stringify(answers));
+              formData.append('timeAway', timeAway);
+              formData.append('switchCount', switchCount);
+              formData.append('responseTime', responseTime);
+              formData.append('activityCount', activityCount);
+              formData.append('_csrf', "${res.locals.csrfToken || ''}");
+
               await fetch('/answer', {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ index, answer: answers, timeAway, switchCount, responseTime, activityCount })
+                headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                body: formData
               });
               window.location.href = '/result';
             } catch (error) {
@@ -1123,21 +1158,22 @@ app.get('/test/question', checkAuth, (req, res) => {
   res.send(html);
 });
 
-app.post('/answer', checkAuth, (req, res) => {
+app.post('/answer', checkAuth, express.urlencoded({ extended: true }), (req, res) => {
   if (req.user === 'admin') return res.redirect('/admin');
   try {
     const { index, answer, timeAway, switchCount, responseTime, activityCount } = req.body;
+    const parsedAnswer = JSON.parse(answer);
     const userTest = userTests.get(req.user);
     if (!userTest) {
       return res.status(400).json({ error: 'Тест не розпочато' });
     }
-    console.log(`Saving answer for question ${index}:`, answer);
-    userTest.answers[index] = answer;
+    console.log(`Saving answer for question ${index}:`, parsedAnswer);
+    userTest.answers[index] = parsedAnswer;
     userTest.suspiciousActivity = userTest.suspiciousActivity || { timeAway: 0, switchCount: 0, responseTimes: [], activityCounts: [] };
-    userTest.suspiciousActivity.timeAway = (userTest.suspiciousActivity.timeAway || 0) + (timeAway || 0);
-    userTest.suspiciousActivity.switchCount = (userTest.suspiciousActivity.switchCount || 0) + (switchCount || 0);
-    userTest.suspiciousActivity.responseTimes[index] = responseTime || 0;
-    userTest.suspiciousActivity.activityCounts[index] = activityCount || 0;
+    userTest.suspiciousActivity.timeAway = (userTest.suspiciousActivity.timeAway || 0) + (parseInt(timeAway) || 0);
+    userTest.suspiciousActivity.switchCount = (userTest.suspiciousActivity.switchCount || 0) + (parseInt(switchCount) || 0);
+    userTest.suspiciousActivity.responseTimes[index] = parseInt(responseTime) || 0;
+    userTest.suspiciousActivity.activityCounts[index] = parseInt(activityCount) || 0;
     res.json({ success: true });
   } catch (error) {
     console.error('Ошибка в /answer:', error.message, error.stack);
@@ -1489,7 +1525,7 @@ app.get('/results', checkAuth, async (req, res) => {
         <button id="exportPDF">Експортувати в PDF</button>
         <button id="restart">Повернутися на головну</button>
       </div>
-      <script src="https://cdnjs.cloudflare.com/ajax/libs/pdfmake/0.2.7/pdfmake.min.js"></script>
+            <script src="https://cdnjs.cloudflare.com/ajax/libs/pdfmake/0.2.7/pdfmake.min.js"></script>
       <script src="https://cdnjs.cloudflare.com/ajax/libs/pdfmake/0.2.7/vfs_fonts.js"></script>
       <script>
         const user = "${req.user}";
@@ -1583,10 +1619,12 @@ app.get('/admin', checkAuth, checkAdmin, (req, res) => {
         <button id="logout" onclick="logout()">Вийти</button>
         <script>
           async function logout() {
-            await fetch('/logout', { 
+            const formData = new URLSearchParams();
+            formData.append('_csrf', "${res.locals.csrfToken || ''}");
+            await fetch('/logout', {
               method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ _csrf: "${res.locals.csrfToken || ''}" })
+              headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+              body: formData
             });
             window.location.href = '/';
           }
@@ -1660,10 +1698,13 @@ app.get('/admin/users', checkAuth, checkAdmin, async (req, res) => {
           async function deleteUser(username) {
             if (confirm('Ви впевнені, що хочете видалити користувача ' + username + '?')) {
               try {
+                const formData = new URLSearchParams();
+                formData.append('username', username);
+                formData.append('_csrf', "${res.locals.csrfToken || ''}");
                 const response = await fetch('/admin/delete-user', {
                   method: 'POST',
-                  headers: { 'Content-Type': 'application/json' },
-                  body: JSON.stringify({ username, _csrf: "${res.locals.csrfToken || ''}" })
+                  headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                  body: formData
                 });
                 const result = await response.json();
                 if (result.success) {
@@ -1965,10 +2006,13 @@ app.get('/admin/questions', checkAuth, checkAdmin, async (req, res) => {
           async function deleteQuestion(id) {
             if (confirm('Ви впевнені, що хочете видалити це питання?')) {
               try {
+                const formData = new URLSearchParams();
+                formData.append('id', id);
+                formData.append('_csrf', "${res.locals.csrfToken || ''}");
                 const response = await fetch('/admin/delete-question', {
                   method: 'POST',
-                  headers: { 'Content-Type': 'application/json' },
-                  body: JSON.stringify({ id, _csrf: "${res.locals.csrfToken || ''}" })
+                  headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                  body: formData
                 });
                 const result = await response.json();
                 if (result.success) {
@@ -2582,10 +2626,13 @@ app.get('/admin/results', checkAuth, checkAdmin, async (req, res) => {
           async function deleteResult(id) {
             if (confirm('Ви впевнені, що хочете видалити цей результат?')) {
               try {
+                const formData = new URLSearchParams();
+                formData.append('id', id);
+                formData.append('_csrf', "${res.locals.csrfToken || ''}");
                 const response = await fetch('/admin/delete-result', {
                   method: 'POST',
-                  headers: { 'Content-Type': 'application/json' },
-                  body: JSON.stringify({ id, _csrf: "${res.locals.csrfToken || ''}" })
+                  headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                  body: formData
                 });
                 const result = await response.json();
                 if (result.success) {
@@ -2602,10 +2649,12 @@ app.get('/admin/results', checkAuth, checkAdmin, async (req, res) => {
           async function deleteAllResults() {
             if (confirm('Ви впевнені, що хочете видалити всі результати? Цю дію не можна скасувати!')) {
               try {
+                const formData = new URLSearchParams();
+                formData.append('_csrf', "${res.locals.csrfToken || ''}");
                 const response = await fetch('/admin/delete-all-results', {
                   method: 'POST',
-                  headers: { 'Content-Type': 'application/json' },
-                  body: JSON.stringify({ _csrf: "${res.locals.csrfToken || ''}" })
+                  headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                  body: formData
                 });
                 const result = await response.json();
                 if (result.success) {
@@ -2692,10 +2741,13 @@ app.get('/admin/edit-tests', checkAuth, checkAdmin, (req, res) => {
         <script>
           async function deleteTest(testNumber) {
             if (confirm('Ви впевнені, що хочете видалити Тест ' + testNumber + '?')) {
+              const formData = new URLSearchParams();
+              formData.append('testNumber', testNumber);
+              formData.append('_csrf', "${res.locals.csrfToken || ''}");
               await fetch('/admin/delete-test', {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ testNumber, _csrf: "${res.locals.csrfToken || ''}" })
+                headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                body: formData
               });
               window.location.reload();
             }
@@ -2894,10 +2946,12 @@ app.get('/admin/activity-log', checkAuth, checkAdmin, async (req, res) => {
           async function clearActivityLog() {
             if (confirm('Ви впевнені, що хочете видалити усі записи журналу дій?')) {
               try {
+                const formData = new URLSearchParams();
+                formData.append('_csrf', "${res.locals.csrfToken || ''}");
                 const response = await fetch('/admin/delete-activity-log', {
                   method: 'POST',
-                  headers: { 'Content-Type': 'application/json' },
-                  body: JSON.stringify({ _csrf: "${res.locals.csrfToken || ''}" })
+                  headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                  body: formData
                 });
                 const result = await response.json();
                 if (result.success) {
