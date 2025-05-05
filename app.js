@@ -1292,7 +1292,8 @@ app.get('/admin/results', checkAuth, checkAdmin, async (req, res) => {
           .error { color: red; }
           .answers { white-space: pre-wrap; max-width: 300px; overflow-wrap: break-word; line-height: 1.8; }
           .delete-btn { background-color: #ff4d4d; color: white; padding: 5px 10px; border: none; cursor: pointer; }
-          .nav-btn { padding: 10px 20px; margin: 10px 0; cursor: pointer; }
+          .delete-all-btn { background-color: #ff4d4d; color: white; padding: 10px 20px; margin: 10px 0; border: none; cursor: pointer; }
+          .nav-btn { padding: 10px 20px; margin: 10px 0; cursor: pointer; background-color: #007bff; color: white; border: none; }
           .details { white-space: pre-wrap; max-width: 300px; line-height: 1.8; }
         </style>
       </head>
@@ -1337,7 +1338,6 @@ app.get('/admin/results', checkAuth, checkAdmin, async (req, res) => {
             if (a === undefined || a === null) return null;
             let userAnswer;
             if (Array.isArray(a) && a.length > 0 && Array.isArray(a[0])) {
-              // Для типу matching: відображаємо пари
               userAnswer = a.map(pair => {
                 if (Array.isArray(pair) && pair.length === 2) {
                   return `${pair[0]} -> ${pair[1]}`;
@@ -1345,10 +1345,8 @@ app.get('/admin/results', checkAuth, checkAdmin, async (req, res) => {
                 return 'Невірний формат пари';
               }).join(', ');
             } else if (Array.isArray(a)) {
-              // Для типу ordering або multiple: відображаємо список
               userAnswer = a.join(', ');
             } else {
-              // Для типу input: відображаємо як є
               userAnswer = a;
             }
             const questionScore = r.scoresPerQuestion[i] || 0;
@@ -1399,8 +1397,8 @@ app.get('/admin/results', checkAuth, checkAdmin, async (req, res) => {
   }
   adminHtml += `
         </table>
-        <button class="nav-btn" onclick="window.location.href='/admin'">Повернутися до адмін-панелі</button>
-        <script承包: {
+        <button class="delete-all-btn" onclick="deleteAllResults()">Видалити всі результати</button>
+        <script>
           async function deleteResult(id) {
             if (confirm('Ви впевнені, що хочете видалити цей результат?')) {
               try {
@@ -1420,11 +1418,45 @@ app.get('/admin/results', checkAuth, checkAdmin, async (req, res) => {
               }
             }
           }
+
+          async function deleteAllResults() {
+            if (confirm('Ви впевнені, що хочете видалити всі результати? Цю дію не можна скасувати!')) {
+              try {
+                const response = await fetch('/admin/delete-all-results', {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({})
+                });
+                const result = await response.json();
+                if (result.success) {
+                  window.location.reload();
+                } else {
+                  alert('Помилка при видаленні всіх результатів: ' + result.message);
+                }
+              } catch (error) {
+                alert('Помилка при видаленні всіх результатів');
+              }
+            }
+          }
         </script>
       </body>
     </html>
   `;
   res.send(adminHtml.trim());
+});
+
+app.post('/admin/delete-all-results', checkAuth, checkAdmin, async (req, res) => {
+  try {
+    if (!db) {
+      throw new Error('MongoDB connection not established');
+    }
+    const deleteResult = await db.collection('test_results').deleteMany({});
+    console.log(`Deleted ${deleteResult.deletedCount} results from test_results collection`);
+    res.json({ success: true, message: `Успішно видалено ${deleteResult.deletedCount} результатів` });
+  } catch (error) {
+    console.error('Ошибка при удалении всех результатов:', error.message, error.stack);
+    res.status(500).json({ success: false, message: 'Помилка при видаленні всіх результатів' });
+  }
 });
 
 app.post('/admin/delete-result', checkAuth, checkAdmin, async (req, res) => {
