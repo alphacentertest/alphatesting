@@ -176,7 +176,8 @@ const loadQuestions = async (testNumber) => {
         }
 
         if (type === 'fillblank') {
-          // Підраховуємо кількість пропусків у тексті питання
+          // Нормалізуємо пропуски: видаляємо зайві пробіли навколо ___
+          questionText = questionText.replace(/\s*___\s*/g, '___');
           const blankCount = (questionText.match(/___/g) || []).length;
           if (blankCount === 0) {
             console.warn(`No blanks found in fillblank question: ${questionText}`);
@@ -186,7 +187,8 @@ const loadQuestions = async (testNumber) => {
             console.warn(`Mismatch in fillblank question: ${questionText}. Expected ${blankCount} answers, but got ${correctAnswers.length}`);
             return;
           }
-          questionData.blankCount = blankCount; // Зберігаємо кількість пропусків
+          questionData.text = questionText; // Оновлюємо нормалізований текст
+          questionData.blankCount = blankCount;
         }
 
         jsonData.push(questionData);
@@ -544,7 +546,8 @@ app.get('/test/question', checkAuth, (req, res) => {
           .matching-column { width: 45%; }
           .matching-item { border: 2px solid #ccc; padding: 10px; margin: 5px 0; border-radius: 5px; cursor: move; font-size: 16px; }
           .matching-item.matched { background-color: #90ee90; }
-          .blank-input { width: 100px; margin: 0 5px; padding: 5px; }
+          .blank-input { width: 100px; margin: 0 5px; padding: 5px; border: 1px solid #ccc; border-radius: 4px; display: inline-block; }
+          .question-text { display: inline; }
           @media (max-width: 600px) {
             h1 { font-size: 28px; }
             .progress-bar { flex-direction: column; }
@@ -608,24 +611,30 @@ app.get('/test/question', checkAuth, (req, res) => {
                          q.type === 'fillblank' ? 'Заповніть пропуски у реченні' : '';
   html += `
           <div class="question-box">
-            <h2 id="question-text">${index + 1}. ${q.text}</h2>
+            <h2 id="question-text">${index + 1}. `;
+  if (q.type === 'fillblank') {
+    const userAnswers = Array.isArray(answers[index]) ? answers[index] : [];
+    console.log(`Fillblank question parts for index ${index}:`, q.text.split('___')); // Додаємо логування
+    const parts = q.text.split('___');
+    let inputHtml = '';
+    parts.forEach((part, i) => {
+      inputHtml += `<span class="question-text">${part}</span>`;
+      if (i < parts.length - 1) {
+        const userAnswer = userAnswers[i] || '';
+        inputHtml += `<input type="text" class="blank-input" id="blank_${i}" value="${userAnswer.replace(/"/g, '&quot;')}" placeholder="Введіть відповідь">`;
+      }
+    });
+    html += inputHtml;
+  } else {
+    html += q.text;
+  }
+  html += `
+            </h2>
           </div>
           <p id="instruction" class="instruction">${instructionText}</p>
           <div id="answers">
   `;
-  if (q.type === 'fillblank') {
-    const userAnswers = Array.isArray(answers[index]) ? answers[index] : [];
-    const parts = q.text.split('___');
-    let inputHtml = '';
-    parts.forEach((part, i) => {
-      inputHtml += part;
-      if (i < parts.length - 1) {
-        const userAnswer = userAnswers[i] || '';
-        inputHtml += `<input type="text" class="blank-input" id="blank_${i}" value="${userAnswer}" placeholder="Введіть відповідь">`;
-      }
-    });
-    html += inputHtml;
-  } else if (q.type === 'matching' && q.pairs) {
+  if (q.type === 'matching' && q.pairs) {
     const leftItems = shuffleArray([...q.pairs.map(p => p.left)]);
     const rightItems = shuffleArray([...q.pairs.map(p => p.right)]);
     const userPairs = Array.isArray(answers[index]) ? answers[index] : [];
@@ -652,10 +661,12 @@ app.get('/test/question', checkAuth, (req, res) => {
       <button onclick="resetMatchingPairs()">Скинути зіставлення</button>
     `;
   } else if (!q.options || q.options.length === 0) {
-    const userAnswer = answers[index] || '';
-    html += `
-      <input type="text" name="q${index}" id="q${index}_input" value="${userAnswer}" placeholder="Введіть відповідь" class="answer-option"><br>
-    `;
+    if (q.type !== 'fillblank') { // Для fillblank уже відобразили поля в тексті питання
+      const userAnswer = answers[index] || '';
+      html += `
+        <input type="text" name="q${index}" id="q${index}_input" value="${userAnswer}" placeholder="Введіть відповідь" class="answer-option"><br>
+      `;
+    }
   } else {
     if (q.type === 'ordering') {
       html += `
