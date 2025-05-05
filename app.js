@@ -130,7 +130,7 @@ const loadQuestions = async (testNumber) => {
     sheet.eachRow({ includeEmpty: false }, (row, rowNumber) => {
       if (rowNumber > 1) {
         const rowValues = row.values.slice(1);
-        console.log(`Row ${rowNumber} raw values:`, rowValues); // Додаємо повне логування рядка
+        console.log(`Row ${rowNumber} raw values:`, rowValues);
         let questionText = rowValues[1];
         console.log(`Row ${rowNumber} question text raw value:`, questionText, typeof questionText);
         if (typeof questionText === 'object' && questionText !== null) {
@@ -143,11 +143,16 @@ const loadQuestions = async (testNumber) => {
           return;
         }
         const picture = String(rowValues[0] || '').trim();
-        const options = rowValues.slice(2, 14).filter(Boolean).map(val => String(val).trim());
+        let options = rowValues.slice(2, 14).filter(Boolean).map(val => String(val).trim());
         const correctAnswers = rowValues.slice(14, 26).filter(Boolean).map(val => String(val).trim());
         const type = String(rowValues[26] || 'multiple').toLowerCase();
         const points = Number(rowValues[27]) || 1;
         const variant = String(rowValues[28] || '').trim();
+
+        if (type === 'truefalse') {
+          options = ["Правда", "Неправда"];
+        }
+
         let questionData = {
           picture: picture.match(/^Picture (\d+)/i) ? `/images/Picture ${picture.match(/^Picture (\d+)/i)[1]}.png` : null,
           text: questionText,
@@ -157,6 +162,7 @@ const loadQuestions = async (testNumber) => {
           points,
           variant
         };
+
         if (type === 'matching') {
           questionData.pairs = options.map((opt, idx) => ({
             left: opt || '',
@@ -168,6 +174,21 @@ const loadQuestions = async (testNumber) => {
           }
           questionData.correctPairs = questionData.pairs.map(pair => [pair.left, pair.right]);
         }
+
+        if (type === 'fillblank') {
+          // Підраховуємо кількість пропусків у тексті питання
+          const blankCount = (questionText.match(/___/g) || []).length;
+          if (blankCount === 0) {
+            console.warn(`No blanks found in fillblank question: ${questionText}`);
+            return;
+          }
+          if (blankCount !== correctAnswers.length) {
+            console.warn(`Mismatch in fillblank question: ${questionText}. Expected ${blankCount} answers, but got ${correctAnswers.length}`);
+            return;
+          }
+          questionData.blankCount = blankCount; // Зберігаємо кількість пропусків
+        }
+
         jsonData.push(questionData);
       }
     });
@@ -523,6 +544,7 @@ app.get('/test/question', checkAuth, (req, res) => {
           .matching-column { width: 45%; }
           .matching-item { border: 2px solid #ccc; padding: 10px; margin: 5px 0; border-radius: 5px; cursor: move; font-size: 16px; }
           .matching-item.matched { background-color: #90ee90; }
+          .blank-input { width: 100px; margin: 0 5px; padding: 5px; }
           @media (max-width: 600px) {
             h1 { font-size: 28px; }
             .progress-bar { flex-direction: column; }
@@ -535,6 +557,7 @@ app.get('/test/question', checkAuth, (req, res) => {
             .question-box h2 { font-size: 20px; }
             .matching-container { flex-direction: column; }
             .matching-column { width: 100%; }
+            .blank-input { width: 80px; }
           }
           @media (min-width: 601px) {
             .progress-bar { flex-direction: row; justify-content: center; }
@@ -581,7 +604,8 @@ app.get('/test/question', checkAuth, (req, res) => {
   const instructionText = q.type === 'multiple' ? 'Виберіть усі правильні відповіді' :
                          q.type === 'input' ? 'Введіть правильну відповідь' :
                          q.type === 'ordering' ? 'Розташуйте відповіді у правильній послідовності' :
-                         q.type === 'matching' ? 'Складіть правильні пари, перетягуючи елементи' : '';
+                         q.type === 'matching' ? 'Складіть правильні пари, перетягуючи елементи' :
+                         q.type === 'fillblank' ? 'Заповніть пропуски у реченні' : '';
   html += `
           <div class="question-box">
             <h2 id="question-text">${index + 1}. ${q.text}</h2>
@@ -589,7 +613,19 @@ app.get('/test/question', checkAuth, (req, res) => {
           <p id="instruction" class="instruction">${instructionText}</p>
           <div id="answers">
   `;
-  if (q.type === 'matching' && q.pairs) {
+  if (q.type === 'fillblank') {
+    const userAnswers = Array.isArray(answers[index]) ? answers[index] : [];
+    const parts = q.text.split('___');
+    let inputHtml = '';
+    parts.forEach((part, i) => {
+      inputHtml += part;
+      if (i < parts.length - 1) {
+        const userAnswer = userAnswers[i] || '';
+        inputHtml += `<input type="text" class="blank-input" id="blank_${i}" value="${userAnswer}" placeholder="Введіть відповідь">`;
+      }
+    });
+    html += inputHtml;
+  } else if (q.type === 'matching' && q.pairs) {
     const leftItems = shuffleArray([...q.pairs.map(p => p.left)]);
     const rightItems = shuffleArray([...q.pairs.map(p => p.right)]);
     const userPairs = Array.isArray(answers[index]) ? answers[index] : [];
@@ -715,14 +751,21 @@ app.get('/test/question', checkAuth, (req, res) => {
 
           document.querySelectorAll('.option-box:not(.draggable)').forEach(box => {
             box.addEventListener('click', () => {
+              const questionType = '${q.type}';
               const option = box.getAttribute('data-value');
-              const idx = selectedOptions.indexOf(option);
-              if (idx === -1) {
-                selectedOptions.push(option);
-                box.classList.add('selected');
-              } else {
-                selectedOptions.splice(idx, 1);
-                box.classList.remove('selected');
+              if (questionType === 'truefalse' || questionType === 'multiple') {
+                if (questionType === 'truefalse') {
+                  selectedOptions = [option];
+                  document.querySelectorAll('.option-box').forEach(b => b.classList.remove('selected'));
+                } else {
+                  const idx = selectedOptions.indexOf(option);
+                  if (idx === -1) {
+                    selectedOptions.push(option);
+                  } else {
+                    selectedOptions.splice(idx, 1);
+                  }
+                }
+                box.classList.toggle('selected');
               }
             });
           });
@@ -736,6 +779,12 @@ app.get('/test/question', checkAuth, (req, res) => {
                 answers = Array.from(document.querySelectorAll('#sortable-options .option-box')).map(el => el.dataset.value);
               } else if (document.getElementById('left-column')) {
                 answers = matchingPairs;
+              } else if ('${q.type}' === 'fillblank') {
+                answers = [];
+                for (let i = 0; i < ${q.blankCount || 1}; i++) {
+                  const input = document.getElementById('blank_' + i);
+                  answers.push(input ? input.value.trim() : '');
+                }
               }
               console.log('Saving answer for question ' + index + ':', answers);
               const responseTime = Date.now() - questionStartTime;
@@ -767,6 +816,12 @@ app.get('/test/question', checkAuth, (req, res) => {
                 answers = Array.from(document.querySelectorAll('#sortable-options .option-box')).map(el => el.dataset.value);
               } else if (document.getElementById('left-column')) {
                 answers = matchingPairs;
+              } else if ('${q.type}' === 'fillblank') {
+                answers = [];
+                for (let i = 0; i < ${q.blankCount || 1}; i++) {
+                  const input = document.getElementById('blank_' + i);
+                  answers.push(input ? input.value.trim() : '');
+                }
               }
               console.log('Finishing test, answer for question ' + index + ':', answers);
               const responseTime = Date.now() - questionStartTime;
@@ -851,7 +906,6 @@ app.get('/test/question', checkAuth, (req, res) => {
                     console.log('Dropped:', { leftValue, rightValue });
                     if (leftValue && rightValue) {
                       item.innerHTML = rightValue + ' <span class="matched"> (Зіставлено: ' + leftValue + ')</span>';
-                      // Переміщуємо елемент у відповідне місце в left-column
                       const leftColumn = document.getElementById('left-column');
                       const rightColumn = document.getElementById('right-column');
                       const leftItems = Array.from(leftColumn.children);
@@ -942,6 +996,14 @@ app.get('/result', checkAuth, async (req, res) => {
       const correctPairs = q.correctPairs.map(pair => [String(pair[0]).trim().toLowerCase(), String(pair[1]).trim().toLowerCase()]);
       const isCorrect = userPairs.length === correctPairs.length &&
         userPairs.every(userPair => correctPairs.some(correctPair => userPair[0] === correctPair[0] && userPair[1] === correctPair[1]));
+      if (isCorrect) {
+        questionScore = q.points;
+      }
+    } else if (q.type === 'fillblank' && userAnswer && Array.isArray(userAnswer)) {
+      const userAnswers = userAnswer.map(val => String(val).trim().toLowerCase().replace(/\s+/g, ''));
+      const correctAnswers = q.correctAnswers.map(val => String(val).trim().toLowerCase().replace(/\s+/g, ''));
+      const isCorrect = userAnswers.length === correctAnswers.length &&
+        userAnswers.every((answer, idx) => answer === correctAnswers[idx]);
       if (isCorrect) {
         questionScore = q.points;
       }
@@ -1111,6 +1173,13 @@ app.get('/results', checkAuth, async (req, res) => {
             userPairs.every(userPair => correctPairs.some(correctPair => userPair[0] === correctPair[0] && userPair[1] === correctPair[1]))) {
           questionScore = q.points;
         }
+      } else if (q.type === 'fillblank' && userAnswer && Array.isArray(userAnswer)) {
+        const userAnswers = userAnswer.map(val => String(val).trim().toLowerCase().replace(/\s+/g, ''));
+        const correctAnswers = q.correctAnswers.map(val => String(val).trim().toLowerCase().replace(/\s+/g, ''));
+        if (userAnswers.length === correctAnswers.length &&
+            userAnswers.every((answer, idx) => answer === correctAnswers[idx])) {
+          questionScore = q.points;
+        }
       }
       return questionScore;
     });
@@ -1151,9 +1220,25 @@ app.get('/results', checkAuth, async (req, res) => {
     `;
     questions.forEach((q, index) => {
       const userAnswer = answers[index] || 'Не відповіли';
-      const correctAnswer = q.type === 'matching' ? q.correctPairs.map(pair => `${pair[0]} -> ${pair[1]}`).join(', ') : q.correctAnswers.join(', ');
+      let correctAnswer;
+      if (q.type === 'matching') {
+        correctAnswer = q.correctPairs.map(pair => `${pair[0]} -> ${pair[1]}`).join(', ');
+      } else if (q.type === 'fillblank') {
+        correctAnswer = q.correctAnswers.join(', ');
+      } else {
+        correctAnswer = q.correctAnswers.join(', ');
+      }
       const questionScore = scoresPerQuestion[index];
-      const userAnswerDisplay = q.type === 'matching' && Array.isArray(userAnswer) ? userAnswer.map(pair => `${pair[0]} -> ${pair[1]}`).join(', ') : Array.isArray(userAnswer) ? userAnswer.join(', ') : userAnswer;
+      let userAnswerDisplay;
+      if (q.type === 'matching' && Array.isArray(userAnswer)) {
+        userAnswerDisplay = userAnswer.map(pair => `${pair[0]} -> ${pair[1]}`).join(', ');
+      } else if (q.type === 'fillblank' && Array.isArray(userAnswer)) {
+        userAnswerDisplay = userAnswer.join(', ');
+      } else if (Array.isArray(userAnswer)) {
+        userAnswerDisplay = userAnswer.join(', ');
+      } else {
+        userAnswerDisplay = userAnswer;
+      }
       resultsHtml += `
         <tr>
           <td>${q.text}</td>
