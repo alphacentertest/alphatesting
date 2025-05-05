@@ -1,14 +1,18 @@
 const express = require('express');
 const session = require('express-session');
 const MongoStore = require('connect-mongo');
-const MongoClient = require('mongodb').MongoClient;
+const { MongoClient, ObjectID } = require('mongodb');
 const cookieParser = require('cookie-parser');
 const path = require('path');
 const fs = require('fs');
 
 const app = express();
 const port = process.env.PORT || 3000;
-const uri = process.env.MONGODB_URI || 'mongodb://localhost:27017/test_system';
+const uri = process.env.MONGODB_URI; // Видалено значення за замовчуванням
+if (!uri) {
+  console.error('MONGODB_URI is not set in environment variables');
+  process.exit(1);
+}
 const client = new MongoClient(uri);
 
 let db;
@@ -103,7 +107,7 @@ async function initialize() {
     users = await loadUsers();
   } catch (error) {
     console.error('Failed to initialize application:', error);
-    process.exit(1); // Завершуємо процес із помилкою, якщо ініціалізація не вдалася
+    throw error; // Помилка буде оброблена в .catch нижче
   }
 
   app.use(express.static('public'));
@@ -1190,7 +1194,7 @@ async function initialize() {
       res.status(500).json({ success: false, message: 'Помилка при оновленні питань' });
     }
   });
-
+  
   app.get('/admin/results', checkAuth, checkAdmin, async (req, res) => {
     let results = [];
     let errorMessage = '';
@@ -1374,7 +1378,7 @@ async function initialize() {
       if (!id) {
         return res.status(400).json({ success: false, message: 'ID результату не вказано' });
       }
-      const deleteResult = await db.collection('test_results').deleteOne({ _id: new MongoClient.ObjectID(id) });
+      const deleteResult = await db.collection('test_results').deleteOne({ _id: new ObjectID(id) });
       if (deleteResult.deletedCount === 0) {
         return res.status(404).json({ success: false, message: 'Результат не знайдено' });
       }
