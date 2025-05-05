@@ -8,7 +8,7 @@ const fs = require('fs');
 
 const app = express();
 const port = process.env.PORT || 3000;
-const uri = process.env.MONGODB_URI || 'mongodb://localhost:27017/test_system'; // Замініть на ваш MONGODB_URI
+const uri = process.env.MONGODB_URI || 'mongodb://localhost:27017/test_system';
 const client = new MongoClient(uri);
 
 let db;
@@ -97,9 +97,14 @@ function shuffleArray(array) {
 }
 
 async function initialize() {
-  await client.connect();
-  db = client.db();
-  users = await loadUsers();
+  try {
+    await client.connect();
+    db = client.db();
+    users = await loadUsers();
+  } catch (error) {
+    console.error('Failed to initialize application:', error);
+    process.exit(1); // Завершуємо процес із помилкою, якщо ініціалізація не вдалася
+  }
 
   app.use(express.static('public'));
   app.use(express.json());
@@ -185,6 +190,7 @@ async function initialize() {
     if (!req.session.user) {
       return res.redirect('/?error=Будь ласка, увійдіть');
     }
+    req.user = req.session.user;
     next();
   }
 
@@ -982,7 +988,7 @@ async function initialize() {
       } catch (error) {
         console.error('Error reading image A.png:', error.message, error.stack);
       }
-  
+
       resultsHtml += `
         <p>
           Результат тесту<br>
@@ -1049,7 +1055,7 @@ async function initialize() {
           const time = "${formattedTime}";
           const date = "${formattedDate}";
           const imageBase64 = "${imageBase64}";
-  
+
           document.getElementById('exportPDF').addEventListener('click', () => {
             const docDefinition = {
               content: [
@@ -1078,7 +1084,7 @@ async function initialize() {
             };
             pdfMake.createPdf(docDefinition).download('results.pdf');
           });
-  
+
           document.getElementById('restart').addEventListener('click', () => {
             window.location.href = '/';
           });
@@ -1094,7 +1100,7 @@ async function initialize() {
     `;
     res.send(resultsHtml);
   });
-  
+
   app.get('/admin', checkAuth, checkAdmin, (req, res) => {
     let adminHtml = `
       <!DOCTYPE html>
@@ -1136,7 +1142,7 @@ async function initialize() {
                 alert('Помилка при оновленні користувачів: ' + error.message);
               }
             }
-  
+
             async function updateQuestions() {
               const questionsInput = document.getElementById('questionsInput').value;
               try {
@@ -1158,7 +1164,7 @@ async function initialize() {
     `;
     res.send(adminHtml);
   });
-  
+
   app.post('/admin/update-users', checkAuth, checkAdmin, async (req, res) => {
     try {
       const users = req.body.users;
@@ -1171,7 +1177,7 @@ async function initialize() {
       res.status(500).json({ success: false, message: 'Помилка при оновленні користувачів' });
     }
   });
-  
+
   app.post('/admin/update-questions', checkAuth, checkAdmin, async (req, res) => {
     try {
       const questions = req.body.questions;
@@ -1184,7 +1190,7 @@ async function initialize() {
       res.status(500).json({ success: false, message: 'Помилка при оновленні питань' });
     }
   });
-  
+
   app.get('/admin/results', checkAuth, checkAdmin, async (req, res) => {
     let results = [];
     let errorMessage = '';
@@ -1368,7 +1374,7 @@ async function initialize() {
       if (!id) {
         return res.status(400).json({ success: false, message: 'ID результату не вказано' });
       }
-      const deleteResult = await db.collection('test_results').deleteOne({ _id: new MongoClient.ObjectId(id) });
+      const deleteResult = await db.collection('test_results').deleteOne({ _id: new MongoClient.ObjectID(id) });
       if (deleteResult.deletedCount === 0) {
         return res.status(404).json({ success: false, message: 'Результат не знайдено' });
       }
@@ -1395,5 +1401,12 @@ async function initialize() {
   
   app.listen(port, () => {
     console.log(`Server running on port ${port}`);
+  });
+  
+  }
+  
+  initialize().catch(err => {
+    console.error('Failed to start server:', err);
+    process.exit(1);
   });
   
