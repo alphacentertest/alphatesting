@@ -613,6 +613,7 @@ app.get('/test/question', checkAuth, (req, res) => {
           }).join('')}
         </div>
       </div>
+      <button onclick="resetMatchingPairs()">Скинути зіставлення</button>
     `;
   } else if (!q.options || q.options.length === 0) {
     const userAnswer = answers[index] || '';
@@ -736,6 +737,7 @@ app.get('/test/question', checkAuth, (req, res) => {
               } else if (document.getElementById('left-column')) {
                 answers = matchingPairs;
               }
+              console.log('Saving answer for question ' + index + ':', answers);
               const responseTime = Date.now() - questionStartTime;
               await fetch('/answer', {
                 method: 'POST',
@@ -766,6 +768,7 @@ app.get('/test/question', checkAuth, (req, res) => {
               } else if (document.getElementById('left-column')) {
                 answers = matchingPairs;
               }
+              console.log('Finishing test, answer for question ' + index + ':', answers);
               const responseTime = Date.now() - questionStartTime;
               await fetch('/answer', {
                 method: 'POST',
@@ -789,30 +792,49 @@ app.get('/test/question', checkAuth, (req, res) => {
             new Sortable(leftColumn, {
               group: 'matching',
               animation: 150,
+              onStart: function(evt) {
+                evt.item.classList.add('dragging');
+              },
               onEnd: function(evt) {
+                evt.item.classList.remove('dragging');
                 updateMatchingPairs();
               }
             });
             new Sortable(rightColumn, {
               group: 'matching',
               animation: 150,
+              onStart: function(evt) {
+                evt.item.classList.add('dragging');
+              },
               onEnd: function(evt) {
+                evt.item.classList.remove('dragging');
                 updateMatchingPairs();
               }
             });
 
             function updateMatchingPairs() {
               matchingPairs = [];
-              const rightItems = document.querySelectorAll('#right-column .droppable');
-              rightItems.forEach(item => {
-                const rightValue = item.dataset.value || '';
-                const matchedText = item.querySelector('.matched')?.textContent || '';
-                const leftMatch = matchedText.match(/Зіставлено: (.+)/)?.[1] || '';
-                if (leftMatch && rightValue) {
-                  matchingPairs.push([leftMatch, rightValue]);
+              const leftItems = Array.from(document.querySelectorAll('#left-column .draggable'));
+              const rightItems = Array.from(document.querySelectorAll('#right-column .droppable'));
+              rightItems.forEach((rightItem, idx) => {
+                const rightValue = rightItem.dataset.value || '';
+                const leftItem = leftItems[idx];
+                const leftValue = leftItem ? leftItem.dataset.value || '' : '';
+                if (leftValue && rightValue) {
+                  matchingPairs.push([leftValue, rightValue]);
                 }
               });
               console.log('Updated matching pairs:', matchingPairs);
+            }
+
+            function resetMatchingPairs() {
+              matchingPairs = [];
+              const rightItems = document.querySelectorAll('#right-column .droppable');
+              rightItems.forEach(item => {
+                const rightValue = item.dataset.value || '';
+                item.innerHTML = rightValue;
+              });
+              console.log('Matching pairs reset');
             }
 
             const droppableItems = document.querySelectorAll('.droppable');
@@ -829,6 +851,17 @@ app.get('/test/question', checkAuth, (req, res) => {
                     console.log('Dropped:', { leftValue, rightValue });
                     if (leftValue && rightValue) {
                       item.innerHTML = rightValue + ' <span class="matched"> (Зіставлено: ' + leftValue + ')</span>';
+                      // Переміщуємо елемент у відповідне місце в left-column
+                      const leftColumn = document.getElementById('left-column');
+                      const rightColumn = document.getElementById('right-column');
+                      const leftItems = Array.from(leftColumn.children);
+                      const rightItems = Array.from(rightColumn.children);
+                      const rightIndex = rightItems.indexOf(item);
+                      if (leftItems[rightIndex]) {
+                        leftColumn.insertBefore(draggable, leftItems[rightIndex]);
+                      } else {
+                        leftColumn.appendChild(draggable);
+                      }
                       updateMatchingPairs();
                     } else {
                       console.warn('Missing leftValue or rightValue:', { leftValue, rightValue });
@@ -1298,14 +1331,19 @@ app.get('/admin/results', checkAuth, checkAdmin, async (req, res) => {
           answersArray[idx] = r.answers[key];
         });
       }
-      console.log(`User ${r.user} answers:`, answersArray); // Додаємо логування для діагностики
+      console.log(`User ${r.user} answers array:`, answersArray);
       const answersDisplay = answersArray.length > 0
         ? answersArray.map((a, i) => {
-            if (!a) return null;
+            if (a === undefined || a === null) return null;
             let userAnswer;
             if (Array.isArray(a) && a.length > 0 && Array.isArray(a[0])) {
               // Для типу matching: відображаємо пари
-              userAnswer = a.map(pair => `${pair[0]} -> ${pair[1]}`).join(', ');
+              userAnswer = a.map(pair => {
+                if (Array.isArray(pair) && pair.length === 2) {
+                  return `${pair[0]} -> ${pair[1]}`;
+                }
+                return 'Невірний формат пари';
+              }).join(', ');
             } else if (Array.isArray(a)) {
               // Для типу ordering або multiple: відображаємо список
               userAnswer = a.join(', ');
@@ -1362,7 +1400,7 @@ app.get('/admin/results', checkAuth, checkAdmin, async (req, res) => {
   adminHtml += `
         </table>
         <button class="nav-btn" onclick="window.location.href='/admin'">Повернутися до адмін-панелі</button>
-        <script>
+        <script承包: {
           async function deleteResult(id) {
             if (confirm('Ви впевнені, що хочете видалити цей результат?')) {
               try {
