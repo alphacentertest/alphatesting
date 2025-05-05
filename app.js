@@ -7,9 +7,17 @@ const session = require('express-session');
 const MongoStore = require('connect-mongo');
 const { MongoClient, ObjectId } = require('mongodb');
 const bcrypt = require('bcrypt');
+const multer = require('multer');
+const upload = multer({ dest: 'uploads/' });
+const crypto = require('crypto');
+const nodemailer = require('nodemailer');
 const fs = require('fs');
 
 const app = express();
+
+const generateCsrfToken = () => {
+  return crypto.randomBytes(16).toString('hex');
+};
 
 // Подключение к MongoDB
 const MONGODB_URI = process.env.MONGODB_URI || 'mongodb+srv://romanhaleckij7:DNMaH9w2X4gel3Xc@cluster0.r93r1p8.mongodb.net/alpha?retryWrites=true&w=majority';
@@ -46,6 +54,15 @@ app.use(express.urlencoded({ extended: true }));
 app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
 app.use(cookieParser());
+app.use((req, res, next) => {
+  if (req.method === 'POST') {
+    const csrfToken = req.body._csrf || req.headers['x-csrf-token'];
+    if (!csrfToken || csrfToken !== req.session.csrfToken) {
+      return res.status(403).json({ success: false, message: 'Невірний CSRF-токен' });
+    }
+  }
+  next();
+});
 
 app.use(session({
   store: MongoStore.create({
@@ -64,7 +81,7 @@ app.use(session({
   resave: false,
   saveUninitialized: false,
   cookie: {
-    secure: false,
+    secure: process.env.NODE_ENV === 'production', // Увімкнемо secure: true у продакшені
     httpOnly: true,
     sameSite: 'lax',
     maxAge: 24 * 60 * 60 * 1000
@@ -258,9 +275,7 @@ const initializeServer = async () => {
     console.log('MongoDB indexes created successfully');
     // Оновлюємо паролі існуючих користувачів (якщо вони є)
     await updateUserPasswords();
-    // Імпортуємо користувачів і питання один раз
-    await importUsersToMongoDB();
-    await importQuestionsToMongoDB();
+    // Видаляємо автоматичний імпорт файлів
   } catch (error) {
     throw error;
   }
@@ -344,30 +359,22 @@ app.post('/login', async (req, res) => {
     if (!password) {
       return res.status(400).json({ success: false, message: 'Пароль не вказано' });
     }
-    let user = null;
-    for (const username in usersMap) {
-      const hashedPassword = usersMap[username];
-      const isMatch = await bcrypt.compare(password, hashedPassword);
-      if (isMatch) {
-        user = username;
-        break;
-      }
-    }
-    if (!user) {
+    const user = await db.collection('users').findOne({ username: { $in: Object.keys(usersMap) } });
+    if (!user || !(await bcrypt.compare(password, user.password))) {
       return res.status(401).json({ success: false, message: 'Невірний пароль' });
     }
-    req.session.user = user;
+    req.session.user = user.username;
     req.session.testVariant = Math.floor(Math.random() * 3) + 1;
-    console.log(`Assigned variant ${req.session.testVariant} to user ${user}`);
+    console.log(`Assigned variant ${req.session.testVariant} to user ${user.username}`);
     const ipAddress = req.headers['x-forwarded-for'] || req.socket.remoteAddress;
     const sessionId = req.session.id;
-    await logActivity(user, 'увійшов на сайт', sessionId, ipAddress);
+    await logActivity(user.username, 'увійшов на сайт', sessionId, ipAddress);
     req.session.save(err => {
       if (err) {
         console.error('Error saving session in /login:', err.message, err.stack);
         return res.status(500).json({ success: false, message: 'Помилка сервера' });
       }
-      if (user === 'admin') {
+      if (user.username === 'admin') {
         res.json({ success: true, redirect: '/admin' });
       } else {
         res.json({ success: true, redirect: '/select-test' });
@@ -1098,6 +1105,29 @@ app.get('/result', checkAuth, async (req, res) => {
   const correctClicks = scoresPerQuestion.filter(s => s > 0).length;
   const totalQuestions = questions.length;
 
+  const duration = Math.round((endTime - startTime) / 1000);
+  const timeAwayPercent = suspiciousActivity && suspiciousActivity.timeAway
+    ? Math.round((suspiciousActivity.timeAway / (duration * 1000)) * 100)
+    : 0;
+  const switchCount = suspiciousActivity ? suspiciousActivity.switchCount || 0 : 0;
+  const avgResponseTime = suspiciousActivity && suspiciousActivity.responseTimes
+    ? (suspiciousActivity.responseTimes.reduce((sum, time) => sum + (time || 0), 0) / suspiciousActivity.responseTimes.length / 1000).toFixed(2)
+    : 0;
+  const totalActivityCount = suspiciousActivity && suspiciousActivity.activityCounts
+    ? suspiciousActivity.activityCounts.reduce((sum, count) => sum + (count || 0), 0).toFixed(0)
+    : 0;
+
+  // Перевірка на підозрілу активність
+  if (timeAwayPercent > 50 || switchCount > 5) {
+    const activityDetails = {
+      timeAwayPercent,
+      switchCount,
+      avgResponseTime,
+      totalActivityCount
+    };
+    await sendSuspiciousActivityEmail(req.user, activityDetails);
+  }
+
   const ipAddress = req.headers['x-forwarded-for'] || req.socket.remoteAddress;
   const sessionId = req.session.id;
   await logActivity(req.user, `завершив тест ${testNames[testNumber].name} з результатом ${Math.round(percentage)}%`, sessionId, ipAddress, { percentage: Math.round(percentage) });
@@ -1435,6 +1465,8 @@ app.get('/admin', checkAuth, checkAdmin, (req, res) => {
         <h1>Адмін-панель</h1>
         <button onclick="window.location.href='/admin/users'">Керування користувачами</button><br>
         <button onclick="window.location.href='/admin/questions'">Керування питаннями</button><br>
+        <button onclick="window.location.href='/admin/import-users'">Імпорт користувачів</button><br>
+        <button onclick="window.location.href='/admin/import-questions'">Імпорт питань</button><br>
         <button onclick="window.location.href='/admin/results'">Перегляд результатів</button><br>
         <button onclick="window.location.href='/admin/edit-tests'">Редагувати назви тестів</button><br>
         <button onclick="window.location.href='/admin/create-test'">Створити новий тест</button><br>
@@ -1449,6 +1481,222 @@ app.get('/admin', checkAuth, checkAdmin, (req, res) => {
       </body>
     </html>
   `);
+});
+
+app.get('/admin/import-users', checkAuth, checkAdmin, (req, res) => {
+  res.send(`
+    <!DOCTYPE html>
+    <html lang="uk">
+      <head>
+        <meta charset="UTF-8">
+        <title>Імпорт користувачів</title>
+        <style>
+          body { font-family: Arial, sans-serif; padding: 20px; }
+          label { display: block; margin: 10px 0 5px; }
+          input { padding: 5px; margin-bottom: 10px; }
+          button { padding: 10px 20px; margin: 5px; cursor: pointer; border: none; border-radius: 5px; }
+          .nav-btn { background-color: #007bff; color: white; }
+          .submit-btn { background-color: #4CAF50; color: white; }
+        </style>
+      </head>
+      <body>
+        <h1>Імпорт користувачів із Excel</h1>
+        <form method="POST" action="/admin/import-users" enctype="multipart/form-data">
+          <label for="file">Виберіть файл users.xlsx:</label>
+          <input type="file" id="file" name="file" accept=".xlsx" required>
+          <button type="submit" class="submit-btn">Завантажити</button>
+        </form>
+        <button class="nav-btn" onclick="window.location.href='/admin'">Повернутися до адмін-панелі</button>
+      </body>
+    </html>
+  `);
+});
+
+app.post('/admin/import-users', checkAuth, checkAdmin, upload.single('file'), async (req, res) => {
+  try {
+    if (!req.file) {
+      return res.status(400).send('Файл не завантажено');
+    }
+    const filePath = req.file.path;
+    const workbook = new ExcelJS.Workbook();
+    await workbook.xlsx.readFile(filePath);
+    let sheet = workbook.getWorksheet('Users') || workbook.getWorksheet('Sheet1');
+    if (!sheet) {
+      fs.unlinkSync(filePath);
+      return res.status(400).send('Лист "Users" або "Sheet1" не знайдено у файлі');
+    }
+    const users = [];
+    const saltRounds = 10;
+    for (let rowNumber = 2; rowNumber <= sheet.rowCount; rowNumber++) {
+      const row = sheet.getRow(rowNumber);
+      const username = String(row.getCell(1).value || '').trim();
+      const password = String(row.getCell(2).value || '').trim();
+      if (username && password) {
+        const hashedPassword = await bcrypt.hash(password, saltRounds);
+        users.push({ username, password: hashedPassword });
+      }
+    }
+    if (users.length === 0) {
+      fs.unlinkSync(filePath);
+      return res.status(400).send('Не знайдено користувачів у файлі');
+    }
+    await db.collection('users').deleteMany({});
+    await db.collection('users').insertMany(users);
+    await loadUsers(); // Оновлюємо usersMap після імпорту
+    fs.unlinkSync(filePath);
+    res.send(`
+      <!DOCTYPE html>
+      <html lang="uk">
+        <head>
+          <meta charset="UTF-8">
+          <title>Користувачів імпортовано</title>
+        </head>
+        <body>
+          <h1>Імпортовано ${users.length} користувачів</h1>
+          <button onclick="window.location.href='/admin/users'">Повернутися до списку користувачів</button>
+        </body>
+      </html>
+    `);
+  } catch (error) {
+    console.error('Error importing users:', error.message, error.stack);
+    if (req.file && fs.existsSync(req.file.path)) {
+      fs.unlinkSync(req.file.path);
+    }
+    res.status(500).send('Помилка при імпорті користувачів');
+  }
+});
+
+app.get('/admin/import-questions', checkAuth, checkAdmin, (req, res) => {
+  res.send(`
+    <!DOCTYPE html>
+    <html lang="uk">
+      <head>
+        <meta charset="UTF-8">
+        <title>Імпорт питань</title>
+        <style>
+          body { font-family: Arial, sans-serif; padding: 20px; }
+          label { display: block; margin: 10px 0 5px; }
+          input { padding: 5px; margin-bottom: 10px; }
+          button { padding: 10px 20px; margin: 5px; cursor: pointer; border: none; border-radius: 5px; }
+          .nav-btn { background-color: #007bff; color: white; }
+          .submit-btn { background-color: #4CAF50; color: white; }
+        </style>
+      </head>
+      <body>
+        <h1>Імпорт питань із Excel</h1>
+        <form method="POST" action="/admin/import-questions" enctype="multipart/form-data">
+          <label for="file">Виберіть файл questions*.xlsx:</label>
+          <input type="file" id="file" name="file" accept=".xlsx" required>
+          <button type="submit" class="submit-btn">Завантажити</button>
+        </form>
+        <button class="nav-btn" onclick="window.location.href='/admin'">Повернутися до адмін-панелі</button>
+      </body>
+    </html>
+  `);
+});
+
+app.post('/admin/import-questions', checkAuth, checkAdmin, upload.single('file'), async (req, res) => {
+  try {
+    if (!req.file) {
+      return res.status(400).send('Файл не завантажено');
+    }
+    const filePath = req.file.path;
+    const testNumber = req.file.originalname.match(/^questions(\d+)\.xlsx$/)?.[1];
+    if (!testNumber) {
+      fs.unlinkSync(filePath);
+      return res.status(400).send('Файл повинен мати назву у форматі questionsX.xlsx, де X — номер тесту');
+    }
+    const workbook = new ExcelJS.Workbook();
+    await workbook.xlsx.readFile(filePath);
+    const sheet = workbook.getWorksheet('Questions');
+    if (!sheet) {
+      fs.unlinkSync(filePath);
+      return res.status(400).send('Лист "Questions" не знайдено у файлі');
+    }
+    const questions = [];
+    sheet.eachRow({ includeEmpty: false }, (row, rowNumber) => {
+      if (rowNumber > 1) {
+        const rowValues = row.values.slice(1);
+        let questionText = rowValues[1];
+        if (typeof questionText === 'object' && questionText !== null) {
+          questionText = questionText.text || questionText.value || '[Невірний текст питання]';
+        }
+        questionText = String(questionText || '').trim();
+        if (questionText === '') return;
+        const picture = String(rowValues[0] || '').trim();
+        let options = rowValues.slice(2, 14).filter(Boolean).map(val => String(val).trim());
+        const correctAnswers = rowValues.slice(14, 26).filter(Boolean).map(val => String(val).trim());
+        const type = String(rowValues[26] || 'multiple').toLowerCase();
+        const points = Number(rowValues[27]) || 1;
+        const variant = String(rowValues[28] || '').trim();
+
+        if (type === 'truefalse') {
+          options = ["Правда", "Неправда"];
+        }
+
+        let questionData = {
+          testNumber,
+          picture: picture.match(/^Picture (\d+)/i) ? `/images/Picture ${picture.match(/^Picture (\d+)/i)[1]}.png` : null,
+          text: questionText,
+          options,
+          correctAnswers,
+          type,
+          points,
+          variant
+        };
+
+        if (type === 'matching') {
+          questionData.pairs = options.map((opt, idx) => ({
+            left: opt || '',
+            right: correctAnswers[idx] || ''
+          })).filter(pair => pair.left && pair.right);
+          if (questionData.pairs.length === 0) return;
+          questionData.correctPairs = questionData.pairs.map(pair => [pair.left, pair.right]);
+        }
+
+        if (type === 'fillblank') {
+          questionText = questionText.replace(/\s*___\s*/g, '___');
+          const blankCount = (questionText.match(/___/g) || []).length;
+          if (blankCount === 0 || blankCount !== correctAnswers.length) return;
+          questionData.text = questionText;
+          questionData.blankCount = blankCount;
+        }
+
+        if (type === 'singlechoice') {
+          if (correctAnswers.length !== 1 || options.length < 2) return;
+          questionData.correctAnswer = correctAnswers[0];
+        }
+
+        questions.push(questionData);
+      }
+    });
+    if (questions.length === 0) {
+      fs.unlinkSync(filePath);
+      return res.status(400).send('Не знайдено питань у файлі');
+    }
+    await db.collection('questions').deleteMany({ testNumber });
+    await db.collection('questions').insertMany(questions);
+    fs.unlinkSync(filePath);
+    res.send(`
+      <!DOCTYPE html>
+      <html lang="uk">
+        <head>
+          <meta charset="UTF-8">
+          <title>Питання імпортовано</title>
+        </head>
+        <body>
+          <h1>Імпортовано ${questions.length} питань для тесту ${testNumber}</h1>
+          <button onclick="window.location.href='/admin/questions'">Повернутися до списку питань</button>
+        </body>
+      </html>
+    `);
+  } catch (error) {
+    console.error('Error importing questions:', error.message, error.stack);
+    if (req.file && fs.existsSync(req.file.path)) {
+      fs.unlinkSync(req.file.path);
+    }
+    res.status(500).send('Помилка при імпорті питань');
+  }
 });
 
 const updateUserPasswords = async () => {
@@ -1572,6 +1820,7 @@ app.get('/admin/add-user', checkAuth, checkAdmin, (req, res) => {
       <body>
         <h1>Додати користувача</h1>
         <form method="POST" action="/admin/add-user">
+          <input type="hidden" name="_csrf" value="${res.locals.csrfToken}">
           <label for="username">Ім'я користувача:</label>
           <input type="text" id="username" name="username" required>
           <label for="password">Пароль:</label>
@@ -1586,9 +1835,16 @@ app.get('/admin/add-user', checkAuth, checkAdmin, (req, res) => {
 
 app.post('/admin/add-user', checkAuth, checkAdmin, async (req, res) => {
   try {
-    const { username, password } = req.body;
-    if (!username || !password) {
-      return res.status(400).send('Необхідно вказати ім’я користувача та пароль');
+    const { username, password, _csrf } = req.body;
+    // Валідація
+    if (!username || username.length < 3 || username.length > 50) {
+      return res.status(400).send('Ім’я користувача має бути від 3 до 50 символів');
+    }
+    if (!password || password.length < 6 || password.length > 100) {
+      return res.status(400).send('Пароль має бути від 6 до 100 символів');
+    }
+    if (!/^[a-zA-Z0-9а-яА-Я]+$/.test(username)) {
+      return res.status(400).send('Ім’я користувача може містити лише літери та цифри');
     }
     const existingUser = await db.collection('users').findOne({ username });
     if (existingUser) {
@@ -1656,9 +1912,15 @@ app.get('/admin/edit-user', checkAuth, checkAdmin, async (req, res) => {
 
 app.post('/admin/edit-user', checkAuth, checkAdmin, async (req, res) => {
   try {
-    const { oldUsername, username, password } = req.body;
-    if (!username) {
-      return res.status(400).send('Необхідно вказати ім’я користувача');
+    const { oldUsername, username, password, _csrf } = req.body;
+    if (!username || username.length < 3 || username.length > 50) {
+      return res.status(400).send('Ім’я користувача має бути від 3 до 50 символів');
+    }
+    if (!/^[a-zA-Z0-9а-яА-Я]+$/.test(username)) {
+      return res.status(400).send('Ім’я користувача може містити лише літери та цифри');
+    }
+    if (password && (password.length < 6 || password.length > 100)) {
+      return res.status(400).send('Пароль має бути від 6 до 100 символів');
     }
     const existingUser = await db.collection('users').findOne({ username });
     if (existingUser && username !== oldUsername) {
@@ -1854,9 +2116,23 @@ app.get('/admin/add-question', checkAuth, checkAdmin, (req, res) => {
 
 app.post('/admin/add-question', checkAuth, checkAdmin, async (req, res) => {
   try {
-    const { testNumber, text, type, options, correctAnswers, points, variant } = req.body;
+    const { testNumber, text, type, options, correctAnswers, points, variant, _csrf } = req.body;
+    // Валідація
     if (!testNumber || !text || !type || !correctAnswers) {
       return res.status(400).send('Необхідно заповнити всі обов’язкові поля');
+    }
+    if (text.length < 5 || text.length > 1000) {
+      return res.status(400).send('Текст питання має бути від 5 до 1000 символів');
+    }
+    if (!['multiple', 'singlechoice', 'truefalse', 'input', 'ordering', 'matching', 'fillblank'].includes(type.toLowerCase())) {
+      return res.status(400).send('Невірний тип питання');
+    }
+    const pointsNum = Number(points);
+    if (!pointsNum || pointsNum < 1 || pointsNum > 100) {
+      return res.status(400).send('Бали мають бути числом від 1 до 100');
+    }
+    if (variant && (variant.length < 1 || variant.length > 50)) {
+      return res.status(400).send('Варіант має бути від 1 до 50 символів');
     }
 
     let questionData = {
@@ -1865,7 +2141,7 @@ app.post('/admin/add-question', checkAuth, checkAdmin, async (req, res) => {
       type: type.toLowerCase(),
       options: options ? options.split(',').map(opt => opt.trim()).filter(Boolean) : [],
       correctAnswers: correctAnswers.split(',').map(ans => ans.trim()).filter(Boolean),
-      points: Number(points) || 1,
+      points: pointsNum,
       variant: variant || ''
     };
 
@@ -1980,9 +2256,23 @@ app.get('/admin/edit-question', checkAuth, checkAdmin, async (req, res) => {
 
 app.post('/admin/edit-question', checkAuth, checkAdmin, async (req, res) => {
   try {
-    const { id, testNumber, text, type, options, correctAnswers, points, variant } = req.body;
+    const { id, testNumber, text, type, options, correctAnswers, points, variant, _csrf } = req.body;
+    // Валідація
     if (!testNumber || !text || !type || !correctAnswers) {
       return res.status(400).send('Необхідно заповнити всі обов’язкові поля');
+    }
+    if (text.length < 5 || text.length > 1000) {
+      return res.status(400).send('Текст питання має бути від 5 до 1000 символів');
+    }
+    if (!['multiple', 'singlechoice', 'truefalse', 'input', 'ordering', 'matching', 'fillblank'].includes(type.toLowerCase())) {
+      return res.status(400).send('Невірний тип питання');
+    }
+    const pointsNum = Number(points);
+    if (!pointsNum || pointsNum < 1 || pointsNum > 100) {
+      return res.status(400).send('Бали мають бути числом від 1 до 100');
+    }
+    if (variant && (variant.length < 1 || variant.length > 50)) {
+      return res.status(400).send('Варіант має бути від 1 до 50 символів');
     }
 
     let questionData = {
@@ -1991,7 +2281,7 @@ app.post('/admin/edit-question', checkAuth, checkAdmin, async (req, res) => {
       type: type.toLowerCase(),
       options: options ? options.split(',').map(opt => opt.trim()).filter(Boolean) : [],
       correctAnswers: correctAnswers.split(',').map(ans => ans.trim()).filter(Boolean),
-      points: Number(points) || 1,
+      points: pointsNum,
       variant: variant || ''
     };
 
@@ -2531,6 +2821,36 @@ app.get('/admin/activity-log', checkAuth, checkAdmin, async (req, res) => {
   `;
   res.send(adminHtml);
 });
+
+const transporter = nodemailer.createTransport({
+  service: 'gmail',
+  auth: {
+    user: 'alphacentertest@gmail.com',
+    pass: ':bnnz<fnmrsdobysxtcnmysrjve' // Замініть на пароль додатка Gmail
+  }
+});
+
+const sendSuspiciousActivityEmail = async (user, activityDetails) => {
+  try {
+    const mailOptions = {
+      from: 'alphacentertest@gmail.com',
+      to: 'alphacentertest@gmail.com',
+      subject: 'Підозріла активність у системі тестування',
+      text: `
+        Користувач: ${user}
+        Деталі активності:
+        Час поза вкладкою: ${activityDetails.timeAwayPercent}%
+        Переключення вкладок: ${activityDetails.switchCount}
+        Середній час відповіді (сек): ${activityDetails.avgResponseTime}
+        Загальна кількість дій: ${activityDetails.totalActivityCount}
+      `
+    };
+    await transporter.sendMail(mailOptions);
+    console.log(`Email про підозрілу активність відправлено для користувача ${user}`);
+  } catch (error) {
+    console.error('Error sending suspicious activity email:', error.message, error.stack);
+  }
+};
 
 app.post('/admin/delete-activity-log', checkAuth, checkAdmin, async (req, res) => {
   try {
