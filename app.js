@@ -187,9 +187,22 @@ const loadQuestions = async (testNumber) => {
             console.warn(`Mismatch in fillblank question: ${questionText}. Expected ${blankCount} answers, but got ${correctAnswers.length}`);
             return;
           }
-          console.log(`Fillblank question ${rowNumber}: text=${questionText}, blankCount=${blankCount}, correctAnswers=${correctAnswers}`); // Додаємо логування
-          questionData.text = questionText; // Оновлюємо нормалізований текст
+          console.log(`Fillblank question ${rowNumber}: text=${questionText}, blankCount=${blankCount}, correctAnswers=${correctAnswers}`);
+          questionData.text = questionText;
           questionData.blankCount = blankCount;
+        }
+
+        if (type === 'singlechoice') {
+          // Перевіряємо, що є лише одна правильна відповідь
+          if (correctAnswers.length !== 1) {
+            console.warn(`Single choice question at row ${rowNumber} must have exactly one correct answer, but got ${correctAnswers.length}: ${correctAnswers}`);
+            return;
+          }
+          if (options.length < 2) {
+            console.warn(`Single choice question at row ${rowNumber} must have at least 2 options, but got ${options.length}: ${options}`);
+            return;
+          }
+          questionData.correctAnswer = correctAnswers[0]; // Зберігаємо одну правильну відповідь
         }
 
         jsonData.push(questionData);
@@ -609,20 +622,21 @@ app.get('/test/question', checkAuth, (req, res) => {
                          q.type === 'input' ? 'Введіть правильну відповідь' :
                          q.type === 'ordering' ? 'Розташуйте відповіді у правильній послідовності' :
                          q.type === 'matching' ? 'Складіть правильні пари, перетягуючи елементи' :
-                         q.type === 'fillblank' ? 'Заповніть пропуски у реченні' : '';
+                         q.type === 'fillblank' ? 'Заповніть пропуски у реченні' :
+                         q.type === 'singlechoice' ? 'Виберіть правильну відповідь' : '';
   html += `
           <div class="question-box">
             <h2 id="question-text">${index + 1}. `;
   if (q.type === 'fillblank') {
     const userAnswers = Array.isArray(answers[index]) ? answers[index] : [];
-    console.log(`Fillblank question parts for index ${index}:`, q.text.split('___')); // Додаємо логування
+    console.log(`Fillblank question parts for index ${index}:`, q.text.split('___'));
     const parts = q.text.split('___');
     let inputHtml = '';
     parts.forEach((part, i) => {
       inputHtml += `<span class="question-text">${part}</span>`;
       if (i < parts.length - 1) {
         const userAnswer = userAnswers[i] || '';
-        inputHtml += `<input type="text" class="blank-input" id="blank_${i}" value="${userAnswer.replace(/"/g, '&quot;')}" placeholder="Введіть відповідь">`;
+        inputHtml += `<input type="text" class="blank-input" id="blank_${i}" value="${userAnswer.replace(/"/g, '"')}" placeholder="Введіть відповідь">`;
       }
     });
     html += inputHtml;
@@ -662,7 +676,7 @@ app.get('/test/question', checkAuth, (req, res) => {
       <button onclick="resetMatchingPairs()">Скинути зіставлення</button>
     `;
   } else if (!q.options || q.options.length === 0) {
-    if (q.type !== 'fillblank') { // Для fillblank уже відобразили поля в тексті питання
+    if (q.type !== 'fillblank') {
       const userAnswer = answers[index] || '';
       html += `
         <input type="text" name="q${index}" id="q${index}_input" value="${userAnswer}" placeholder="Введіть відповідь" class="answer-option"><br>
@@ -765,8 +779,8 @@ app.get('/test/question', checkAuth, (req, res) => {
             box.addEventListener('click', () => {
               const questionType = '${q.type}';
               const option = box.getAttribute('data-value');
-              if (questionType === 'truefalse' || questionType === 'multiple') {
-                if (questionType === 'truefalse') {
+              if (questionType === 'truefalse' || questionType === 'multiple' || questionType === 'singlechoice') {
+                if (questionType === 'truefalse' || questionType === 'singlechoice') {
                   selectedOptions = [option];
                   document.querySelectorAll('.option-box').forEach(b => b.classList.remove('selected'));
                 } else {
@@ -1014,9 +1028,18 @@ app.get('/result', checkAuth, async (req, res) => {
     } else if (q.type === 'fillblank' && userAnswer && Array.isArray(userAnswer)) {
       const userAnswers = userAnswer.map(val => String(val).trim().toLowerCase().replace(/\s+/g, '').replace(',', '.'));
       const correctAnswers = q.correctAnswers.map(val => String(val).trim().toLowerCase().replace(/\s+/g, '').replace(',', '.'));
-      console.log(`Fillblank question ${index + 1}: userAnswers=${userAnswers}, correctAnswers=${correctAnswers}`); // Додаємо логування для дебагу
+      console.log(`Fillblank question ${index + 1}: userAnswers=${userAnswers}, correctAnswers=${correctAnswers}`);
       const isCorrect = userAnswers.length === correctAnswers.length &&
         userAnswers.every((answer, idx) => answer === correctAnswers[idx]);
+      if (isCorrect) {
+        questionScore = q.points;
+      }
+    } else if (q.type === 'singlechoice' && userAnswer && Array.isArray(userAnswer)) {
+      // Для singlechoice користувач обирає лише одну відповідь
+      const userAnswers = userAnswer.map(val => String(val).trim().toLowerCase());
+      const correctAnswer = String(q.correctAnswer).trim().toLowerCase();
+      console.log(`Single choice question ${index + 1}: userAnswers=${userAnswers}, correctAnswer=${correctAnswer}`);
+      const isCorrect = userAnswers.length === 1 && userAnswers[0] === correctAnswer;
       if (isCorrect) {
         questionScore = q.points;
       }
@@ -1189,9 +1212,17 @@ app.get('/results', checkAuth, async (req, res) => {
       } else if (q.type === 'fillblank' && userAnswer && Array.isArray(userAnswer)) {
         const userAnswers = userAnswer.map(val => String(val).trim().toLowerCase().replace(/\s+/g, '').replace(',', '.'));
         const correctAnswers = q.correctAnswers.map(val => String(val).trim().toLowerCase().replace(/\s+/g, '').replace(',', '.'));
-        console.log(`Fillblank question ${index + 1} in /results: userAnswers=${userAnswers}, correctAnswers=${correctAnswers}`); // Додаємо логування для дебагу
+        console.log(`Fillblank question ${index + 1} in /results: userAnswers=${userAnswers}, correctAnswers=${correctAnswers}`);
         if (userAnswers.length === correctAnswers.length &&
             userAnswers.every((answer, idx) => answer === correctAnswers[idx])) {
+          questionScore = q.points;
+        }
+      } else if (q.type === 'singlechoice' && userAnswer && Array.isArray(userAnswer)) {
+        const userAnswers = userAnswer.map(val => String(val).trim().toLowerCase());
+        const correctAnswer = String(q.correctAnswer).trim().toLowerCase();
+        console.log(`Single choice question ${index + 1} in /results: userAnswers=${userAnswers}, correctAnswer=${correctAnswer}`);
+        const isCorrect = userAnswers.length === 1 && userAnswers[0] === correctAnswer;
+        if (isCorrect) {
           questionScore = q.points;
         }
       }
@@ -1239,6 +1270,8 @@ app.get('/results', checkAuth, async (req, res) => {
         correctAnswer = q.correctPairs.map(pair => `${pair[0]} -> ${pair[1]}`).join(', ');
       } else if (q.type === 'fillblank') {
         correctAnswer = q.correctAnswers.join(', ');
+      } else if (q.type === 'singlechoice') {
+        correctAnswer = q.correctAnswer; // Для singlechoice відображаємо одну правильну відповідь
       } else {
         correctAnswer = q.correctAnswers.join(', ');
       }
