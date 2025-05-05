@@ -294,17 +294,20 @@ app.get('/', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
 
-const logActivity = async (user, action) => {
+const logActivity = async (user, action, sessionId, ipAddress, additionalInfo = {}) => {
   try {
     const timestamp = new Date();
-    const timeOffset = 3 * 60 * 60 * 1000;
+    const timeOffset = 3 * 60 * 60 * 1000; // Зміщення для часового поясу
     const adjustedTimestamp = new Date(timestamp.getTime() + timeOffset);
     await db.collection('activity_log').insertOne({
       user,
       action,
-      timestamp: adjustedTimestamp.toISOString()
+      sessionId,
+      ipAddress,
+      timestamp: adjustedTimestamp.toISOString(),
+      additionalInfo // Додаткові дані, наприклад, результат тесту
     });
-    console.log(`Logged activity: ${user} - ${action} at ${adjustedTimestamp}`);
+    console.log(`Logged activity: ${user} - ${action} at ${adjustedTimestamp}, IP: ${ipAddress}, Session: ${sessionId}`);
   } catch (error) {
     console.error('Error logging activity:', error.message, error.stack);
   }
@@ -322,9 +325,11 @@ app.post('/login', async (req, res) => {
       return res.status(401).json({ success: false, message: 'Невірний пароль' });
     }
     req.session.user = user;
-    req.session.testVariant = Math.floor(Math.random() * 3) + 1; // Случайный выбор варианта (1, 2 или 3)
+    req.session.testVariant = Math.floor(Math.random() * 3) + 1;
     console.log(`Assigned variant ${req.session.testVariant} to user ${user}`);
-    await logActivity(user, 'увійшов на сайт');
+    const ipAddress = req.headers['x-forwarded-for'] || req.socket.remoteAddress;
+    const sessionId = req.session.id;
+    await logActivity(user, 'увійшов на сайт', sessionId, ipAddress);
     req.session.save(err => {
       if (err) {
         console.error('Error saving session in /login:', err.message, err.stack);
@@ -402,6 +407,12 @@ app.get('/select-test', checkAuth, (req, res) => {
 });
 
 app.post('/logout', (req, res) => {
+  const user = req.session.user;
+  const sessionId = req.session.id;
+  const ipAddress = req.headers['x-forwarded-for'] || req.socket.remoteAddress;
+  if (user) {
+    logActivity(user, 'покинув сайт', sessionId, ipAddress);
+  }
   req.session.destroy(err => {
     if (err) {
       console.error('Error destroying session:', err);
@@ -487,6 +498,9 @@ app.get('/test', checkAuth, async (req, res) => {
       timeLimit: testNames[testNumber].timeLimit * 1000,
       variant: userVariant
     });
+    const ipAddress = req.headers['x-forwarded-for'] || req.socket.remoteAddress;
+    const sessionId = req.session.id;
+    await logActivity(req.user, `розпочав тест ${testNames[testNumber].name}`, sessionId, ipAddress);
     res.redirect(`/test/question?index=0`);
   } catch (error) {
     console.error('Ошибка в /test:', error.message, error.stack);
@@ -1035,7 +1049,6 @@ app.get('/result', checkAuth, async (req, res) => {
         questionScore = q.points;
       }
     } else if (q.type === 'singlechoice' && userAnswer && Array.isArray(userAnswer)) {
-      // Для singlechoice користувач обирає лише одну відповідь
       const userAnswers = userAnswer.map(val => String(val).trim().toLowerCase());
       const correctAnswer = String(q.correctAnswer).trim().toLowerCase();
       console.log(`Single choice question ${index + 1}: userAnswers=${userAnswers}, correctAnswer=${correctAnswer}`);
@@ -1052,6 +1065,10 @@ app.get('/result', checkAuth, async (req, res) => {
   const totalClicks = Object.keys(answers).length;
   const correctClicks = scoresPerQuestion.filter(s => s > 0).length;
   const totalQuestions = questions.length;
+
+  const ipAddress = req.headers['x-forwarded-for'] || req.socket.remoteAddress;
+  const sessionId = req.session.id;
+  await logActivity(req.user, `завершив тест ${testNames[testNumber].name} з результатом ${Math.round(percentage)}%`, sessionId, ipAddress, { percentage: Math.round(percentage) });
 
   try {
     await saveResult(req.user, testNumber, score, totalPoints, startTime, endTime, totalClicks, correctClicks, totalQuestions, percentage, suspiciousActivity, answers, scoresPerQuestion, variant);
@@ -1816,32 +1833,36 @@ app.get('/admin/activity-log', checkAuth, checkAdmin, async (req, res) => {
   adminHtml += `
         <table>
           <tr>
+            <th>Дата-Час</th>
             <th>Користувач</th>
+            <th>IP-адреса</th>
+            <th>Номер сесії</th>
             <th>Дія</th>
-            <th>Час</th>
-            <th>Дата</th>
           </tr>
   `;
   if (!activities || activities.length === 0) {
-    adminHtml += '<tr><td colspan="4">Немає записів</td></tr>';
+    adminHtml += '<tr><td colspan="5">Немає записів</td></tr>';
   } else {
     activities.forEach(activity => {
       const timestamp = new Date(activity.timestamp);
-      const formattedTime = timestamp.toLocaleTimeString('uk-UA', { hour12: false });
-      const formattedDate = timestamp.toLocaleDateString('uk-UA');
+      const formattedDateTime = `${timestamp.toLocaleDateString('uk-UA')} ${timestamp.toLocaleTimeString('uk-UA', { hour12: false })}`;
+      const actionWithInfo = activity.additionalInfo && activity.additionalInfo.percentage
+        ? `${activity.action} (${activity.additionalInfo.percentage}%)`
+        : activity.action;
       adminHtml += `
         <tr>
+          <td>${formattedDateTime}</td>
           <td>${activity.user || 'N/A'}</td>
-          <td>${activity.action || 'N/A'}</td>
-          <td>${formattedTime}</td>
-          <td>${formattedDate}</td>
+          <td>${activity.ipAddress || 'N/A'}</td>
+          <td>${activity.sessionId || 'N/A'}</td>
+          <td>${actionWithInfo}</td>
         </tr>
       `;
     });
   }
   adminHtml += `
         </table>
-        <button class="clear-btn" onclick="clearActivityLog()">Видалення записів журналу</button>
+        <button class="clear-btn" onclick="clearActivityLog()">Видалити усі записи журналу</button>
         <script>
           async function clearActivityLog() {
             if (confirm('Ви впевнені, що хочете видалити усі записи журналу дій?')) {
