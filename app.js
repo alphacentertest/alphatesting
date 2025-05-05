@@ -11,16 +11,16 @@ const fs = require('fs');
 const app = express();
 
 // Подключение к MongoDB
-const MONGO_URL = process.env.MONGO_URL || 'mongodb+srv://romanhaleckij7:DNMaH9w2X4gel3Xc@cluster0.r93r1p8.mongodb.net/testdb?retryWrites=true&w=majority';
-const client = new MongoClient(MONGO_URL, { connectTimeoutMS: 5000, serverSelectionTimeoutMS: 5000 });
+const MONGODB_URI = process.env.MONGODB_URI || 'mongodb+srv://romanhaleckij7:DNMaH9w2X4gel3Xc@cluster0.r93r1p8.mongodb.net/alpha?retryWrites=true&w=majority';
+const client = new MongoClient(MONGODB_URI, { connectTimeoutMS: 5000, serverSelectionTimeoutMS: 5000 });
 let db;
 
 const connectToMongoDB = async (attempt = 1, maxAttempts = 3) => {
   try {
-    console.log(`Attempting to connect to MongoDB (Attempt ${attempt} of ${maxAttempts}) with URL:`, MONGO_URL);
+    console.log(`Attempting to connect to MongoDB (Attempt ${attempt} of ${maxAttempts}) with URI:`, MONGODB_URI);
     await client.connect();
     console.log('Connected to MongoDB successfully');
-    db = client.db('testdb');
+    db = client.db('alpha');
     console.log('Database initialized:', db.databaseName);
   } catch (error) {
     console.error('Failed to connect to MongoDB:', error.message, error.stack);
@@ -48,7 +48,7 @@ app.use(cookieParser());
 
 app.use(session({
   store: MongoStore.create({
-    mongoUrl: MONGO_URL,
+    mongoUrl: MONGODB_URI,
     collectionName: 'sessions',
     ttl: 24 * 60 * 60,
     clientPromise: client.connect().then(() => {
@@ -70,10 +70,10 @@ app.use(session({
   }
 }));
 
-const loadUsers = async () => {
+const importUsersToMongoDB = async () => {
   try {
     const filePath = path.join(__dirname, 'users.xlsx');
-    console.log('Attempting to load users from:', filePath);
+    console.log('Importing users from:', filePath);
     if (!fs.existsSync(filePath)) {
       throw new Error(`File users.xlsx not found at path: ${filePath}`);
     }
@@ -83,23 +83,127 @@ const loadUsers = async () => {
     if (!sheet) {
       throw new Error('Ни один из листов ("Users" или "Sheet1") не найден');
     }
-    const users = {};
+    const users = [];
     sheet.eachRow({ includeEmpty: false }, (row, rowNumber) => {
       if (rowNumber > 1) {
         const username = String(row.getCell(1).value || '').trim();
         const password = String(row.getCell(2).value || '').trim();
         if (username && password) {
-          users[username] = password;
+          users.push({ username, password });
         }
       }
     });
-    if (Object.keys(users).length === 0) {
+    if (users.length === 0) {
       throw new Error('Не найдено пользователей в файле');
     }
-    console.log('Loaded users from Excel:', users);
-    return users;
+    await db.collection('users').deleteMany({});
+    await db.collection('users').insertMany(users);
+    console.log(`Imported ${users.length} users to MongoDB`);
   } catch (error) {
-    console.error('Error loading users from users.xlsx:', error.message, error.stack);
+    console.error('Error importing users to MongoDB:', error.message, error.stack);
+    throw error;
+  }
+};
+
+const importQuestionsToMongoDB = async () => {
+  try {
+    const excelFiles = fs.readdirSync(__dirname).filter(file => file.endsWith('.xlsx') && file.startsWith('questions'));
+    for (const file of excelFiles) {
+      const testNumber = file.match(/^questions(\d+)\.xlsx$/)?.[1];
+      if (!testNumber) continue;
+      const filePath = path.join(__dirname, file);
+      console.log(`Importing questions from: ${filePath}`);
+      const workbook = new ExcelJS.Workbook();
+      await workbook.xlsx.readFile(filePath);
+      const sheet = workbook.getWorksheet('Questions');
+      if (!sheet) {
+        console.warn(`Лист "Questions" не знайдено в ${file}`);
+        continue;
+      }
+      const questions = [];
+      sheet.eachRow({ includeEmpty: false }, (row, rowNumber) => {
+        if (rowNumber > 1) {
+          const rowValues = row.values.slice(1);
+          let questionText = rowValues[1];
+          if (typeof questionText === 'object' && questionText !== null) {
+            questionText = questionText.text || questionText.value || '[Невірний текст питання]';
+          }
+          questionText = String(questionText || '').trim();
+          if (questionText === '') return;
+          const picture = String(rowValues[0] || '').trim();
+          let options = rowValues.slice(2, 14).filter(Boolean).map(val => String(val).trim());
+          const correctAnswers = rowValues.slice(14, 26).filter(Boolean).map(val => String(val).trim());
+          const type = String(rowValues[26] || 'multiple').toLowerCase();
+          const points = Number(rowValues[27]) || 1;
+          const variant = String(rowValues[28] || '').trim();
+
+          if (type === 'truefalse') {
+            options = ["Правда", "Неправда"];
+          }
+
+          let questionData = {
+            testNumber,
+            picture: picture.match(/^Picture (\d+)/i) ? `/images/Picture ${picture.match(/^Picture (\d+)/i)[1]}.png` : null,
+            text: questionText,
+            options,
+            correctAnswers,
+            type,
+            points,
+            variant
+          };
+
+          if (type === 'matching') {
+            questionData.pairs = options.map((opt, idx) => ({
+              left: opt || '',
+              right: correctAnswers[idx] || ''
+            })).filter(pair => pair.left && pair.right);
+            if (questionData.pairs.length === 0) return;
+            questionData.correctPairs = questionData.pairs.map(pair => [pair.left, pair.right]);
+          }
+
+          if (type === 'fillblank') {
+            questionText = questionText.replace(/\s*___\s*/g, '___');
+            const blankCount = (questionText.match(/___/g) || []).length;
+            if (blankCount === 0 || blankCount !== correctAnswers.length) return;
+            questionData.text = questionText;
+            questionData.blankCount = blankCount;
+          }
+
+          if (type === 'singlechoice') {
+            if (correctAnswers.length !== 1 || options.length < 2) return;
+            questionData.correctAnswer = correctAnswers[0];
+          }
+
+          questions.push(questionData);
+        }
+      });
+      await db.collection('questions').deleteMany({ testNumber });
+      if (questions.length > 0) {
+        await db.collection('questions').insertMany(questions);
+        console.log(`Imported ${questions.length} questions for test ${testNumber} to MongoDB`);
+      }
+    }
+  } catch (error) {
+    console.error('Error importing questions to MongoDB:', error.message, error.stack);
+    throw error;
+  }
+};
+
+let usersMap = {};
+
+const loadUsers = async () => {
+  try {
+    const users = await db.collection('users').find({}).toArray();
+    usersMap = users.reduce((acc, user) => {
+      acc[user.username] = user.password;
+      return acc;
+    }, {});
+    if (Object.keys(usersMap).length === 0) {
+      throw new Error('Не знайдено користувачів у базі даних');
+    }
+    console.log('Loaded users from MongoDB into memory:', Object.keys(usersMap));
+  } catch (error) {
+    console.error('Error loading users from MongoDB:', error.message, error.stack);
     throw error;
   }
 };
@@ -115,104 +219,12 @@ const shuffleArray = (array) => {
 
 const loadQuestions = async (testNumber) => {
   try {
-    const filePath = path.join(__dirname, `questions${testNumber}.xlsx`);
-    console.log(`Attempting to load questions from: ${filePath}`);
-    if (!fs.existsSync(filePath)) {
-      throw new Error(`File questions${testNumber}.xlsx not found at path: ${filePath}`);
+    const questions = await db.collection('questions').find({ testNumber: testNumber.toString() }).toArray();
+    if (questions.length === 0) {
+      throw new Error(`No questions found in MongoDB for test ${testNumber}`);
     }
-    const workbook = new ExcelJS.Workbook();
-    await workbook.xlsx.readFile(filePath);
-    const sheet = workbook.getWorksheet('Questions');
-    if (!sheet) {
-      throw new Error(`Лист "Questions" не знайдено в questions${testNumber}.xlsx`);
-    }
-    const jsonData = [];
-    sheet.eachRow({ includeEmpty: false }, (row, rowNumber) => {
-      if (rowNumber > 1) {
-        const rowValues = row.values.slice(1);
-        console.log(`Row ${rowNumber} raw values:`, rowValues);
-        let questionText = rowValues[1];
-        console.log(`Row ${rowNumber} question text raw value:`, questionText, typeof questionText);
-        if (typeof questionText === 'object' && questionText !== null) {
-          console.warn(`Invalid question text in row ${rowNumber}: ${JSON.stringify(questionText)}. Converting to string.`);
-          questionText = questionText.text || questionText.value || '[Невірний текст питання]';
-        }
-        questionText = String(questionText || '').trim();
-        if (questionText === '') {
-          console.warn(`Empty question text in row ${rowNumber}. Skipping.`);
-          return;
-        }
-        const picture = String(rowValues[0] || '').trim();
-        let options = rowValues.slice(2, 14).filter(Boolean).map(val => String(val).trim());
-        const correctAnswers = rowValues.slice(14, 26).filter(Boolean).map(val => String(val).trim());
-        const type = String(rowValues[26] || 'multiple').toLowerCase();
-        const points = Number(rowValues[27]) || 1;
-        const variant = String(rowValues[28] || '').trim();
-
-        if (type === 'truefalse') {
-          options = ["Правда", "Неправда"];
-        }
-
-        let questionData = {
-          picture: picture.match(/^Picture (\d+)/i) ? `/images/Picture ${picture.match(/^Picture (\d+)/i)[1]}.png` : null,
-          text: questionText,
-          options,
-          correctAnswers,
-          type,
-          points,
-          variant
-        };
-
-        if (type === 'matching') {
-          questionData.pairs = options.map((opt, idx) => ({
-            left: opt || '',
-            right: correctAnswers[idx] || ''
-          })).filter(pair => pair.left && pair.right);
-          if (questionData.pairs.length === 0) {
-            console.warn(`No valid pairs for matching question: ${questionText}`);
-            return;
-          }
-          questionData.correctPairs = questionData.pairs.map(pair => [pair.left, pair.right]);
-        }
-
-        if (type === 'fillblank') {
-          // Нормалізуємо пропуски: видаляємо зайві пробіли навколо ___
-          questionText = questionText.replace(/\s*___\s*/g, '___');
-          const blankCount = (questionText.match(/___/g) || []).length;
-          if (blankCount === 0) {
-            console.warn(`No blanks found in fillblank question: ${questionText}`);
-            return;
-          }
-          if (blankCount !== correctAnswers.length) {
-            console.warn(`Mismatch in fillblank question: ${questionText}. Expected ${blankCount} answers, but got ${correctAnswers.length}`);
-            return;
-          }
-          console.log(`Fillblank question ${rowNumber}: text=${questionText}, blankCount=${blankCount}, correctAnswers=${correctAnswers}`);
-          questionData.text = questionText;
-          questionData.blankCount = blankCount;
-        }
-
-        if (type === 'singlechoice') {
-          // Перевіряємо, що є лише одна правильна відповідь
-          if (correctAnswers.length !== 1) {
-            console.warn(`Single choice question at row ${rowNumber} must have exactly one correct answer, but got ${correctAnswers.length}: ${correctAnswers}`);
-            return;
-          }
-          if (options.length < 2) {
-            console.warn(`Single choice question at row ${rowNumber} must have at least 2 options, but got ${options.length}: ${options}`);
-            return;
-          }
-          questionData.correctAnswer = correctAnswers[0]; // Зберігаємо одну правильну відповідь
-        }
-
-        jsonData.push(questionData);
-      }
-    });
-    if (jsonData.length === 0) {
-      throw new Error(`No questions found in questions${testNumber}.xlsx`);
-    }
-    console.log(`Loaded questions for test ${testNumber}:`, jsonData);
-    return jsonData;
+    console.log(`Loaded ${questions.length} questions for test ${testNumber} from MongoDB`);
+    return questions;
   } catch (error) {
     console.error(`Ошибка в loadQuestions (test ${testNumber}):`, error.message, error.stack);
     throw error;
@@ -236,6 +248,15 @@ const initializeServer = async () => {
   const maxAttempts = 5;
   try {
     await connectToMongoDB();
+    // Створюємо індекси
+    await db.collection('users').createIndex({ username: 1 }, { unique: true });
+    await db.collection('questions').createIndex({ testNumber: 1, variant: 1 });
+    await db.collection('test_results').createIndex({ user: 1, endTime: -1 });
+    await db.collection('activity_log').createIndex({ user: 1, timestamp: -1 });
+    console.log('MongoDB indexes created successfully');
+    // Імпортуємо користувачів і питання один раз
+    await importUsersToMongoDB();
+    await importQuestionsToMongoDB();
   } catch (error) {
     throw error;
   }
@@ -243,7 +264,7 @@ const initializeServer = async () => {
     try {
       console.log(`Starting server initialization (Attempt ${attempt} of ${maxAttempts})...`);
       await loadUsers();
-      console.log('Users initialized successfully from Excel');
+      console.log('Users initialized successfully from MongoDB');
       isInitialized = true;
       initializationError = null;
       break;
@@ -319,8 +340,7 @@ app.post('/login', async (req, res) => {
     if (!password) {
       return res.status(400).json({ success: false, message: 'Пароль не вказано' });
     }
-    const validPasswords = await loadUsers();
-    const user = Object.keys(validPasswords).find(u => validPasswords[u] === password);
+    const user = Object.keys(usersMap).find(u => usersMap[u] === password);
     if (!user) {
       return res.status(401).json({ success: false, message: 'Невірний пароль' });
     }
