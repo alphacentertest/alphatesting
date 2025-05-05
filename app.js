@@ -22,7 +22,7 @@ const transporter = nodemailer.createTransport({
   service: 'gmail',
   auth: {
     user: 'alphacentertest@gmail.com',
-    pass: 'your-app-specific-password' // Замініть на пароль додатка Gmail
+    pass: ':bnnz<fnmrsdobysxtcnmysrjve' // Замініть на пароль додатка Gmail
   }
 });
 
@@ -89,6 +89,14 @@ app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
 app.use(cookieParser());
 
+// Middleware для запобігання кешуванню
+app.use((req, res, next) => {
+  res.set('Cache-Control', 'no-store, no-cache, must-revalidate, private');
+  res.set('Pragma', 'no-cache');
+  res.set('Expires', '0');
+  next();
+});
+
 app.use(session({
   store: MongoStore.create({
     mongoUrl: MONGODB_URI,
@@ -117,6 +125,9 @@ app.use(session({
 app.use((req, res, next) => {
   if (!req.session.csrfToken) {
     req.session.csrfToken = generateCsrfToken();
+    console.log('Generated new CSRF token for session:', req.session.csrfToken);
+  } else {
+    console.log('Existing CSRF token in session:', req.session.csrfToken);
   }
   res.locals.csrfToken = req.session.csrfToken || '';
   next();
@@ -128,6 +139,7 @@ app.use((req, res, next) => {
     const csrfToken = req.body._csrf || req.headers['x-csrf-token'];
     console.log('CSRF Token in request:', csrfToken);
     console.log('CSRF Token in session:', req.session.csrfToken);
+    console.log('Session ID:', req.session.id);
     if (!csrfToken || (req.session.csrfToken && csrfToken !== req.session.csrfToken)) {
       console.error('CSRF token mismatch');
       return res.status(403).json({ success: false, message: 'Невірний CSRF-токен' });
