@@ -22,7 +22,7 @@ const transporter = nodemailer.createTransport({
   service: 'gmail',
   auth: {
     user: 'alphacentertest@gmail.com',
-    pass: ':bnnz<fnmrsdobysxtcnmysrjve' // Замініть на пароль додатка Gmail
+    pass: 'your-app-specific-password' // Замініть на пароль додатка Gmail
   }
 });
 
@@ -433,14 +433,23 @@ app.get('/', (req, res) => {
             const csrfToken = document.getElementById('csrf-token').value;
             const errorMessage = document.getElementById('error-message');
 
+            // Дебагінг CSRF-токена
+            console.log('CSRF Token from form:', csrfToken);
+            if (!csrfToken) {
+              errorMessage.textContent = 'CSRF-токен не знайдено у формі';
+              return;
+            }
+
             const formData = new URLSearchParams();
             formData.append('password', password);
-            formData.append('_csrf', csrfToken);
 
             try {
               const response = await fetch('/login', {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                headers: {
+                  'Content-Type': 'application/x-www-form-urlencoded',
+                  'X-CSRF-Token': csrfToken
+                },
                 body: formData
               });
               const result = await response.json();
@@ -570,10 +579,12 @@ app.get('/select-test', checkAuth, (req, res) => {
           async function logout() {
             const csrfToken = document.getElementById('csrf-token').value;
             const formData = new URLSearchParams();
-            formData.append('_csrf', csrfToken);
             await fetch('/logout', {
               method: 'POST',
-              headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+              headers: {
+                'Content-Type': 'application/x-www-form-urlencoded',
+                'X-CSRF-Token': csrfToken
+              },
               body: formData
             });
             window.location.href = '/';
@@ -731,7 +742,7 @@ app.get('/test/question', checkAuth, (req, res) => {
           .progress-line { width: 5px; height: 2px; background-color: #ccc; margin: 0 2px; align-self: center; flex-shrink: 0; }
           .progress-line.answered { background-color: green; }
           .progress-row { display: flex; align-items: center; justify-content: space-around; gap: 2px; flex-wrap: wrap; }
-          .option-box { border: 2px solid #ccc; padding: 10px; margin: 5px 0; border-radius: 5px; cursor: pointer; font-size: 16px; user-select: none; }
+          .option-box { border: 2px solid #ccc; padding: 10px; margin: 5px 0; border-radius: 5px; cursor: pointer; font-size:wechat://msg 16px; user-select: none; }
           .option-box.selected { background-color: #90ee90; }
           .button-container { position: fixed; bottom: 20px; left: 20px; right: 20px; display: flex; justify-content: space-between; }
           button { padding: 10px 20px; margin: 5px; border: none; cursor: pointer; border-radius: 5px; font-size: 16px; }
@@ -1015,11 +1026,16 @@ app.get('/test/question', checkAuth, (req, res) => {
               formData.append('switchCount', switchCount);
               formData.append('responseTime', responseTime);
               formData.append('activityCount', activityCount);
-              formData.append('_csrf', document.getElementById('csrf-token').value);
+
+              const csrfToken = document.getElementById('csrf-token').value;
+              console.log('CSRF Token for /answer:', csrfToken);
 
               await fetch('/answer', {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                headers: {
+                  'Content-Type': 'application/x-www-form-urlencoded',
+                  'X-CSRF-Token': csrfToken
+                },
                 body: formData
               });
               window.location.href = '/test/question?index=' + (index + 1);
@@ -1062,11 +1078,16 @@ app.get('/test/question', checkAuth, (req, res) => {
               formData.append('switchCount', switchCount);
               formData.append('responseTime', responseTime);
               formData.append('activityCount', activityCount);
-              formData.append('_csrf', document.getElementById('csrf-token').value);
+
+              const csrfToken = document.getElementById('csrf-token').value;
+              console.log('CSRF Token for /answer (finishTest):', csrfToken);
 
               await fetch('/answer', {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                headers: {
+                  'Content-Type': 'application/x-www-form-urlencoded',
+                  'X-CSRF-Token': csrfToken
+                },
                 body: formData
               });
               window.location.href = '/result';
@@ -1637,10 +1658,12 @@ app.get('/admin', checkAuth, checkAdmin, (req, res) => {
           async function logout() {
             const csrfToken = document.getElementById('csrf-token').value;
             const formData = new URLSearchParams();
-            formData.append('_csrf', csrfToken);
             await fetch('/logout', {
               method: 'POST',
-              headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+              headers: {
+                'Content-Type': 'application/x-www-form-urlencoded',
+                'X-CSRF-Token': csrfToken
+              },
               body: formData
             });
             window.location.href = '/';
@@ -1719,10 +1742,12 @@ app.get('/admin/users', checkAuth, checkAdmin, async (req, res) => {
                 const csrfToken = document.getElementById('csrf-token').value;
                 const formData = new URLSearchParams();
                 formData.append('username', username);
-                formData.append('_csrf', csrfToken);
                 const response = await fetch('/admin/delete-user', {
                   method: 'POST',
-                  headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                  headers: {
+                    'Content-Type': 'application/x-www-form-urlencoded',
+                    'X-CSRF-Token': csrfToken
+                  },
                   body: formData
                 });
                 const result = await response.json();
@@ -2029,10 +2054,12 @@ app.get('/admin/questions', checkAuth, checkAdmin, async (req, res) => {
                 const csrfToken = document.getElementById('csrf-token').value;
                 const formData = new URLSearchParams();
                 formData.append('id', id);
-                formData.append('_csrf', csrfToken);
                 const response = await fetch('/admin/delete-question', {
                   method: 'POST',
-                  headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                  headers: {
+                    'Content-Type': 'application/x-www-form-urlencoded',
+                    'X-CSRF-Token': csrfToken
+                  },
                   body: formData
                 });
                 const result = await response.json();
@@ -2651,10 +2678,12 @@ app.get('/admin/results', checkAuth, checkAdmin, async (req, res) => {
                 const csrfToken = document.getElementById('csrf-token').value;
                 const formData = new URLSearchParams();
                 formData.append('id', id);
-                formData.append('_csrf', csrfToken);
                 const response = await fetch('/admin/delete-result', {
                   method: 'POST',
-                  headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                  headers: {
+                    'Content-Type': 'application/x-www-form-urlencoded',
+                    'X-CSRF-Token': csrfToken
+                  },
                   body: formData
                 });
                 const result = await response.json();
@@ -2674,10 +2703,12 @@ app.get('/admin/results', checkAuth, checkAdmin, async (req, res) => {
               try {
                 const csrfToken = document.getElementById('csrf-token').value;
                 const formData = new URLSearchParams();
-                formData.append('_csrf', csrfToken);
                 const response = await fetch('/admin/delete-all-results', {
                   method: 'POST',
-                  headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                  headers: {
+                    'Content-Type': 'application/x-www-form-urlencoded',
+                    'X-CSRF-Token': csrfToken
+                  },
                   body: formData
                 });
                 const result = await response.json();
@@ -2769,10 +2800,12 @@ app.get('/admin/edit-tests', checkAuth, checkAdmin, (req, res) => {
               const csrfToken = document.getElementById('csrf-token').value;
               const formData = new URLSearchParams();
               formData.append('testNumber', testNumber);
-              formData.append('_csrf', csrfToken);
               await fetch('/admin/delete-test', {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                headers: {
+                  'Content-Type': 'application/x-www-form-urlencoded',
+                  'X-CSRF-Token': csrfToken
+                },
                 body: formData
               });
               window.location.reload();
@@ -2975,10 +3008,12 @@ app.get('/admin/activity-log', checkAuth, checkAdmin, async (req, res) => {
               try {
                 const csrfToken = document.getElementById('csrf-token').value;
                 const formData = new URLSearchParams();
-                formData.append('_csrf', csrfToken);
                 const response = await fetch('/admin/delete-activity-log', {
                   method: 'POST',
-                  headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                  headers: {
+                    'Content-Type': 'application/x-www-form-urlencoded',
+                    'X-CSRF-Token': csrfToken
+                  },
                   body: formData
                 });
                 const result = await response.json();
