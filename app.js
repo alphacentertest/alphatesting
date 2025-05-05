@@ -1,3 +1,5 @@
+require('dotenv').config();
+console.log('MONGODB_URI:', process.env.MONGODB_URI);
 const express = require('express');
 const session = require('express-session');
 const MongoStore = require('connect-mongo');
@@ -8,7 +10,7 @@ const fs = require('fs');
 
 const app = express();
 const port = process.env.PORT || 3000;
-const uri = process.env.MONGODB_URI; // Видалено значення за замовчуванням
+const uri = process.env.MONGODB_URI;
 if (!uri) {
   console.error('MONGODB_URI is not set in environment variables');
   process.exit(1);
@@ -107,7 +109,7 @@ async function initialize() {
     users = await loadUsers();
   } catch (error) {
     console.error('Failed to initialize application:', error);
-    throw error; // Помилка буде оброблена в .catch нижче
+    throw error;
   }
 
   app.use(express.static('public'));
@@ -1194,7 +1196,7 @@ async function initialize() {
       res.status(500).json({ success: false, message: 'Помилка при оновленні питань' });
     }
   });
-  
+
   app.get('/admin/results', checkAuth, checkAdmin, async (req, res) => {
     let results = [];
     let errorMessage = '';
@@ -1413,4 +1415,3 @@ async function initialize() {
     console.error('Failed to start server:', err);
     process.exit(1);
   });
-  
