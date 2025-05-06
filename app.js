@@ -137,9 +137,14 @@ const importUsersToMongoDB = async (filePath) => {
     if (users.length === 0) {
       throw new Error('Не знайдено користувачів у файлі');
     }
+    // Видаляємо всіх користувачів із бази
     await db.collection('users').deleteMany({});
+    // Видаляємо всі активні сесії
+    await db.collection('sessions').deleteMany({});
+    console.log('Cleared all sessions after user import');
+    // Додаємо нових користувачів
     await db.collection('users').insertMany(users);
-    // Оновлюємо usersMap після імпорту
+    // Оновлюємо usersMap
     usersMap = users.reduce((acc, user) => {
       acc[user.username] = user.password;
       return acc;
@@ -2439,48 +2444,6 @@ app.post('/admin/import-users', checkAuth, checkAdmin, upload.single('file'), as
     res.status(500).send('Помилка при імпорті користувачів');
   }
 });
-
-const importUsersToMongoDB = async (filePath) => {
-  try {
-    const workbook = new ExcelJS.Workbook();
-    await workbook.xlsx.readFile(filePath);
-    let sheet = workbook.getWorksheet('Users') || workbook.getWorksheet('Sheet1');
-    if (!sheet) {
-      throw new Error('Лист "Users" або "Sheet1" не знайдено у файлі');
-    }
-    const users = [];
-    const saltRounds = 10;
-    for (let rowNumber = 2; rowNumber <= sheet.rowCount; rowNumber++) {
-      const row = sheet.getRow(rowNumber);
-      const username = String(row.getCell(1).value || '').trim();
-      const password = String(row.getCell(2).value || '').trim();
-      if (username && password) {
-        const hashedPassword = await bcrypt.hash(password, saltRounds);
-        users.push({ username, password: hashedPassword });
-      }
-    }
-    if (users.length === 0) {
-      throw new Error('Не знайдено користувачів у файлі');
-    }
-    // Видаляємо всіх користувачів із бази
-    await db.collection('users').deleteMany({});
-    // Видаляємо всі активні сесії
-    await db.collection('sessions').deleteMany({});
-    console.log('Cleared all sessions after user import');
-    // Додаємо нових користувачів
-    await db.collection('users').insertMany(users);
-    // Оновлюємо usersMap
-    usersMap = users.reduce((acc, user) => {
-      acc[user.username] = user.password;
-      return acc;
-    }, {});
-    console.log(`Imported ${users.length} users to MongoDB with hashed passwords`);
-    return users.length;
-  } catch (error) {
-    console.error('Error importing users to MongoDB:', error.message, error.stack);
-    throw error;
-  }
-};
 
 app.get('/admin/import-questions', checkAuth, checkAdmin, (req, res) => {
   res.send(`
