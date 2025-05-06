@@ -96,6 +96,9 @@ app.use(session({
     mongoUrl: MONGODB_URI,
     collectionName: 'sessions',
     ttl: 24 * 60 * 60,
+    autoRemove: 'interval',
+    autoRemoveInterval: 10,
+    touchAfter: 24 * 3600,
     clientPromise: client.connect().then(() => {
       console.log('MongoStore client connected successfully');
       return client;
@@ -415,15 +418,19 @@ app.get('/', (req, res) => {
               const response = await fetch('/login', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-                body: formData
+                body: formData,
+                credentials: 'include' // Додаємо, щоб переконатися, що куки сесії передаються
               });
               const result = await response.json();
+              console.log('Login response:', result); // Дебагінг
               if (result.success) {
+                console.log('Redirecting to:', result.redirect);
                 window.location.href = result.redirect;
               } else {
                 errorMessage.textContent = result.message || 'Помилка входу';
               }
             } catch (error) {
+              console.error('Error during login:', error);
               errorMessage.textContent = 'Помилка сервера';
             }
           });
@@ -464,7 +471,6 @@ app.post('/login', async (req, res) => {
     if (!password) {
       return res.status(400).json({ success: false, message: 'Пароль не вказано' });
     }
-    // Завантажуємо всіх користувачів із бази даних
     const users = await db.collection('users').find({}).toArray();
     let foundUser = null;
     for (const user of users) {
@@ -479,20 +485,15 @@ app.post('/login', async (req, res) => {
     req.session.user = foundUser.username;
     req.session.testVariant = Math.floor(Math.random() * 3) + 1;
     console.log(`Assigned variant ${req.session.testVariant} to user ${foundUser.username}`);
+    console.log(`Session after login:`, req.session); // Дебагінг
     const ipAddress = req.headers['x-forwarded-for'] || req.socket.remoteAddress;
     const sessionId = req.session.id;
     await logActivity(foundUser.username, 'увійшов на сайт', sessionId, ipAddress);
-    req.session.save(err => {
-      if (err) {
-        console.error('Error saving session in /login:', err.message, err.stack);
-        return res.status(500).json({ success: false, message: 'Помилка сервера' });
-      }
-      if (foundUser.username === 'admin') {
-        res.json({ success: true, redirect: '/admin' });
-      } else {
-        res.json({ success: true, redirect: '/select-test' });
-      }
-    });
+    if (foundUser.username === 'admin') {
+      res.json({ success: true, redirect: '/admin' });
+    } else {
+      res.json({ success: true, redirect: '/select-test' });
+    }
   } catch (error) {
     console.error('Ошибка в /login:', error.message, error.stack);
     res.status(500).json({ success: false, message: 'Помилка сервера' });
@@ -500,6 +501,7 @@ app.post('/login', async (req, res) => {
 });
 
 const checkAuth = (req, res, next) => {
+  console.log(`CheckAuth: Full session object:`, req.session);
   const user = req.session.user;
   console.log(`CheckAuth: user in session: ${user}, session ID: ${req.session.id}`);
   if (!user) {
