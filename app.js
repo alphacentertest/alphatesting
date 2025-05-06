@@ -4,7 +4,6 @@ const cookieParser = require('cookie-parser');
 const path = require('path');
 const ExcelJS = require('exceljs');
 const session = require('express-session');
-const MongoStore = require('connect-mongo');
 const { MongoClient, ObjectId } = require('mongodb');
 const bcrypt = require('bcrypt');
 const fs = require('fs');
@@ -91,28 +90,15 @@ app.use((req, res, next) => {
   next();
 });
 
+// Використовуємо MemoryStore для сесій
 app.use(session({
-  store: MongoStore.create({
-    mongoUrl: MONGODB_URI,
-    collectionName: 'sessions',
-    ttl: 24 * 60 * 60,
-    autoRemove: 'interval',
-    autoRemoveInterval: 10,
-    clientPromise: client.connect().then(() => {
-      console.log('MongoStore client connected successfully');
-      return client;
-    }).catch(err => {
-      console.error('MongoStore client connection error:', err.message, err.stack);
-      throw err;
-    })
-  }),
   secret: process.env.SESSION_SECRET || 'a1b2c3d4e5f6g7h8i9j0k1l2m3n4o5p6q7r8s9t0',
   resave: false,
   saveUninitialized: false,
   cookie: {
-    secure: true, // Залишаємо true для HTTPS на Heroku
+    secure: true, // Для HTTPS на Heroku
     httpOnly: true,
-    sameSite: 'none', // Зміна для забезпечення передачі куків
+    sameSite: 'lax',
     maxAge: 24 * 60 * 60 * 1000 // 24 години
   }
 }));
@@ -139,18 +125,10 @@ const importUsersToMongoDB = async (filePath) => {
     if (users.length === 0) {
       throw new Error('Не знайдено користувачів у файлі');
     }
-    // Видаляємо всіх користувачів із бази
     await db.collection('users').deleteMany({});
-    // Видаляємо всі активні сесії
     await db.collection('sessions').deleteMany({});
     console.log('Cleared all sessions after user import');
-    // Додаємо нових користувачів
     await db.collection('users').insertMany(users);
-    // Оновлюємо usersMap
-    usersMap = users.reduce((acc, user) => {
-      acc[user.username] = user.password;
-      return acc;
-    }, {});
     console.log(`Imported ${users.length} users to MongoDB with hashed passwords`);
     return users.length;
   } catch (error) {
@@ -237,25 +215,6 @@ const importQuestionsToMongoDB = async (filePath, testNumber) => {
   }
 };
 
-let usersMap = {};
-
-const loadUsers = async () => {
-  try {
-    const users = await db.collection('users').find({}).toArray();
-    usersMap = users.reduce((acc, user) => {
-      acc[user.username] = user.password;
-      return acc;
-    }, {});
-    if (Object.keys(usersMap).length === 0) {
-      throw new Error('Не знайдено користувачів у базі даних');
-    }
-    console.log('Loaded users from MongoDB into memory:', Object.keys(usersMap));
-  } catch (error) {
-    console.error('Error loading users from MongoDB:', error.message, error.stack);
-    throw error;
-  }
-};
-
 // Функція для випадкового перемішування масиву (Fisher-Yates)
 const shuffleArray = (array) => {
   for (let i = array.length - 1; i > 0; i--) {
@@ -317,28 +276,12 @@ const initializeServer = async () => {
     await db.collection('activity_log').createIndex({ user: 1, timestamp: -1 });
     console.log('MongoDB indexes created successfully');
     await updateUserPasswords();
+    isInitialized = true;
+    initializationError = null;
   } catch (error) {
+    console.error('Failed to initialize server:', error.message, error.stack);
+    initializationError = error;
     throw error;
-  }
-  while (attempt <= maxAttempts) {
-    try {
-      console.log(`Starting server initialization (Attempt ${attempt} of ${maxAttempts})...`);
-      await loadUsers();
-      console.log('Users initialized successfully from MongoDB');
-      isInitialized = true;
-      initializationError = null;
-      break;
-    } catch (err) {
-      console.error(`Failed to initialize server (Attempt ${attempt}):`, err.message, err.stack);
-      initializationError = err;
-      if (attempt < maxAttempts) {
-        console.log(`Retrying initialization in 5 seconds...`);
-        await new Promise(resolve => setTimeout(resolve, 5000));
-      } else {
-        console.error('Maximum initialization attempts reached. Server remains uninitialized.');
-      }
-      attempt++;
-    }
   }
 };
 
@@ -405,7 +348,7 @@ app.get('/', (req, res) => {
         </form>
         <div id="error-message" class="error"></div>
         <script>
-          console.log('Cookies before login:', document.cookie); // Дебагінг куків
+          console.log('Cookies before login:', document.cookie);
 
           document.getElementById('login-form').addEventListener('submit', async (e) => {
             e.preventDefault();
@@ -423,7 +366,7 @@ app.get('/', (req, res) => {
               });
               const result = await response.json();
               console.log('Login response:', result);
-              console.log('Cookies after login:', document.cookie); // Дебагінг куків після входу
+              console.log('Cookies after login:', document.cookie);
               if (result.success) {
                 console.log('Redirecting to:', result.redirect);
                 window.location.href = result.redirect;
@@ -491,18 +434,7 @@ app.post('/login', async (req, res) => {
     const sessionId = req.session.id;
     await logActivity(foundUser.username, 'увійшов на сайт', sessionId, ipAddress);
 
-    // Примусово зберігаємо сесію
-    await new Promise((resolve, reject) => {
-      req.session.save(err => {
-        if (err) {
-          console.error('Error saving session:', err);
-          reject(err);
-        } else {
-          console.log('Session saved successfully');
-          resolve();
-        }
-      });
-    });
+    console.log(`Setting new session ID: ${sessionId}`);
 
     if (foundUser.username === 'admin') {
       res.json({ success: true, redirect: '/admin' });
@@ -578,7 +510,7 @@ app.get('/select-test', checkAuth, (req, res) => {
             await fetch('/logout', {
               method: 'POST',
               headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-              body: formData
+              credentials: 'include'
             });
             window.location.href = '/';
           }
@@ -812,7 +744,6 @@ app.get('/test/question', checkAuth, (req, res) => {
         </div>
         <div id="question-container">
   `;
-  // Відображаємо зображення, якщо поле picture існує і не порожнє
   if (q.picture && q.picture.trim() !== '') {
     html += `
       <div id="image-container">
@@ -1029,7 +960,7 @@ app.get('/test/question', checkAuth, (req, res) => {
               await fetch('/answer', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-                body: formData
+                credentials: 'include'
               });
               window.location.href = '/test/question?index=' + (index + 1);
             } catch (error) {
@@ -1075,7 +1006,7 @@ app.get('/test/question', checkAuth, (req, res) => {
               await fetch('/answer', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-                body: formData
+                credentials: 'include'
               });
               window.location.href = '/result';
             } catch (error) {
@@ -1564,7 +1495,7 @@ app.get('/results', checkAuth, async (req, res) => {
 
         document.getElementById('exportPDF').addEventListener('click', () => {
           const docDefinition = {
-                         content: [
+            content: [
               {
                 image: 'data:image/png;base64,' + imageBase64,
                 width: 150,
@@ -1579,32 +1510,32 @@ app.get('/results', checkAuth, async (req, res) => {
               {
                 columns: [
                   { text: 'Час: ' + time, width: '50%' },
-                  { text: 'Дата: ' + date, width: '50%', alignment: 'right' }
-                ],
-                margin: [0, 10, 0, 0]
-              }
-            ],
-            styles: {
-              header: { fontSize: 14, bold: true, margin: [0, 0, 0, 10] }
+                  { text: 'Дата: ' + date, width:                 '50%', alignment: 'right'
+              ],
+              margin: [0, 10, 0, 0]
             }
-          };
-          pdfMake.createPdf(docDefinition).download('results.pdf');
-        });
+          ],
+          styles: {
+            header: { fontSize: 14, bold: true, margin: [0, 0, 0, 10] }
+          }
+        };
+        pdfMake.createPdf(docDefinition).download('results.pdf');
+      });
 
-        document.getElementById('restart').addEventListener('click', () => {
-          window.location.href = '/';
-        });
-      </script>
-    `;
-    userTests.delete(req.user);
-  } else {
-    resultsHtml += '<p>Немає завершених тестів</p>';
-  }
-  resultsHtml += `
-      </body>
-    </html>
+      document.getElementById('restart').addEventListener('click', () => {
+        window.location.href = '/';
+      });
+    </script>
   `;
-  res.send(resultsHtml);
+  userTests.delete(req.user);
+} else {
+  resultsHtml += '<p>Немає завершених тестів</p>';
+}
+resultsHtml += `
+    </body>
+  </html>
+`;
+res.send(resultsHtml);
 });
 
 app.get('/admin', checkAuth, checkAdmin, (req, res) => {
@@ -1646,7 +1577,7 @@ app.get('/admin', checkAuth, checkAdmin, (req, res) => {
             await fetch('/logout', {
               method: 'POST',
               headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-              body: formData
+              credentials: 'include'
             });
             window.location.href = '/';
           }
@@ -1725,7 +1656,7 @@ app.get('/admin/users', checkAuth, checkAdmin, async (req, res) => {
                 const response = await fetch('/admin/delete-user', {
                   method: 'POST',
                   headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-                  body: formData
+                  credentials: 'include'
                 });
                 const result = await response.json();
                 if (result.success) {
@@ -1817,7 +1748,6 @@ app.post('/admin/add-user', checkAuth, checkAdmin, async (req, res) => {
     const saltRounds = 10;
     const hashedPassword = await bcrypt.hash(password, saltRounds);
     await db.collection('users').insertOne({ username, password: hashedPassword });
-    usersMap[username] = hashedPassword;
     res.send(`
       <!DOCTYPE html>
       <html lang="uk">
@@ -1922,8 +1852,6 @@ app.post('/admin/edit-user', checkAuth, checkAdmin, async (req, res) => {
       { username: oldUsername },
       { $set: updateData }
     );
-    delete usersMap[oldUsername];
-    usersMap[username] = updateData.password || usersMap[oldUsername];
     res.send(`
       <!DOCTYPE html>
       <html lang="uk">
@@ -1947,7 +1875,6 @@ app.post('/admin/delete-user', checkAuth, checkAdmin, async (req, res) => {
   try {
     const { username } = req.body;
     await db.collection('users').deleteOne({ username });
-    delete usersMap[username];
     res.json({ success: true });
   } catch (error) {
     console.error('Error deleting user:', error.message, error.stack);
@@ -2030,7 +1957,7 @@ app.get('/admin/questions', checkAuth, checkAdmin, async (req, res) => {
                 const response = await fetch('/admin/delete-question', {
                   method: 'POST',
                   headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-                  body: formData
+                  credentials: 'include'
                 });
                 const result = await response.json();
                 if (result.success) {
@@ -2157,7 +2084,7 @@ app.post('/admin/add-question', checkAuth, checkAdmin, async (req, res) => {
 
     let questionData = {
       testNumber,
-      picture: picture || '', // Зберігаємо URL зображення, якщо вказано
+      picture: picture || '',
       text,
       type: type.toLowerCase(),
       options: options ? options.split(',').map(opt => opt.trim()).filter(Boolean) : [],
@@ -2330,7 +2257,7 @@ app.post('/admin/edit-question', checkAuth, checkAdmin, async (req, res) => {
 
     let questionData = {
       testNumber,
-      picture: picture || '', // Зберігаємо URL зображення, якщо вказано
+      picture: picture || '',
       text,
       type: type.toLowerCase(),
       options: options ? options.split(',').map(opt => opt.trim()).filter(Boolean) : [],
@@ -2440,7 +2367,6 @@ app.post('/admin/import-users', checkAuth, checkAdmin, upload.single('file'), as
     }
     const filePath = req.file.path;
     const importedCount = await importUsersToMongoDB(filePath);
-    await loadUsers();
     fs.unlinkSync(filePath);
     res.send(`
       <!DOCTYPE html>
@@ -2667,7 +2593,7 @@ app.get('/admin/results', checkAuth, checkAdmin, async (req, res) => {
                 const response = await fetch('/admin/delete-result', {
                   method: 'POST',
                   headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-                  body: formData
+                  credentials: 'include'
                 });
                 const result = await response.json();
                 if (result.success) {
@@ -2688,7 +2614,7 @@ app.get('/admin/results', checkAuth, checkAdmin, async (req, res) => {
                 const response = await fetch('/admin/delete-all-results', {
                   method: 'POST',
                   headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-                  body: formData
+                  credentials: 'include'
                 });
                 const result = await response.json();
                 if (result.success) {
@@ -2779,7 +2705,7 @@ app.get('/admin/edit-tests', checkAuth, checkAdmin, (req, res) => {
               await fetch('/admin/delete-test', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-                body: formData
+                credentials: 'include'
               });
               window.location.reload();
             }
@@ -2981,7 +2907,7 @@ app.get('/admin/activity-log', checkAuth, checkAdmin, async (req, res) => {
                 const response = await fetch('/admin/delete-activity-log', {
                   method: 'POST',
                   headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-                  body: formData
+                  credentials: 'include'
                 });
                 const result = await response.json();
                 if (result.success) {
