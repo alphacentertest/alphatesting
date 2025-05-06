@@ -372,6 +372,12 @@ app.get('/', (req, res) => {
                 headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
                 credentials: 'include'
               });
+
+              // Перевіряємо, чи відповідь успішна
+              if (!response.ok) {
+                throw new Error(`HTTP error! status: ${response.status}`);
+              }
+
               const result = await response.json();
               console.log('Login response:', result);
               console.log('Cookies after login:', document.cookie);
@@ -391,7 +397,7 @@ app.get('/', (req, res) => {
               }
             } catch (error) {
               console.error('Error during login:', error);
-              errorMessage.textContent = 'Помилка сервера';
+              errorMessage.textContent = 'Помилка сервера: ' + error.message;
             }
           });
 
@@ -429,6 +435,7 @@ app.post('/login', async (req, res) => {
   try {
     const { password } = req.body;
     if (!password) {
+      console.log('Password not provided');
       return res.status(400).json({ success: false, message: 'Пароль не вказано' });
     }
     const users = await db.collection('users').find({}).toArray();
@@ -440,6 +447,7 @@ app.post('/login', async (req, res) => {
       }
     }
     if (!foundUser) {
+      console.log('Invalid password');
       return res.status(401).json({ success: false, message: 'Невірний пароль' });
     }
 
@@ -460,34 +468,23 @@ app.post('/login', async (req, res) => {
 
     console.log(`Session ID: ${sessionId}`);
 
-    // Примусово зберігаємо сесію
-    await new Promise((resolve, reject) => {
-      req.session.save(err => {
-        if (err) {
-          console.error('Error saving session:', err);
-          reject(err);
-        } else {
-          console.log('Session saved successfully');
-          // Перевіряємо, чи сесія збереглася в MongoDB
-          db.collection('sessions').findOne({ _id: sessionId }, (err, session) => {
-            if (err) {
-              console.error('Error checking session in MongoDB:', err);
-              reject(err);
-            } else {
-              console.log('Session found in MongoDB:', session);
-              resolve();
-            }
-          });
-        }
-      });
+    // Асинхронно зберігаємо сесію без очікування
+    req.session.save(err => {
+      if (err) {
+        console.error('Error saving session:', err);
+      } else {
+        console.log('Session saved successfully');
+      }
     });
 
     // Дебагінг заголовків відповіді
     console.log('Response headers after session setup:', res.getHeaders());
 
     if (foundUser.username === 'admin') {
+      console.log('Sending response: redirect to /admin');
       res.json({ success: true, redirect: '/admin' });
     } else {
+      console.log('Sending response: redirect to /select-test');
       res.json({ success: true, redirect: '/select-test' });
     }
   } catch (error) {
