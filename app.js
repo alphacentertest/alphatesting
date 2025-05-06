@@ -98,8 +98,8 @@ app.use(session({
   cookie: {
     secure: true, // Для HTTPS на Heroku
     httpOnly: true,
-    sameSite: 'none', // Зміна на 'none'
-    domain: '.herokuapp.com', // Вказуємо домен для Heroku
+    sameSite: 'none',
+    // Видаляємо domain для перевірки
     maxAge: 24 * 60 * 60 * 1000 // 24 години
   }
 }));
@@ -368,11 +368,16 @@ app.get('/', (req, res) => {
               const result = await response.json();
               console.log('Login response:', result);
               console.log('Cookies after login:', document.cookie);
+
+              // Додатковий дебагінг: чекаємо 500мс і перевіряємо куки ще раз
+              setTimeout(() => {
+                console.log('Cookies after 500ms delay:', document.cookie);
+              }, 500);
+
               if (result.success) {
                 console.log('Redirecting to:', result.redirect);
-                // Додаємо затримку перед перенаправленням
                 setTimeout(() => {
-                  window.location.href = result.redirect;
+                  window.location.href = result.redirect + '?nocache=' + Date.now();
                 }, 500);
               } else {
                 errorMessage.textContent = result.message || 'Помилка входу';
@@ -435,8 +440,7 @@ app.post('/login', async (req, res) => {
     res.clearCookie('connect.sid', {
       secure: true,
       httpOnly: true,
-      sameSite: 'none',
-      domain: '.herokuapp.com'
+      sameSite: 'none'
     });
 
     req.session.user = foundUser.username;
@@ -454,7 +458,6 @@ app.post('/login', async (req, res) => {
       secure: true,
       httpOnly: true,
       sameSite: 'none',
-      domain: '.herokuapp.com',
       maxAge: 24 * 60 * 60 * 1000
     });
 
@@ -474,6 +477,7 @@ app.post('/login', async (req, res) => {
 
 const checkAuth = (req, res, next) => {
   console.log(`CheckAuth: Cookies received:`, req.cookies);
+  console.log(`CheckAuth: Headers received:`, req.headers);
   console.log(`CheckAuth: Full session object:`, req.session);
   const user = req.session.user;
   console.log(`CheckAuth: user in session: ${user}, session ID: ${req.session.id}`);
