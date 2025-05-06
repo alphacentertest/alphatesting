@@ -98,7 +98,8 @@ app.use(session({
   cookie: {
     secure: true, // Для HTTPS на Heroku
     httpOnly: true,
-    sameSite: 'lax',
+    sameSite: 'none', // Зміна на 'none'
+    domain: '.herokuapp.com', // Вказуємо домен для Heroku
     maxAge: 24 * 60 * 60 * 1000 // 24 години
   }
 }));
@@ -369,7 +370,10 @@ app.get('/', (req, res) => {
               console.log('Cookies after login:', document.cookie);
               if (result.success) {
                 console.log('Redirecting to:', result.redirect);
-                window.location.href = result.redirect;
+                // Додаємо затримку перед перенаправленням
+                setTimeout(() => {
+                  window.location.href = result.redirect;
+                }, 500);
               } else {
                 errorMessage.textContent = result.message || 'Помилка входу';
               }
@@ -426,6 +430,15 @@ app.post('/login', async (req, res) => {
     if (!foundUser) {
       return res.status(401).json({ success: false, message: 'Невірний пароль' });
     }
+
+    // Очищаємо стару куку connect.sid
+    res.clearCookie('connect.sid', {
+      secure: true,
+      httpOnly: true,
+      sameSite: 'none',
+      domain: '.herokuapp.com'
+    });
+
     req.session.user = foundUser.username;
     req.session.testVariant = Math.floor(Math.random() * 3) + 1;
     console.log(`Assigned variant ${req.session.testVariant} to user ${foundUser.username}`);
@@ -435,6 +448,18 @@ app.post('/login', async (req, res) => {
     await logActivity(foundUser.username, 'увійшов на сайт', sessionId, ipAddress);
 
     console.log(`Setting new session ID: ${sessionId}`);
+
+    // Явно встановлюємо куку connect.sid
+    res.cookie('connect.sid', sessionId, {
+      secure: true,
+      httpOnly: true,
+      sameSite: 'none',
+      domain: '.herokuapp.com',
+      maxAge: 24 * 60 * 60 * 1000
+    });
+
+    // Дебагінг заголовків відповіді
+    console.log('Response headers after setting cookie:', res.getHeaders());
 
     if (foundUser.username === 'admin') {
       res.json({ success: true, redirect: '/admin' });
