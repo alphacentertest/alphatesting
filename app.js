@@ -92,15 +92,21 @@ app.use((req, res, next) => {
 
 // Використовуємо MemoryStore для сесій
 app.use(session({
+  store: MongoStore.create({
+    mongoUrl: MONGODB_URI,
+    collectionName: 'sessions',
+    ttl: 24 * 60 * 60,
+    autoRemove: 'interval',
+    autoRemoveInterval: 10
+  }),
   secret: process.env.SESSION_SECRET || 'a1b2c3d4e5f6g7h8i9j0k1l2m3n4o5p6q7r8s9t0',
   resave: false,
   saveUninitialized: false,
   cookie: {
-    secure: true, // Для HTTPS на Heroku
+    secure: true,
     httpOnly: true,
     sameSite: 'none',
-    // Видаляємо domain для перевірки
-    maxAge: 24 * 60 * 60 * 1000 // 24 години
+    maxAge: 24 * 60 * 60 * 1000
   }
 }));
 
@@ -369,16 +375,16 @@ app.get('/', (req, res) => {
               console.log('Login response:', result);
               console.log('Cookies after login:', document.cookie);
 
-              // Додатковий дебагінг: чекаємо 500мс і перевіряємо куки ще раз
+              // Додатковий дебагінг: чекаємо 1000мс і перевіряємо куки ще раз
               setTimeout(() => {
-                console.log('Cookies after 500ms delay:', document.cookie);
-              }, 500);
+                console.log('Cookies after 1000ms delay:', document.cookie);
+              }, 1000);
 
               if (result.success) {
                 console.log('Redirecting to:', result.redirect);
                 setTimeout(() => {
                   window.location.href = result.redirect + '?nocache=' + Date.now();
-                }, 500);
+                }, 1000); // Збільшуємо затримку до 1000ms
               } else {
                 errorMessage.textContent = result.message || 'Помилка входу';
               }
@@ -451,18 +457,32 @@ app.post('/login', async (req, res) => {
     const sessionId = req.session.id;
     await logActivity(foundUser.username, 'увійшов на сайт', sessionId, ipAddress);
 
-    console.log(`Setting new session ID: ${sessionId}`);
+    console.log(`Session ID: ${sessionId}`);
 
-    // Явно встановлюємо куку connect.sid
-    res.cookie('connect.sid', sessionId, {
-      secure: true,
-      httpOnly: true,
-      sameSite: 'none',
-      maxAge: 24 * 60 * 60 * 1000
+    // Примусово зберігаємо сесію
+    await new Promise((resolve, reject) => {
+      req.session.save(err => {
+        if (err) {
+          console.error('Error saving session:', err);
+          reject(err);
+        } else {
+          console.log('Session saved successfully');
+          // Перевіряємо, чи сесія збереглася в MongoDB
+          db.collection('sessions').findOne({ _id: sessionId }, (err, session) => {
+            if (err) {
+              console.error('Error checking session in MongoDB:', err);
+              reject(err);
+            } else {
+              console.log('Session found in MongoDB:', session);
+              resolve();
+            }
+          });
+        }
+      });
     });
 
     // Дебагінг заголовків відповіді
-    console.log('Response headers after setting cookie:', res.getHeaders());
+    console.log('Response headers after session setup:', res.getHeaders());
 
     if (foundUser.username === 'admin') {
       res.json({ success: true, redirect: '/admin' });
@@ -477,6 +497,7 @@ app.post('/login', async (req, res) => {
 
 const checkAuth = (req, res, next) => {
   console.log(`CheckAuth: Cookies received:`, req.cookies);
+  console.log(`CheckAuth: Raw cookie header:`, req.headers.cookie);
   console.log(`CheckAuth: Headers received:`, req.headers);
   console.log(`CheckAuth: Full session object:`, req.session);
   const user = req.session.user;
