@@ -4,6 +4,7 @@ const cookieParser = require('cookie-parser');
 const path = require('path');
 const ExcelJS = require('exceljs');
 const session = require('express-session');
+const MongoStore = require('connect-mongo'); // Додаємо імпорт MongoStore
 const { MongoClient, ObjectId } = require('mongodb');
 const bcrypt = require('bcrypt');
 const fs = require('fs');
@@ -90,7 +91,7 @@ app.use((req, res, next) => {
   next();
 });
 
-// Використовуємо MemoryStore для сесій
+// Використовуємо MongoStore для сесій
 app.use(session({
   store: MongoStore.create({
     mongoUrl: MONGODB_URI,
@@ -384,7 +385,7 @@ app.get('/', (req, res) => {
                 console.log('Redirecting to:', result.redirect);
                 setTimeout(() => {
                   window.location.href = result.redirect + '?nocache=' + Date.now();
-                }, 1000); // Збільшуємо затримку до 1000ms
+                }, 1000);
               } else {
                 errorMessage.textContent = result.message || 'Помилка входу';
               }
