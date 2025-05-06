@@ -139,6 +139,11 @@ const importUsersToMongoDB = async (filePath) => {
     }
     await db.collection('users').deleteMany({});
     await db.collection('users').insertMany(users);
+    // Оновлюємо usersMap після імпорту
+    usersMap = users.reduce((acc, user) => {
+      acc[user.username] = user.password;
+      return acc;
+    }, {});
     console.log(`Imported ${users.length} users to MongoDB with hashed passwords`);
     return users.length;
   } catch (error) {
@@ -454,22 +459,30 @@ app.post('/login', async (req, res) => {
     if (!password) {
       return res.status(400).json({ success: false, message: 'Пароль не вказано' });
     }
-    const user = await db.collection('users').findOne({ username: { $in: Object.keys(usersMap) } });
-    if (!user || !(await bcrypt.compare(password, user.password))) {
+    // Завантажуємо всіх користувачів із бази даних
+    const users = await db.collection('users').find({}).toArray();
+    let foundUser = null;
+    for (const user of users) {
+      if (await bcrypt.compare(password, user.password)) {
+        foundUser = user;
+        break;
+      }
+    }
+    if (!foundUser) {
       return res.status(401).json({ success: false, message: 'Невірний пароль' });
     }
-    req.session.user = user.username;
+    req.session.user = foundUser.username;
     req.session.testVariant = Math.floor(Math.random() * 3) + 1;
-    console.log(`Assigned variant ${req.session.testVariant} to user ${user.username}`);
+    console.log(`Assigned variant ${req.session.testVariant} to user ${foundUser.username}`);
     const ipAddress = req.headers['x-forwarded-for'] || req.socket.remoteAddress;
     const sessionId = req.session.id;
-    await logActivity(user.username, 'увійшов на сайт', sessionId, ipAddress);
+    await logActivity(foundUser.username, 'увійшов на сайт', sessionId, ipAddress);
     req.session.save(err => {
       if (err) {
         console.error('Error saving session in /login:', err.message, err.stack);
         return res.status(500).json({ success: false, message: 'Помилка сервера' });
       }
-      if (user.username === 'admin') {
+      if (foundUser.username === 'admin') {
         res.json({ success: true, redirect: '/admin' });
       } else {
         res.json({ success: true, redirect: '/select-test' });
@@ -483,7 +496,9 @@ app.post('/login', async (req, res) => {
 
 const checkAuth = (req, res, next) => {
   const user = req.session.user;
+  console.log(`CheckAuth: user in session: ${user}, session ID: ${req.session.id}`);
   if (!user) {
+    console.log('CheckAuth: No user in session, redirecting to /');
     return res.redirect('/');
   }
   req.user = user;
@@ -499,7 +514,11 @@ const checkAdmin = (req, res, next) => {
 };
 
 app.get('/select-test', checkAuth, (req, res) => {
-  if (req.user === 'admin') return res.redirect('/admin');
+  console.log(`Serving /select-test for user: ${req.user}`);
+  if (req.user === 'admin') {
+    console.log('User is admin, redirecting to /admin');
+    return res.redirect('/admin');
+  }
   res.send(`
     <!DOCTYPE html>
     <html lang="uk">
@@ -715,6 +734,7 @@ app.get('/test/question', checkAuth, (req, res) => {
           .matching-item.matched { background-color: #90ee90; }
           .blank-input { width: 100px; margin: 0 5px; padding: 5px; border: 1px solid #ccc; border-radius: 4px; display: inline-block; }
           .question-text { display: inline; }
+          .image-error { color: red; font-style: italic; text-align: center; margin-bottom: 10px; }
           @media (max-width: 600px) {
             h1 { font-size: 28px; }
             .progress-bar { flex-direction: column; }
@@ -768,8 +788,14 @@ app.get('/test/question', checkAuth, (req, res) => {
         </div>
         <div id="question-container">
   `;
-  if (q.picture) {
-    html += `<img src="${q.picture}" alt="Picture" onerror="this.src='/images/placeholder.png'; console.log('Image failed to load: ${q.picture}')"><br>`;
+  // Відображаємо зображення, якщо поле picture існує і не порожнє
+  if (q.picture && q.picture.trim() !== '') {
+    html += `
+      <div id="image-container">
+        <img src="${q.picture}" alt="Picture" onerror="this.style.display='none'; document.getElementById('image-error').style.display='block';">
+        <div id="image-error" class="image-error" style="display: none;">Зображення недоступне</div>
+      </div>
+    `;
   }
   const instructionText = q.type === 'multiple' ? 'Виберіть усі правильні відповіді' :
                          q.type === 'input' ? 'Введіть правильну відповідь' :
@@ -2025,6 +2051,8 @@ app.get('/admin/add-question', checkAuth, checkAdmin, (req, res) => {
           <select id="testNumber" name="testNumber" required>
             ${Object.keys(testNames).map(num => `<option value="${num}">${testNames[num].name}</option>`).join('')}
           </select>
+          <label for="picture">Посилання на фото (опціонально):</label>
+          <input type="text" id="picture" name="picture" placeholder="Введіть URL зображення">
           <label for="text">Текст питання:</label>
           <textarea id="text" name="text" required></textarea>
           <label for="type">Тип питання:</label>
@@ -2054,6 +2082,7 @@ app.get('/admin/add-question', checkAuth, checkAdmin, (req, res) => {
             const text = document.getElementById('text').value;
             const points = document.getElementById('points').value;
             const variant = document.getElementById('variant').value;
+            const picture = document.getElementById('picture').value;
             const errorMessage = document.getElementById('error-message');
             if (text.length < 5 || text.length > 1000) {
               errorMessage.textContent = 'Текст питання має бути від 5 до 1000 символів';
@@ -2067,6 +2096,10 @@ app.get('/admin/add-question', checkAuth, checkAdmin, (req, res) => {
               errorMessage.textContent = 'Варіант має бути від 1 до 50 символів';
               return false;
             }
+            if (picture && !/^https?:\/\/.*\.(jpeg|jpg|png|gif)$/i.test(picture)) {
+              errorMessage.textContent = 'Посилання на фото має бути дійсним URL із розширенням .jpeg, .jpg, .png або .gif';
+              return false;
+            }
             return true;
           }
         </script>
@@ -2077,7 +2110,7 @@ app.get('/admin/add-question', checkAuth, checkAdmin, (req, res) => {
 
 app.post('/admin/add-question', checkAuth, checkAdmin, async (req, res) => {
   try {
-    const { testNumber, text, type, options, correctAnswers, points, variant } = req.body;
+    const { testNumber, text, type, options, correctAnswers, points, variant, picture } = req.body;
     if (!testNumber || !text || !type || !correctAnswers) {
       return res.status(400).send('Необхідно заповнити всі обов’язкові поля');
     }
@@ -2094,9 +2127,13 @@ app.post('/admin/add-question', checkAuth, checkAdmin, async (req, res) => {
     if (variant && (variant.length < 1 || variant.length > 50)) {
       return res.status(400).send('Варіант має бути від 1 до 50 символів');
     }
+    if (picture && !/^https?:\/\/.*\.(jpeg|jpg|png|gif)$/i.test(picture)) {
+      return res.status(400).send('Посилання на фото має бути дійсним URL із розширенням .jpeg, .jpg, .png або .gif');
+    }
 
     let questionData = {
       testNumber,
+      picture: picture || '', // Зберігаємо URL зображення, якщо вказано
       text,
       type: type.toLowerCase(),
       options: options ? options.split(',').map(opt => opt.trim()).filter(Boolean) : [],
@@ -2187,6 +2224,8 @@ app.get('/admin/edit-question', checkAuth, checkAdmin, async (req, res) => {
           <select id="testNumber" name="testNumber" required>
             ${Object.keys(testNames).map(num => `<option value="${num}" ${num === question.testNumber ? 'selected' : ''}>${testNames[num].name}</option>`).join('')}
           </select>
+          <label for="picture">Посилання на фото (опціонально):</label>
+          <input type="text" id="picture" name="picture" value="${question.picture || ''}" placeholder="Введіть URL зображення">
           <label for="text">Текст питання:</label>
           <textarea id="text" name="text" required>${question.text}</textarea>
           <label for="type">Тип питання:</label>
@@ -2216,6 +2255,7 @@ app.get('/admin/edit-question', checkAuth, checkAdmin, async (req, res) => {
             const text = document.getElementById('text').value;
             const points = document.getElementById('points').value;
             const variant = document.getElementById('variant').value;
+            const picture = document.getElementById('picture').value;
             const errorMessage = document.getElementById('error-message');
             if (text.length < 5 || text.length > 1000) {
               errorMessage.textContent = 'Текст питання має бути від 5 до 1000 символів';
@@ -2229,6 +2269,10 @@ app.get('/admin/edit-question', checkAuth, checkAdmin, async (req, res) => {
               errorMessage.textContent = 'Варіант має бути від 1 до 50 символів';
               return false;
             }
+            if (picture && !/^https?:\/\/.*\.(jpeg|jpg|png|gif)$/i.test(picture)) {
+              errorMessage.textContent = 'Посилання на фото має бути дійсним URL із розширенням .jpeg, .jpg, .png або .gif';
+              return false;
+            }
             return true;
           }
         </script>
@@ -2239,7 +2283,7 @@ app.get('/admin/edit-question', checkAuth, checkAdmin, async (req, res) => {
 
 app.post('/admin/edit-question', checkAuth, checkAdmin, async (req, res) => {
   try {
-    const { id, testNumber, text, type, options, correctAnswers, points, variant } = req.body;
+    const { id, testNumber, text, type, options, correctAnswers, points, variant, picture } = req.body;
     if (!testNumber || !text || !type || !correctAnswers) {
       return res.status(400).send('Необхідно заповнити всі обов’язкові поля');
     }
@@ -2256,9 +2300,13 @@ app.post('/admin/edit-question', checkAuth, checkAdmin, async (req, res) => {
     if (variant && (variant.length < 1 || variant.length > 50)) {
       return res.status(400).send('Варіант має бути від 1 до 50 символів');
     }
+    if (picture && !/^https?:\/\/.*\.(jpeg|jpg|png|gif)$/i.test(picture)) {
+      return res.status(400).send('Посилання на фото має бути дійсним URL із розширенням .jpeg, .jpg, .png або .gif');
+    }
 
     let questionData = {
       testNumber,
+      picture: picture || '', // Зберігаємо URL зображення, якщо вказано
       text,
       type: type.toLowerCase(),
       options: options ? options.split(',').map(opt => opt.trim()).filter(Boolean) : [],
@@ -2391,6 +2439,48 @@ app.post('/admin/import-users', checkAuth, checkAdmin, upload.single('file'), as
     res.status(500).send('Помилка при імпорті користувачів');
   }
 });
+
+const importUsersToMongoDB = async (filePath) => {
+  try {
+    const workbook = new ExcelJS.Workbook();
+    await workbook.xlsx.readFile(filePath);
+    let sheet = workbook.getWorksheet('Users') || workbook.getWorksheet('Sheet1');
+    if (!sheet) {
+      throw new Error('Лист "Users" або "Sheet1" не знайдено у файлі');
+    }
+    const users = [];
+    const saltRounds = 10;
+    for (let rowNumber = 2; rowNumber <= sheet.rowCount; rowNumber++) {
+      const row = sheet.getRow(rowNumber);
+      const username = String(row.getCell(1).value || '').trim();
+      const password = String(row.getCell(2).value || '').trim();
+      if (username && password) {
+        const hashedPassword = await bcrypt.hash(password, saltRounds);
+        users.push({ username, password: hashedPassword });
+      }
+    }
+    if (users.length === 0) {
+      throw new Error('Не знайдено користувачів у файлі');
+    }
+    // Видаляємо всіх користувачів із бази
+    await db.collection('users').deleteMany({});
+    // Видаляємо всі активні сесії
+    await db.collection('sessions').deleteMany({});
+    console.log('Cleared all sessions after user import');
+    // Додаємо нових користувачів
+    await db.collection('users').insertMany(users);
+    // Оновлюємо usersMap
+    usersMap = users.reduce((acc, user) => {
+      acc[user.username] = user.password;
+      return acc;
+    }, {});
+    console.log(`Imported ${users.length} users to MongoDB with hashed passwords`);
+    return users.length;
+  } catch (error) {
+    console.error('Error importing users to MongoDB:', error.message, error.stack);
+    throw error;
+  }
+};
 
 app.get('/admin/import-questions', checkAuth, checkAdmin, (req, res) => {
   res.send(`
