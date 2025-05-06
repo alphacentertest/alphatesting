@@ -98,7 +98,6 @@ app.use(session({
     ttl: 24 * 60 * 60,
     autoRemove: 'interval',
     autoRemoveInterval: 10,
-    touchAfter: 24 * 3600,
     clientPromise: client.connect().then(() => {
       console.log('MongoStore client connected successfully');
       return client;
@@ -111,10 +110,10 @@ app.use(session({
   resave: false,
   saveUninitialized: false,
   cookie: {
-    secure: process.env.NODE_ENV === 'production',
+    secure: true, // Залишаємо true для HTTPS на Heroku
     httpOnly: true,
-    sameSite: 'lax',
-    maxAge: 24 * 60 * 60 * 1000
+    sameSite: 'none', // Зміна для забезпечення передачі куків
+    maxAge: 24 * 60 * 60 * 1000 // 24 години
   }
 }));
 
@@ -406,6 +405,8 @@ app.get('/', (req, res) => {
         </form>
         <div id="error-message" class="error"></div>
         <script>
+          console.log('Cookies before login:', document.cookie); // Дебагінг куків
+
           document.getElementById('login-form').addEventListener('submit', async (e) => {
             e.preventDefault();
             const password = document.getElementById('password').value;
@@ -418,11 +419,11 @@ app.get('/', (req, res) => {
               const response = await fetch('/login', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-                body: formData,
-                credentials: 'include' // Додаємо, щоб переконатися, що куки сесії передаються
+                credentials: 'include'
               });
               const result = await response.json();
-              console.log('Login response:', result); // Дебагінг
+              console.log('Login response:', result);
+              console.log('Cookies after login:', document.cookie); // Дебагінг куків після входу
               if (result.success) {
                 console.log('Redirecting to:', result.redirect);
                 window.location.href = result.redirect;
@@ -485,10 +486,24 @@ app.post('/login', async (req, res) => {
     req.session.user = foundUser.username;
     req.session.testVariant = Math.floor(Math.random() * 3) + 1;
     console.log(`Assigned variant ${req.session.testVariant} to user ${foundUser.username}`);
-    console.log(`Session after login:`, req.session); // Дебагінг
+    console.log(`Session after login:`, req.session);
     const ipAddress = req.headers['x-forwarded-for'] || req.socket.remoteAddress;
     const sessionId = req.session.id;
     await logActivity(foundUser.username, 'увійшов на сайт', sessionId, ipAddress);
+
+    // Примусово зберігаємо сесію
+    await new Promise((resolve, reject) => {
+      req.session.save(err => {
+        if (err) {
+          console.error('Error saving session:', err);
+          reject(err);
+        } else {
+          console.log('Session saved successfully');
+          resolve();
+        }
+      });
+    });
+
     if (foundUser.username === 'admin') {
       res.json({ success: true, redirect: '/admin' });
     } else {
@@ -501,6 +516,7 @@ app.post('/login', async (req, res) => {
 });
 
 const checkAuth = (req, res, next) => {
+  console.log(`CheckAuth: Cookies received:`, req.cookies);
   console.log(`CheckAuth: Full session object:`, req.session);
   const user = req.session.user;
   console.log(`CheckAuth: user in session: ${user}, session ID: ${req.session.id}`);
@@ -509,6 +525,7 @@ const checkAuth = (req, res, next) => {
     return res.redirect('/');
   }
   req.user = user;
+  console.log(`CheckAuth: User authenticated: ${req.user}`);
   next();
 };
 
