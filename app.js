@@ -204,12 +204,17 @@ app.use((req, res, next) => {
     res.locals.csrfToken = token;
     next();
   } else if (req.method === 'POST') {
-    // Проверяем CSRF-токен для POST-запросов
-    const submittedToken = req.body._csrf || req.headers['x-csrf-token'];
-    if (!submittedToken || submittedToken !== req.session.csrfToken) {
-      return res.status(403).json({ success: false, message: 'Недійсний CSRF-токен' });
+    // Пропускаем проверку CSRF для multipart/form-data
+    if (req.headers['content-type'] && req.headers['content-type'].startsWith('multipart/form-data')) {
+      next();
+    } else {
+      // Проверяем CSRF-токен для остальных POST-запросов
+      const submittedToken = req.body._csrf || req.headers['x-csrf-token'];
+      if (!submittedToken || submittedToken !== req.session.csrfToken) {
+        return res.status(403).json({ success: false, message: 'Недійсний CSRF-токен' });
+      }
+      next();
     }
-    next();
   } else {
     next();
   }
