@@ -10,6 +10,8 @@ const bcrypt = require('bcrypt');
 const fs = require('fs');
 const multer = require('multer');
 const nodemailer = require('nodemailer');
+const { body, validationResult } = require('express-validator');
+const crypto = require('crypto');
 
 const app = express();
 
@@ -49,14 +51,61 @@ const sendSuspiciousActivityEmail = async (user, activityDetails) => {
   }
 };
 
-// Підключення до MongoDB
+// Конфигурация параметров подозрительной активности
+const config = {
+  suspiciousActivity: {
+    timeAwayThreshold: 50, // Процент времени вне вкладки
+    switchCountThreshold: 5 // Количество переключений вкладок
+  }
+};
+
+// Підключення до MongoDB з автоматическим переподключением
 const MONGODB_URI = process.env.MONGODB_URI || 'mongodb+srv://romanhaleckij7:DNMaH9w2X4gel3Xc@cluster0.r93r1p8.mongodb.net/alpha?retryWrites=true&w=majority';
-const client = new MongoClient(MONGODB_URI, { connectTimeoutMS: 5000, serverSelectionTimeoutMS: 5000 });
+const client = new MongoClient(MONGODB_URI, {
+  connectTimeoutMS: 5000,
+  serverSelectionTimeoutMS: 5000,
+  reconnectTries: Number.MAX_VALUE,
+  reconnectInterval: 1000
+});
 let db;
 
 // Кэш пользователей и вопросов
 let userCache = [];
 const questionsCache = {};
+
+// Централизованная функция управления кэшем
+const CacheManager = {
+  async refreshUserCache() {
+    try {
+      const startTime = Date.now();
+      userCache = await db.collection('users').find({}).toArray();
+      const endTime = Date.now();
+      console.log(`Refreshed user cache with ${userCache.length} users in ${endTime - startTime} ms`);
+    } catch (error) {
+      console.error('Error refreshing user cache:', error.message, error.stack);
+    }
+  },
+  async refreshQuestionsCache(testNumber) {
+    try {
+      const startTime = Date.now();
+      if (testNumber) {
+        questionsCache[testNumber] = await db.collection('questions').find({ testNumber: testNumber.toString() }).toArray();
+        console.log(`Refreshed questions cache for test ${testNumber} with ${questionsCache[testNumber].length} questions in ${endTime - startTime} ms`);
+      } else {
+        // Обновляем кэш для всех тестов
+        const allTests = Object.keys(testNames);
+        for (const testNum of allTests) {
+          questionsCache[testNum] = await db.collection('questions').find({ testNumber: testNum.toString() }).toArray();
+          console.log(`Refreshed questions cache for test ${testNum} with ${questionsCache[testNum].length} questions`);
+        }
+        const endTime = Date.now();
+        console.log(`Refreshed questions cache for all tests in ${endTime - startTime} ms`);
+      }
+    } catch (error) {
+      console.error(`Error refreshing questions cache for test ${testNumber || 'all'}:`, error.message, error.stack);
+    }
+  }
+};
 
 const connectToMongoDB = async (attempt = 1, maxAttempts = 3) => {
   try {
@@ -91,7 +140,7 @@ app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
 app.use(cookieParser());
 
-// Middleware для запобігання кешуванню
+// Middleware для предотвращения кэширования
 app.use((req, res, next) => {
   res.set('Cache-Control', 'no-store, no-cache, must-revalidate, private');
   res.set('Pragma', 'no-cache');
@@ -120,6 +169,63 @@ app.use(session({
   name: 'connect.sid'
 }));
 
+// Хранилище для отслеживания попыток входа (временное, без базы данных)
+const loginAttempts = {};
+
+// Ограничение количества попыток входа (30 в день)
+const MAX_LOGIN_ATTEMPTS = 30;
+const ONE_DAY_MS = 24 * 60 * 60 * 1000;
+
+const checkLoginAttempts = async (ipAddress) => {
+  const now = Date.now();
+  if (!loginAttempts[ipAddress]) {
+    loginAttempts[ipAddress] = { count: 0, lastAttempt: now };
+  }
+
+  const { count, lastAttempt } = loginAttempts[ipAddress];
+  if (now - lastAttempt > ONE_DAY_MS) {
+    // Сбрасываем счетчик, если прошло больше дня
+    loginAttempts[ipAddress] = { count: 0, lastAttempt: now };
+  }
+
+  if (loginAttempts[ipAddress].count >= MAX_LOGIN_ATTEMPTS) {
+    throw new Error('Перевищено ліміт спроб входу (30 на день). Спробуйте знову завтра.');
+  }
+
+  loginAttempts[ipAddress].count += 1;
+  loginAttempts[ipAddress].lastAttempt = now;
+};
+
+// Middleware для защиты от CSRF (без csurf)
+app.use((req, res, next) => {
+  if (req.method === 'GET') {
+    // Генерируем CSRF-токен для GET-запросов
+    const token = crypto.randomBytes(32).toString('hex');
+    req.session.csrfToken = token;
+    res.locals.csrfToken = token;
+    next();
+  } else if (req.method === 'POST') {
+    // Проверяем CSRF-токен для POST-запросов
+    const submittedToken = req.body._csrf || req.headers['x-csrf-token'];
+    if (!submittedToken || submittedToken !== req.session.csrfToken) {
+      return res.status(403).json({ success: false, message: 'Недійсний CSRF-токен' });
+    }
+    next();
+  } else {
+    next();
+  }
+});
+
+// Middleware для обработки ошибок MongoDB
+app.use((err, req, res, next) => {
+  if (err.name === 'MongoNetworkError' || err.name === 'MongoServerError') {
+    console.error('MongoDB error:', err.message, err.stack);
+    res.status(503).json({ success: false, message: 'Помилка з’єднання з базою даних. Спробуйте пізніше.' });
+  } else {
+    next(err);
+  }
+});
+
 const importUsersToMongoDB = async (filePath) => {
   try {
     const workbook = new ExcelJS.Workbook();
@@ -147,8 +253,7 @@ const importUsersToMongoDB = async (filePath) => {
     console.log('Cleared all sessions after user import');
     await db.collection('users').insertMany(users);
     console.log(`Imported ${users.length} users to MongoDB with hashed passwords`);
-    // Обновляем кэш
-    userCache = users;
+    await CacheManager.refreshUserCache();
     return users.length;
   } catch (error) {
     console.error('Error importing users to MongoDB:', error.message, error.stack);
@@ -227,8 +332,7 @@ const importQuestionsToMongoDB = async (filePath, testNumber) => {
     await db.collection('questions').deleteMany({ testNumber });
     await db.collection('questions').insertMany(questions);
     console.log(`Imported ${questions.length} questions for test ${testNumber} to MongoDB`);
-    // Обновляем кэш
-    questionsCache[testNumber] = questions;
+    await CacheManager.refreshQuestionsCache(testNumber);
     return questions.length;
   } catch (error) {
     console.error('Error importing questions to MongoDB:', error.message, error.stack);
@@ -246,14 +350,7 @@ const shuffleArray = (array) => {
 };
 
 const loadUsersToCache = async () => {
-  try {
-    const startTime = Date.now();
-    userCache = await db.collection('users').find({}).toArray();
-    const endTime = Date.now();
-    console.log(`Loaded ${userCache.length} users to cache in ${endTime - startTime} ms`);
-  } catch (error) {
-    console.error('Error loading users to cache:', error.message, error.stack);
-  }
+  await CacheManager.refreshUserCache();
 };
 
 const loadQuestions = async (testNumber) => {
@@ -307,6 +404,7 @@ const updateUserPasswords = async () => {
   }
   const endTime = Date.now();
   console.log('User passwords updated with hashes in', endTime - startTime, 'ms');
+  await CacheManager.refreshUserCache();
 };
 
 const initializeServer = async () => {
@@ -320,7 +418,8 @@ const initializeServer = async () => {
     await db.collection('activity_log').createIndex({ user: 1, timestamp: -1 });
     console.log('MongoDB indexes created successfully');
     await updateUserPasswords();
-    await loadUsersToCache(); // Загружаем пользователей в кэш
+    await CacheManager.refreshUserCache();
+    await CacheManager.refreshQuestionsCache();
     isInitialized = true;
     initializationError = null;
   } catch (error) {
@@ -358,7 +457,7 @@ app.get('/api/test', (req, res) => {
   res.json({ success: true, message: 'Express server is working on /api/test' });
 });
 
-// Исправленный маршрут для страницы входа с двумя полями: логин и пароль
+// Исправленный маршрут для страницы входа с двумя полями и надписями
 app.get('/', (req, res) => {
   console.log('Serving index.html');
   res.send(`
@@ -371,6 +470,7 @@ app.get('/', (req, res) => {
         <style>
           body { font-family: Arial, sans-serif; text-align: center; padding: 50px; background-color: #f5f5f5; margin: 0; }
           h1 { font-size: 36px; margin-bottom: 20px; }
+          label { display: block; font-size: 18px; margin-bottom: 5px; }
           input[type="text"], input[type="password"] { padding: 10px; font-size: 18px; width: 200px; margin-bottom: 10px; }
           button { padding: 10px 20px; font-size: 18px; cursor: pointer; border: none; border-radius: 5px; background-color: #4CAF50; color: white; }
           button:hover { background-color: #45a049; }
@@ -378,6 +478,7 @@ app.get('/', (req, res) => {
           .checkbox-container { margin-bottom: 10px; }
           @media (max-width: 600px) {
             h1 { font-size: 28px; }
+            label { font-size: 16px; }
             input[type="text"], input[type="password"], button { font-size: 16px; width: 90%; padding: 15px; }
           }
         </style>
@@ -385,7 +486,10 @@ app.get('/', (req, res) => {
       <body>
         <h1>Авторизація</h1>
         <form id="login-form" method="POST" action="/login">
+          <input type="hidden" name="_csrf" value="${res.locals.csrfToken}">
+          <label for="username">Користувач:</label>
           <input type="text" id="username" name="username" placeholder="Логін" required><br>
+          <label for="password">Пароль:</label>
           <input type="password" id="password" name="password" placeholder="Пароль" required><br>
           <div class="checkbox-container">
             <input type="checkbox" id="show-password" onclick="togglePassword()">
@@ -406,6 +510,7 @@ app.get('/', (req, res) => {
             const formData = new URLSearchParams();
             formData.append('username', username);
             formData.append('password', password);
+            formData.append('_csrf', document.querySelector('input[name="_csrf"]').value);
 
             try {
               console.log('Sending login request...');
@@ -481,10 +586,26 @@ const logActivity = async (user, action, sessionId, ipAddress, additionalInfo = 
   }
 };
 
-// Исправленный маршрут /login для обработки двух полей
-app.post('/login', async (req, res) => {
+// Исправленный маршрут /login с валидацией и ограничением попыток
+app.post('/login', [
+  body('username')
+    .isLength({ min: 3, max: 50 }).withMessage('Логін має бути від 3 до 50 символів')
+    .matches(/^[a-zA-Z0-9а-яА-Я]+$/).withMessage('Логін може містити лише літери та цифри'),
+  body('password')
+    .isLength({ min: 6, max: 100 }).withMessage('Пароль має бути від 6 до 100 символів')
+], async (req, res) => {
   const startTime = Date.now();
   try {
+    // Проверка ограничения попыток входа
+    const ipAddress = req.headers['x-forwarded-for'] || req.socket.remoteAddress;
+    await checkLoginAttempts(ipAddress);
+
+    // Валидация данных
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({ success: false, message: errors.array()[0].msg });
+    }
+
     const { username, password } = req.body;
     console.log('Received login data:', { username, password });
 
@@ -507,6 +628,9 @@ app.post('/login', async (req, res) => {
       return res.status(401).json({ success: false, message: 'Невірний логін або пароль' });
     }
 
+    // Сбрасываем счетчик попыток при успешном входе
+    loginAttempts[ipAddress] = { count: 0, lastAttempt: Date.now() };
+
     // Генерируем новый session ID
     await new Promise((resolve, reject) => {
       req.session.regenerate(err => {
@@ -524,11 +648,9 @@ app.post('/login', async (req, res) => {
     req.session.testVariant = Math.floor(Math.random() * 3) + 1;
     console.log(`Assigned variant ${req.session.testVariant} to user ${foundUser.username}`);
     console.log(`Session after login:`, req.session);
-    const ipAddress = req.headers['x-forwarded-for'] || req.socket.remoteAddress;
-    const sessionId = req.session.id;
-    await logActivity(foundUser.username, 'увійшов на сайт', sessionId, ipAddress);
+    await logActivity(foundUser.username, 'увійшов на сайт', req.session.id, ipAddress);
 
-    console.log(`Session ID: ${sessionId}`);
+    console.log(`Session ID: ${req.session.id}`);
 
     // Явно помечаем сессию как измененную
     req.session.modified = true;
@@ -551,7 +673,7 @@ app.post('/login', async (req, res) => {
     }
   } catch (error) {
     console.error('Ошибка в /login:', error.message, error.stack);
-    res.status(500).json({ success: false, message: 'Помилка сервера' });
+    res.status(error.message.includes('Перевищено ліміт') ? 429 : 500).json({ success: false, message: error.message || 'Помилка сервера' });
   } finally {
     const endTime = Date.now();
     console.log(`Route /login executed in ${endTime - startTime} ms`);
@@ -567,7 +689,6 @@ const checkAuth = (req, res, next) => {
   const user = req.session.user;
   console.log(`CheckAuth: user in session: ${user}, session ID: ${req.session.id}`);
 
-  // Дебагінг: перевіряємо сесію в MongoDB
   if (req.sessionID) {
     db.collection('sessions').findOne({ _id: req.sessionID }, (err, session) => {
       if (err) {
@@ -637,10 +758,12 @@ app.get('/select-test', checkAuth, (req, res) => {
           <script>
             async function logout() {
               const formData = new URLSearchParams();
+              formData.append('_csrf', '${res.locals.csrfToken}');
               await fetch('/logout', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-                credentials: 'include'
+                credentials: 'include',
+                body: formData
               });
               window.location.href = '/';
             }
@@ -1017,6 +1140,7 @@ app.get('/test/question', checkAuth, (req, res) => {
             let lastActivityTime = Date.now();
             let activityCount = 0;
             let lastMouseMoveTime = 0;
+            let lastKeydownTime = 0;
             const debounceDelay = 100;
             const questionStartTime = ${userTest.answerTimestamps[index] || Date.now()};
             let selectedOptions = ${selectedOptionsString};
@@ -1033,13 +1157,14 @@ app.get('/test/question', checkAuth, (req, res) => {
                 if (remainingTime <= 0) {
                   console.log('Time is up, redirecting to /result');
                   window.location.href = '/result';
+                } else {
+                  requestAnimationFrame(updateTimer);
                 }
               } catch (error) {
                 console.error('Error in updateTimer:', error);
               }
             }
-            updateTimer();
-            setInterval(updateTimer, 1000);
+            requestAnimationFrame(updateTimer);
 
             window.addEventListener('blur', () => {
               console.log('Window blurred');
@@ -1063,12 +1188,17 @@ app.get('/test/question', checkAuth, (req, res) => {
               }
             }
 
+            function debounceKeydown() {
+              const now = Date.now();
+              if (now - lastKeydownTime >= debounceDelay) {
+                lastKeydownTime = now;
+                lastActivityTime = now;
+                activityCount++;
+              }
+            }
+
             document.addEventListener('mousemove', debounceMouseMove);
-            document.addEventListener('keydown', () => {
-              console.log('Key pressed');
-              lastActivityTime = Date.now();
-              activityCount++;
-            });
+            document.addEventListener('keydown', debounceKeydown);
 
             document.querySelectorAll('.option-box:not(.draggable)').forEach(box => {
               box.addEventListener('click', () => {
@@ -1119,6 +1249,7 @@ app.get('/test/question', checkAuth, (req, res) => {
                 formData.append('switchCount', switchCount);
                 formData.append('responseTime', responseTime);
                 formData.append('activityCount', activityCount);
+                formData.append('_csrf', '${res.locals.csrfToken}');
 
                 const response = await fetch('/answer', {
                   method: 'POST',
@@ -1176,6 +1307,7 @@ app.get('/test/question', checkAuth, (req, res) => {
                 formData.append('switchCount', switchCount);
                 formData.append('responseTime', responseTime);
                 formData.append('activityCount', activityCount);
+                formData.append('_csrf', '${res.locals.csrfToken}');
 
                 const response = await fetch('/answer', {
                   method: 'POST',
@@ -1317,7 +1449,6 @@ app.post('/answer', checkAuth, express.urlencoded({ extended: true }), async (re
 
     let parsedAnswer;
     try {
-      // Проверяем, является ли answer строкой и пытаемся распарсить как JSON
       if (typeof answer === 'string') {
         if (answer.trim() === '') {
           parsedAnswer = [];
@@ -1439,7 +1570,7 @@ app.get('/result', checkAuth, async (req, res) => {
       ? suspiciousActivity.activityCounts.reduce((sum, count) => sum + (count || 0), 0).toFixed(0)
       : 0;
 
-    if (timeAwayPercent > 50 || switchCount > 5) {
+    if (timeAwayPercent > config.suspiciousActivity.timeAwayThreshold || switchCount > config.suspiciousActivity.switchCountThreshold) {
       const activityDetails = {
         timeAwayPercent,
         switchCount,
@@ -1459,7 +1590,6 @@ app.get('/result', checkAuth, async (req, res) => {
       return res.status(500).send('Помилка при збереженні результату');
     }
 
-    const endDateTime = new Date(endTime);
     const formattedTime = endDateTime.toLocaleTimeString('uk-UA', { hour12: false });
     const formattedDate = endDateTime.toLocaleDateString('uk-UA');
     const imagePath = path.join(__dirname, 'public', 'images', 'A.png');
@@ -1536,7 +1666,7 @@ app.get('/result', checkAuth, async (req, res) => {
                   }
                 ],
                 styles: {
-                  header: { fontSize: 14, bold: true, margin: [0, 0, 0,                     10], lineHeight: 2 }
+                  header: { fontSize: 14, bold: true, margin: [0, 0, 0, 10], lineHeight: 2 }
                 }
               };
               pdfMake.createPdf(docDefinition).download('result.pdf');
@@ -1808,10 +1938,12 @@ app.get('/admin', checkAuth, checkAdmin, (req, res) => {
           <script>
             async function logout() {
               const formData = new URLSearchParams();
+              formData.append('_csrf', '${res.locals.csrfToken}');
               await fetch('/logout', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-                credentials: 'include'
+                credentials: 'include',
+                body: formData
               });
               window.location.href = '/';
             }
@@ -1833,7 +1965,7 @@ app.get('/admin/users', checkAuth, checkAdmin, async (req, res) => {
     let errorMessage = '';
     try {
       users = await db.collection('users').find({}).toArray();
-      userCache = users; // Обновляем кэш
+      await CacheManager.refreshUserCache();
     } catch (error) {
       console.error('Error fetching users from MongoDB:', error.message, error.stack);
       errorMessage = `Помилка MongoDB: ${error.message}`;
@@ -1895,10 +2027,12 @@ app.get('/admin/users', checkAuth, checkAdmin, async (req, res) => {
                 try {
                   const formData = new URLSearchParams();
                   formData.append('username', username);
+                  formData.append('_csrf', '${res.locals.csrfToken}');
                   const response = await fetch('/admin/delete-user', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-                    credentials: 'include'
+                    credentials: 'include',
+                    body: formData
                   });
                   const result = await response.json();
                   if (result.success) {
@@ -1944,7 +2078,8 @@ app.get('/admin/add-user', checkAuth, checkAdmin, (req, res) => {
         <body>
           <h1>Додати користувача</h1>
           <form method="POST" action="/admin/add-user" onsubmit="return validateForm()">
-            <label for="username">Ім'я користувача:</label>
+            <input type="hidden" name="_csrf" value="${res.locals.csrfToken}">
+            <label for="username">Користувач:</label>
             <input type="text" id="username" name="username" required>
             <label for="password">Пароль:</label>
             <input type="text" id="password" name="password" required>
@@ -1982,19 +2117,21 @@ app.get('/admin/add-user', checkAuth, checkAdmin, (req, res) => {
   }
 });
 
-app.post('/admin/add-user', checkAuth, checkAdmin, async (req, res) => {
+app.post('/admin/add-user', checkAuth, checkAdmin, [
+  body('username')
+    .isLength({ min: 3, max: 50 }).withMessage('Ім’я користувача має бути від 3 до 50 символів')
+    .matches(/^[a-zA-Z0-9а-яА-Я]+$/).withMessage('Ім’я користувача може містити лише літери та цифри'),
+  body('password')
+    .isLength({ min: 6, max: 100 }).withMessage('Пароль має бути від 6 до 100 символів')
+], async (req, res) => {
   const startTime = Date.now();
   try {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).send(errors.array()[0].msg);
+    }
+
     const { username, password } = req.body;
-    if (!username || username.length < 3 || username.length > 50) {
-      return res.status(400).send('Ім’я користувача має бути від 3 до 50 символів');
-    }
-    if (!/^[a-zA-Z0-9а-яА-Я]+$/.test(username)) {
-      return res.status(400).send('Ім’я користувача може містити лише літери та цифри');
-    }
-    if (!password || password.length < 6 || password.length > 100) {
-      return res.status(400).send('Пароль має бути від 6 до 100 символів');
-    }
     const existingUser = await db.collection('users').findOne({ username });
     if (existingUser) {
       return res.status(400).send('Користувач із таким ім’ям уже існує');
@@ -2003,7 +2140,7 @@ app.post('/admin/add-user', checkAuth, checkAdmin, async (req, res) => {
     const hashedPassword = await bcrypt.hash(password, saltRounds);
     const newUser = { username, password: hashedPassword };
     await db.collection('users').insertOne(newUser);
-    userCache.push(newUser); // Обновляем кэш
+    await CacheManager.refreshUserCache();
     res.send(`
       <!DOCTYPE html>
       <html lang="uk">
@@ -2053,6 +2190,7 @@ app.get('/admin/edit-user', checkAuth, checkAdmin, async (req, res) => {
         <body>
           <h1>Редагувати користувача: ${username}</h1>
           <form method="POST" action="/admin/edit-user" onsubmit="return validateForm()">
+            <input type="hidden" name="_csrf" value="${res.locals.csrfToken}">
             <input type="hidden" name="oldUsername" value="${username}">
             <label for="username">Нове ім'я користувача:</label>
             <input type="text" id="username" name="username" value="${username}" required>
@@ -2092,19 +2230,22 @@ app.get('/admin/edit-user', checkAuth, checkAdmin, async (req, res) => {
   }
 });
 
-app.post('/admin/edit-user', checkAuth, checkAdmin, async (req, res) => {
+app.post('/admin/edit-user', checkAuth, checkAdmin, [
+  body('username')
+    .isLength({ min: 3, max: 50 }).withMessage('Ім’я користувача має бути від 3 до 50 символів')
+    .matches(/^[a-zA-Z0-9а-яА-Я]+$/).withMessage('Ім’я користувача може містити лише літери та цифри'),
+  body('password')
+    .optional({ checkFalsy: true })
+    .isLength({ min: 6, max: 100 }).withMessage('Пароль має бути від 6 до 100 символів')
+], async (req, res) => {
   const startTime = Date.now();
   try {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).send(errors.array()[0].msg);
+    }
+
     const { oldUsername, username, password } = req.body;
-    if (!username || username.length < 3 || username.length > 50) {
-      return res.status(400).send('Ім’я користувача має бути від 3 до 50 символів');
-    }
-    if (!/^[a-zA-Z0-9а-яА-Я]+$/.test(username)) {
-      return res.status(400).send('Ім’я користувача може містити лише літери та цифри');
-    }
-    if (password && (password.length < 6 || password.length > 100)) {
-      return res.status(400).send('Пароль має бути від 6 до 100 символів');
-    }
     const existingUser = await db.collection('users').findOne({ username });
     if (existingUser && username !== oldUsername) {
       return res.status(400).send('Користувач із таким ім’ям уже існує');
@@ -2119,11 +2260,7 @@ app.post('/admin/edit-user', checkAuth, checkAdmin, async (req, res) => {
       { username: oldUsername },
       { $set: updateData }
     );
-    // Обновляем кэш
-    const userIndex = userCache.findIndex(user => user.username === oldUsername);
-    if (userIndex !== -1) {
-      userCache[userIndex] = { ...userCache[userIndex], ...updateData };
-    }
+    await CacheManager.refreshUserCache();
     res.send(`
       <!DOCTYPE html>
       <html lang="uk">
@@ -2151,8 +2288,7 @@ app.post('/admin/delete-user', checkAuth, checkAdmin, async (req, res) => {
   try {
     const { username } = req.body;
     await db.collection('users').deleteOne({ username });
-    // Обновляем кэш
-    userCache = userCache.filter(user => user.username !== username);
+    await CacheManager.refreshUserCache();
     res.json({ success: true });
   } catch (error) {
     console.error('Error deleting user:', error.message, error.stack);
@@ -2170,15 +2306,7 @@ app.get('/admin/questions', checkAuth, checkAdmin, async (req, res) => {
     let errorMessage = '';
     try {
       questions = await db.collection('questions').find({}).sort({ testNumber: 1 }).toArray();
-      // Обновляем кэш вопросов
-      questions.forEach(q => {
-        if (!questionsCache[q.testNumber]) {
-          questionsCache[q.testNumber] = [];
-        }
-        if (!questionsCache[q.testNumber].some(cachedQ => cachedQ._id.toString() === q._id.toString())) {
-          questionsCache[q.testNumber].push(q);
-        }
-      });
+      await CacheManager.refreshQuestionsCache();
     } catch (error) {
       console.error('Error fetching questions from MongoDB:', error.message, error.stack);
       errorMessage = `Помилка MongoDB: ${error.message}`;
@@ -2246,10 +2374,12 @@ app.get('/admin/questions', checkAuth, checkAdmin, async (req, res) => {
                 try {
                   const formData = new URLSearchParams();
                   formData.append('id', id);
+                  formData.append('_csrf', '${res.locals.csrfToken}');
                   const response = await fetch('/admin/delete-question', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-                    credentials: 'include'
+                    credentials: 'include',
+                    body: formData
                   });
                   const result = await response.json();
                   if (result.success) {
@@ -2296,6 +2426,7 @@ app.get('/admin/add-question', checkAuth, checkAdmin, (req, res) => {
         <body>
           <h1>Додати питання</h1>
           <form method="POST" action="/admin/add-question" onsubmit="return validateForm()">
+            <input type="hidden" name="_csrf" value="${res.locals.csrfToken}">
             <label for="testNumber">Номер тесту:</label>
             <select id="testNumber" name="testNumber" required>
               ${Object.keys(testNames).map(num => `<option value="${num}">${testNames[num].name}</option>`).join('')}
@@ -2362,29 +2493,30 @@ app.get('/admin/add-question', checkAuth, checkAdmin, (req, res) => {
   }
 });
 
-app.post('/admin/add-question', checkAuth, checkAdmin, async (req, res) => {
+app.post('/admin/add-question', checkAuth, checkAdmin, [
+  body('testNumber').notEmpty().withMessage('Номер тесту обов’язковий'),
+  body('text')
+    .isLength({ min: 5, max: 1000 }).withMessage('Текст питання має бути від 5 до 1000 символів'),
+  body('type')
+    .isIn(['multiple', 'singlechoice', 'truefalse', 'input', 'ordering', 'matching', 'fillblank']).withMessage('Невірний тип питання'),
+  body('correctAnswers').notEmpty().withMessage('Правильні відповіді обов’язкові'),
+  body('points')
+    .isInt({ min: 1, max: 100 }).withMessage('Бали мають бути числом від 1 до 100'),
+  body('variant')
+    .optional({ checkFalsy: true })
+    .isLength({ min: 1, max: 50 }).withMessage('Варіант має бути від 1 до 50 символів'),
+  body('picture')
+    .optional({ checkFalsy: true })
+    .matches(/^https?:\/\/.*\.(jpeg|jpg|png|gif)$/i).withMessage('Посилання на фото має бути дійсним URL із розширенням .jpeg, .jpg, .png або .gif')
+], async (req, res) => {
   const startTime = Date.now();
   try {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).send(errors.array()[0].msg);
+    }
+
     const { testNumber, text, type, options, correctAnswers, points, variant, picture } = req.body;
-    if (!testNumber || !text || !type || !correctAnswers) {
-      return res.status(400).send('Необхідно заповнити всі обов’язкові поля');
-    }
-    if (text.length < 5 || text.length > 1000) {
-      return res.status(400).send('Текст питання має бути від 5 до 1000 символів');
-    }
-    if (!['multiple', 'singlechoice', 'truefalse', 'input', 'ordering', 'matching', 'fillblank'].includes(type.toLowerCase())) {
-      return res.status(400).send('Невірний тип питання');
-    }
-    const pointsNum = Number(points);
-    if (!pointsNum || pointsNum < 1 || pointsNum > 100) {
-      return res.status(400).send('Бали мають бути числом від 1 до 100');
-    }
-    if (variant && (variant.length < 1 || variant.length > 50)) {
-      return res.status(400).send('Варіант має бути від 1 до 50 символів');
-    }
-    if (picture && !/^https?:\/\/.*\.(jpeg|jpg|png|gif)$/i.test(picture)) {
-      return res.status(400).send('Посилання на фото має бути дійсним URL із розширенням .jpeg, .jpg, .png або .gif');
-    }
 
     let questionData = {
       testNumber,
@@ -2393,7 +2525,7 @@ app.post('/admin/add-question', checkAuth, checkAdmin, async (req, res) => {
       type: type.toLowerCase(),
       options: options ? options.split(',').map(opt => opt.trim()).filter(Boolean) : [],
       correctAnswers: correctAnswers.split(',').map(ans => ans.trim()).filter(Boolean),
-      points: pointsNum,
+      points: Number(points),
       variant: variant || ''
     };
 
@@ -2429,11 +2561,7 @@ app.post('/admin/add-question', checkAuth, checkAdmin, async (req, res) => {
     }
 
     const result = await db.collection('questions').insertOne(questionData);
-    // Обновляем кэш
-    if (!questionsCache[testNumber]) {
-      questionsCache[testNumber] = [];
-    }
-    questionsCache[testNumber].push({ ...questionData, _id: result.insertedId });
+    await CacheManager.refreshQuestionsCache(testNumber);
     res.send(`
       <!DOCTYPE html>
       <html lang="uk">
@@ -2484,6 +2612,7 @@ app.get('/admin/edit-question', checkAuth, checkAdmin, async (req, res) => {
         <body>
           <h1>Редагувати питання</h1>
           <form method="POST" action="/admin/edit-question" onsubmit="return validateForm()">
+            <input type="hidden" name="_csrf" value="${res.locals.csrfToken}">
             <input type="hidden" name="id" value="${id}">
             <label for="testNumber">Номер тесту:</label>
             <select id="testNumber" name="testNumber" required>
@@ -2551,29 +2680,30 @@ app.get('/admin/edit-question', checkAuth, checkAdmin, async (req, res) => {
   }
 });
 
-app.post('/admin/edit-question', checkAuth, checkAdmin, async (req, res) => {
+app.post('/admin/edit-question', checkAuth, checkAdmin, [
+  body('testNumber').notEmpty().withMessage('Номер тесту обов’язковий'),
+  body('text')
+    .isLength({ min: 5, max: 1000 }).withMessage('Текст питання має бути від 5 до 1000 символів'),
+  body('type')
+    .isIn(['multiple', 'singlechoice', 'truefalse', 'input', 'ordering', 'matching', 'fillblank']).withMessage('Невірний тип питання'),
+  body('correctAnswers').notEmpty().withMessage('Правильні відповіді обов’язкові'),
+  body('points')
+    .isInt({ min: 1, max: 100 }).withMessage('Бали мають бути числом від 1 до 100'),
+  body('variant')
+    .optional({ checkFalsy: true })
+    .isLength({ min: 1, max: 50 }).withMessage('Варіант має бути від 1 до 50 символів'),
+  body('picture')
+    .optional({ checkFalsy: true })
+    .matches(/^https?:\/\/.*\.(jpeg|jpg|png|gif)$/i).withMessage('Посилання на фото має бути дійсним URL із розширенням .jpeg, .jpg, .png або .gif')
+], async (req, res) => {
   const startTime = Date.now();
   try {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).send(errors.array()[0].msg);
+    }
+
     const { id, testNumber, text, type, options, correctAnswers, points, variant, picture } = req.body;
-    if (!testNumber || !text || !type || !correctAnswers) {
-      return res.status(400).send('Необхідно заповнити всі обов’язкові поля');
-    }
-    if (text.length < 5 || text.length > 1000) {
-      return res.status(400).send('Текст питання має бути від 5 до 1000 символів');
-    }
-    if (!['multiple', 'singlechoice', 'truefalse', 'input', 'ordering', 'matching', 'fillblank'].includes(type.toLowerCase())) {
-      return res.status(400).send('Невірний тип питання');
-    }
-    const pointsNum = Number(points);
-    if (!pointsNum || pointsNum < 1 || pointsNum > 100) {
-      return res.status(400).send('Бали мають бути числом від 1 до 100');
-    }
-    if (variant && (variant.length < 1 || variant.length > 50)) {
-      return res.status(400).send('Варіант має бути від 1 до 50 символів');
-    }
-    if (picture && !/^https?:\/\/.*\.(jpeg|jpg|png|gif)$/i.test(picture)) {
-      return res.status(400).send('Посилання на фото має бути дійсним URL із розширенням .jpeg, .jpg, .png або .gif');
-    }
 
     let questionData = {
       testNumber,
@@ -2582,7 +2712,7 @@ app.post('/admin/edit-question', checkAuth, checkAdmin, async (req, res) => {
       type: type.toLowerCase(),
       options: options ? options.split(',').map(opt => opt.trim()).filter(Boolean) : [],
       correctAnswers: correctAnswers.split(',').map(ans => ans.trim()).filter(Boolean),
-      points: pointsNum,
+      points: Number(points),
       variant: variant || ''
     };
 
@@ -2628,17 +2758,10 @@ app.post('/admin/edit-question', checkAuth, checkAdmin, async (req, res) => {
     );
 
     // Обновляем кэш
-    if (questionsCache[oldTestNumber]) {
-      const questionIndex = questionsCache[oldTestNumber].findIndex(q => q._id.toString() === id);
-      if (questionIndex !== -1) {
-        // Удаляем из старого кэша
-        questionsCache[oldTestNumber].splice(questionIndex, 1);
-      }
+    await CacheManager.refreshQuestionsCache(oldTestNumber);
+    if (testNumber !== oldTestNumber) {
+      await CacheManager.refreshQuestionsCache(testNumber);
     }
-    if (!questionsCache[testNumber]) {
-      questionsCache[testNumber] = [];
-    }
-    questionsCache[testNumber].push({ ...questionData, _id: new ObjectId(id) });
 
     res.send(`
       <!DOCTYPE html>
@@ -2668,10 +2791,7 @@ app.post('/admin/delete-question', checkAuth, checkAdmin, async (req, res) => {
     const { id } = req.body;
     const question = await db.collection('questions').findOne({ _id: new ObjectId(id) });
     await db.collection('questions').deleteOne({ _id: new ObjectId(id) });
-    // Обновляем кэш
-    if (question && questionsCache[question.testNumber]) {
-      questionsCache[question.testNumber] = questionsCache[question.testNumber].filter(q => q._id.toString() !== id);
-    }
+    await CacheManager.refreshQuestionsCache(question.testNumber);
     res.json({ success: true });
   } catch (error) {
     console.error('Error deleting question:', error.message, error.stack);
@@ -2703,6 +2823,7 @@ app.get('/admin/import-users', checkAuth, checkAdmin, (req, res) => {
         <body>
           <h1>Імпорт користувачів із Excel</h1>
           <form method="POST" action="/admin/import-users" enctype="multipart/form-data">
+            <input type="hidden" name="_csrf" value="${res.locals.csrfToken}">
             <label for="file">Виберіть файл users.xlsx:</label>
             <input type="file" id="file" name="file" accept=".xlsx" required>
             <button type="submit" class="submit-btn">Завантажити</button>
@@ -2773,6 +2894,7 @@ app.get('/admin/import-questions', checkAuth, checkAdmin, (req, res) => {
         <body>
           <h1>Імпорт питань із Excel</h1>
           <form method="POST" action="/admin/import-questions" enctype="multipart/form-data">
+            <input type="hidden" name="_csrf" value="${res.locals.csrfToken}">
             <label for="file">Виберіть файл questions*.xlsx:</label>
             <input type="file" id="file" name="file" accept=".xlsx" required>
             <button type="submit" class="submit-btn">Завантажити</button>
@@ -2947,7 +3069,7 @@ app.get('/admin/results', checkAuth, checkAdmin, async (req, res) => {
             <td>${r.totalPoints || '0'}</td>
             <td>${formatDateTime(r.startTime)}</td>
             <td>${formatDateTime(r.endTime)}</td>
-            <td>${r.duration || 'N/A'}</td>
+                       <td>${r.duration || 'N/A'}</td>
             <td>${suspiciousActivityPercent}%</td>
             <td class="details">${activityDetails}</td>
             <td class="answers">${answersDisplay}</td>
@@ -2965,10 +3087,12 @@ app.get('/admin/results', checkAuth, checkAdmin, async (req, res) => {
                 try {
                   const formData = new URLSearchParams();
                   formData.append('id', id);
+                  formData.append('_csrf', '${res.locals.csrfToken}');
                   const response = await fetch('/admin/delete-result', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-                    credentials: 'include'
+                    credentials: 'include',
+                    body: formData
                   });
                   const result = await response.json();
                   if (result.success) {
@@ -2986,10 +3110,12 @@ app.get('/admin/results', checkAuth, checkAdmin, async (req, res) => {
               if (confirm('Ви впевнені, що хочете видалити всі результати? Цю дію не можна скасувати!')) {
                 try {
                   const formData = new URLSearchParams();
+                  formData.append('_csrf', '${res.locals.csrfToken}');
                   const response = await fetch('/admin/delete-all-results', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-                    credentials: 'include'
+                    credentials: 'include',
+                    body: formData
                   });
                   const result = await response.json();
                   if (result.success) {
@@ -3068,6 +3194,7 @@ app.get('/admin/edit-tests', checkAuth, checkAdmin, (req, res) => {
         <body>
           <h1>Редагувати назви та налаштування тестів</h1>
           <form method="POST" action="/admin/edit-tests">
+            <input type="hidden" name="_csrf" value="${res.locals.csrfToken}">
             ${Object.entries(testNames).map(([num, data]) => `
               <div class="test-row">
                 <label for="test${num}">Назва Тесту ${num}:</label>
@@ -3091,10 +3218,12 @@ app.get('/admin/edit-tests', checkAuth, checkAdmin, (req, res) => {
               if (confirm('Ви впевнені, що хочете видалити Тест ' + testNumber + '?')) {
                 const formData = new URLSearchParams();
                 formData.append('testNumber', testNumber);
+                formData.append('_csrf', '${res.locals.csrfToken}');
                 await fetch('/admin/delete-test', {
                   method: 'POST',
                   headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-                  credentials: 'include'
+                  credentials: 'include',
+                  body: formData
                 });
                 window.location.reload();
               }
@@ -3113,6 +3242,28 @@ app.get('/admin/edit-tests', checkAuth, checkAdmin, (req, res) => {
 app.post('/admin/edit-tests', checkAuth, checkAdmin, async (req, res) => {
   const startTime = Date.now();
   try {
+    // Валидация данных для каждого теста
+    const validationErrors = [];
+    Object.keys(testNames).forEach(num => {
+      const testName = req.body[`test${num}`];
+      const timeLimit = req.body[`time${num}`];
+      const questionLimit = req.body[`questionLimit${num}`];
+
+      if (!testName || testName.length < 1 || testName.length > 100) {
+        validationErrors.push(`Назва тесту ${num} має бути від 1 до 100 символів`);
+      }
+      if (!timeLimit || isNaN(parseInt(timeLimit)) || parseInt(timeLimit) < 1) {
+        validationErrors.push(`Час для тесту ${num} має бути числом більше 0`);
+      }
+      if (questionLimit && (isNaN(parseInt(questionLimit)) || parseInt(questionLimit) < 1)) {
+        validationErrors.push(`Кількість питань для тесту ${num} має бути числом більше 0`);
+      }
+    });
+
+    if (validationErrors.length > 0) {
+      return res.status(400).send(validationErrors.join('<br>'));
+    }
+
     Object.keys(testNames).forEach(num => {
       const testName = req.body[`test${num}`];
       const timeLimit = req.body[`time${num}`];
@@ -3159,7 +3310,8 @@ app.post('/admin/delete-test', checkAuth, checkAdmin, async (req, res) => {
       return res.status(404).json({ success: false, message: 'Тест не знайдено' });
     }
     delete testNames[testNumber];
-    // Удаляем вопросы из кэша
+    // Удаляем вопросы из кэша и базы данных
+    await db.collection('questions').deleteMany({ testNumber });
     if (questionsCache[testNumber]) {
       delete questionsCache[testNumber];
     }
@@ -3184,6 +3336,7 @@ app.get('/admin/create-test', checkAuth, checkAdmin, (req, res) => {
           <title>Створити новий тест</title>
           <style>
             body { font-size: 24px; margin: 20px; }
+            label { display: block; margin: 10px 0 5px; }
             input { font-size: 24px; padding: 5px; margin: 5px; }
             select { font-size: 24px; padding: 5px; margin: 5px; }
             button { font-size: 24px; padding: 10px 20px; margin: 5px; }
@@ -3192,6 +3345,7 @@ app.get('/admin/create-test', checkAuth, checkAdmin, (req, res) => {
         <body>
           <h1>Створити новий тест</h1>
           <form method="POST" action="/admin/create-test">
+            <input type="hidden" name="_csrf" value="${res.locals.csrfToken}">
             <div>
               <label for="testName">Назва нового тесту:</label>
               <input type="text" id="testName" name="testName" required>
@@ -3213,9 +3367,19 @@ app.get('/admin/create-test', checkAuth, checkAdmin, (req, res) => {
   }
 });
 
-app.post('/admin/create-test', checkAuth, checkAdmin, async (req, res) => {
+app.post('/admin/create-test', checkAuth, checkAdmin, [
+  body('testName')
+    .isLength({ min: 1, max: 100 }).withMessage('Назва тесту має бути від 1 до 100 символів'),
+  body('timeLimit')
+    .isInt({ min: 1 }).withMessage('Час має бути числом більше 0')
+], async (req, res) => {
   const startTime = Date.now();
   try {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).send(errors.array()[0].msg);
+    }
+
     const { testName, timeLimit } = req.body;
     const testNumber = String(Object.keys(testNames).length + 1);
     if (testNames[testNumber]) {
@@ -3323,10 +3487,12 @@ app.get('/admin/activity-log', checkAuth, checkAdmin, async (req, res) => {
               if (confirm('Ви впевнені, що хочете видалити усі записи журналу дій?')) {
                 try {
                   const formData = new URLSearchParams();
+                  formData.append('_csrf', '${res.locals.csrfToken}');
                   const response = await fetch('/admin/delete-activity-log', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-                    credentials: 'include'
+                    credentials: 'include',
+                    body: formData
                   });
                   const result = await response.json();
                   if (result.success) {
