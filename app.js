@@ -54,6 +54,10 @@ const MONGODB_URI = process.env.MONGODB_URI || 'mongodb+srv://romanhaleckij7:DNM
 const client = new MongoClient(MONGODB_URI, { connectTimeoutMS: 5000, serverSelectionTimeoutMS: 5000 });
 let db;
 
+// Кэш пользователей и вопросов
+let userCache = [];
+const questionsCache = {};
+
 const connectToMongoDB = async (attempt = 1, maxAttempts = 3) => {
   try {
     console.log(`Attempting to connect to MongoDB (Attempt ${attempt} of ${maxAttempts}) with URI:`, MONGODB_URI);
@@ -143,6 +147,8 @@ const importUsersToMongoDB = async (filePath) => {
     console.log('Cleared all sessions after user import');
     await db.collection('users').insertMany(users);
     console.log(`Imported ${users.length} users to MongoDB with hashed passwords`);
+    // Обновляем кэш
+    userCache = users;
     return users.length;
   } catch (error) {
     console.error('Error importing users to MongoDB:', error.message, error.stack);
@@ -221,6 +227,8 @@ const importQuestionsToMongoDB = async (filePath, testNumber) => {
     await db.collection('questions').deleteMany({ testNumber });
     await db.collection('questions').insertMany(questions);
     console.log(`Imported ${questions.length} questions for test ${testNumber} to MongoDB`);
+    // Обновляем кэш
+    questionsCache[testNumber] = questions;
     return questions.length;
   } catch (error) {
     console.error('Error importing questions to MongoDB:', error.message, error.stack);
@@ -237,14 +245,33 @@ const shuffleArray = (array) => {
   return array;
 };
 
+const loadUsersToCache = async () => {
+  try {
+    const startTime = Date.now();
+    userCache = await db.collection('users').find({}).toArray();
+    const endTime = Date.now();
+    console.log(`Loaded ${userCache.length} users to cache in ${endTime - startTime} ms`);
+  } catch (error) {
+    console.error('Error loading users to cache:', error.message, error.stack);
+  }
+};
+
 const loadQuestions = async (testNumber) => {
   try {
     const startTime = Date.now();
+    // Проверяем кэш
+    if (questionsCache[testNumber]) {
+      const endTime = Date.now();
+      console.log(`Loaded ${questionsCache[testNumber].length} questions for test ${testNumber} from cache in ${endTime - startTime} ms`);
+      return questionsCache[testNumber];
+    }
+
     const questions = await db.collection('questions').find({ testNumber: testNumber.toString() }).toArray();
     const endTime = Date.now();
     if (questions.length === 0) {
       throw new Error(`No questions found in MongoDB for test ${testNumber}`);
     }
+    questionsCache[testNumber] = questions; // Сохраняем в кэш
     console.log(`Loaded ${questions.length} questions for test ${testNumber} from MongoDB in ${endTime - startTime} ms`);
     return questions;
   } catch (error) {
@@ -293,6 +320,7 @@ const initializeServer = async () => {
     await db.collection('activity_log').createIndex({ user: 1, timestamp: -1 });
     console.log('MongoDB indexes created successfully');
     await updateUserPasswords();
+    await loadUsersToCache(); // Загружаем пользователей в кэш
     isInitialized = true;
     initializationError = null;
   } catch (error) {
@@ -342,20 +370,21 @@ app.get('/', (req, res) => {
         <style>
           body { font-family: Arial, sans-serif; text-align: center; padding: 50px; background-color: #f5f5f5; margin: 0; }
           h1 { font-size: 36px; margin-bottom: 20px; }
-          input[type="password"], input[type="text"] { padding: 10px; font-size: 18px; width: 200px; margin-bottom: 10px; }
+          input[type="text"], input[type="password"] { padding: 10px; font-size: 18px; width: 200px; margin-bottom: 10px; }
           button { padding: 10px 20px; font-size: 18px; cursor: pointer; border: none; border-radius: 5px; background-color: #4CAF50; color: white; }
           button:hover { background-color: #45a049; }
           .error { color: red; margin-top: 10px; }
           .checkbox-container { margin-bottom: 10px; }
           @media (max-width: 600px) {
             h1 { font-size: 28px; }
-            input[type="password"], input[type="text"], button { font-size: 16px; width: 90%; padding: 15px; }
+            input[type="text"], input[type="password"], button { font-size: 16px; width: 90%; padding: 15px; }
           }
         </style>
       </head>
       <body>
-        <h1>Введіть пароль</h1>
+        <h1>Вхід</h1>
         <form id="login-form" method="POST" action="/login">
+          <input type="text" id="username" name="username" placeholder="Логін" required><br>
           <input type="password" id="password" name="password" placeholder="Пароль" required><br>
           <div class="checkbox-container">
             <input type="checkbox" id="show-password" onclick="togglePassword()">
@@ -369,10 +398,12 @@ app.get('/', (req, res) => {
 
           document.getElementById('login-form').addEventListener('submit', async (e) => {
             e.preventDefault();
+            const username = document.getElementById('username').value;
             const password = document.getElementById('password').value;
             const errorMessage = document.getElementById('error-message');
 
             const formData = new URLSearchParams();
+            formData.append('username', username);
             formData.append('password', password);
 
             try {
@@ -380,19 +411,18 @@ app.get('/', (req, res) => {
               const response = await fetch('/login', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-                credentials: 'include'
+                credentials: 'include',
+                body: formData
               });
 
               console.log('Response received:', response);
               console.log('Response status:', response.status);
               console.log('Response headers:', [...response.headers.entries()]);
 
-              // Перевіряємо, чи відповідь успішна
               if (!response.ok) {
                 throw new Error('HTTP error! status: ' + response.status);
               }
 
-              // Дебагінг заголовків відповіді
               const setCookieHeader = response.headers.get('set-cookie');
               console.log('Response headers (set-cookie):', setCookieHeader);
               if (setCookieHeader) {
@@ -453,25 +483,27 @@ const logActivity = async (user, action, sessionId, ipAddress, additionalInfo = 
 app.post('/login', async (req, res) => {
   const startTime = Date.now();
   try {
-    const { password } = req.body;
-    if (!password) {
-      console.log('Password not provided');
-      return res.status(400).json({ success: false, message: 'Пароль не вказано' });
-    }
-    const users = await db.collection('users').find({}).toArray();
-    let foundUser = null;
-    for (const user of users) {
-      if (await bcrypt.compare(password, user.password)) {
-        foundUser = user;
-        break;
-      }
-    }
-    if (!foundUser) {
-      console.log('Invalid password');
-      return res.status(401).json({ success: false, message: 'Невірний пароль' });
+    const { username, password } = req.body;
+    if (!username || !password) {
+      console.log('Username or password not provided');
+      return res.status(400).json({ success: false, message: 'Логін або пароль не вказано' });
     }
 
-    // Генеруємо новий session ID
+    // Ищем пользователя в кэше
+    const foundUser = userCache.find(user => user.username === username);
+    if (!foundUser) {
+      console.log('User not found:', username);
+      return res.status(401).json({ success: false, message: 'Невірний логін або пароль' });
+    }
+
+    // Проверяем пароль
+    const passwordMatch = await bcrypt.compare(password, foundUser.password);
+    if (!passwordMatch) {
+      console.log('Invalid password for user:', username);
+      return res.status(401).json({ success: false, message: 'Невірний логін або пароль' });
+    }
+
+    // Генерируем новый session ID
     await new Promise((resolve, reject) => {
       req.session.regenerate(err => {
         if (err) {
@@ -494,10 +526,10 @@ app.post('/login', async (req, res) => {
 
     console.log(`Session ID: ${sessionId}`);
 
-    // Явно позначаємо сесію як змінену
+    // Явно помечаем сессию как измененную
     req.session.modified = true;
 
-    // Дебагінг заголовків відповіді
+    // Дебагинг заголовков ответа
     const headers = res.getHeaders();
     console.log('Response headers after session setup:', headers);
     if (headers['set-cookie']) {
@@ -971,39 +1003,48 @@ app.get('/test/question', checkAuth, (req, res) => {
             <button onclick="hideConfirm()">Ні</button>
           </div>
           <script>
-            let startTime = ${startTime};
-            let timeLimit = ${timeLimit};
+            console.log('Starting test question script...');
+            const startTime = ${startTime};
+            const timeLimit = ${timeLimit};
             const timerElement = document.getElementById('timer');
             let timeAway = 0;
             let lastBlurTime = 0;
             let switchCount = 0;
             let lastActivityTime = Date.now();
             let activityCount = 0;
-            let lastMouseMoveTime =popup 0;
+            let lastMouseMoveTime = 0;
             const debounceDelay = 100;
             const questionStartTime = ${userTest.answerTimestamps[index] || Date.now()};
             let selectedOptions = ${selectedOptionsString};
             let matchingPairs = ${JSON.stringify(answers[index] || [])};
 
             function updateTimer() {
-              const elapsedTime = Math.floor((Date.now() - startTime) / 1000);
-              const remainingTime = Math.max(0, Math.floor(timeLimit / 1000) - elapsedTime);
-              const minutes = Math.floor(remainingTime / 60).toString().padStart(2, '0');
-              const seconds = (remainingTime % 60).toString().padStart(2, '0');
-              timerElement.textContent = 'Залишилось часу: ' + minutes + ' мм ' + seconds + ' с';
-              if (remainingTime <= 0) {
-                window.location.href = '/result';
+              try {
+                console.log('Updating timer...');
+                const elapsedTime = Math.floor((Date.now() - startTime) / 1000);
+                const remainingTime = Math.max(0, Math.floor(timeLimit / 1000) - elapsedTime);
+                const minutes = Math.floor(remainingTime / 60).toString().padStart(2, '0');
+                const seconds = (remainingTime % 60).toString().padStart(2, '0');
+                timerElement.textContent = 'Залишилось часу: ' + minutes + ' мм ' + seconds + ' с';
+                if (remainingTime <= 0) {
+                  console.log('Time is up, redirecting to /result');
+                  window.location.href = '/result';
+                }
+              } catch (error) {
+                console.error('Error in updateTimer:', error);
               }
             }
             updateTimer();
             setInterval(updateTimer, 1000);
 
             window.addEventListener('blur', () => {
+              console.log('Window blurred');
               lastBlurTime = Date.now();
               switchCount++;
             });
 
             window.addEventListener('focus', () => {
+              console.log('Window focused');
               if (lastBlurTime) {
                 timeAway += Date.now() - lastBlurTime;
               }
@@ -1020,12 +1061,14 @@ app.get('/test/question', checkAuth, (req, res) => {
 
             document.addEventListener('mousemove', debounceMouseMove);
             document.addEventListener('keydown', () => {
+              console.log('Key pressed');
               lastActivityTime = Date.now();
               activityCount++;
             });
 
             document.querySelectorAll('.option-box:not(.draggable)').forEach(box => {
               box.addEventListener('click', () => {
+                console.log('Option box clicked:', box.getAttribute('data-value'));
                 const questionType = '${q.type}';
                 const option = box.getAttribute('data-value');
                 if (questionType === 'truefalse' || questionType === 'multiple' || questionType === 'singlechoice') {
@@ -1047,6 +1090,7 @@ app.get('/test/question', checkAuth, (req, res) => {
 
             async function saveAndNext(index) {
               try {
+                console.log('Saving answer and moving to next question:', index);
                 let answers = selectedOptions;
                 if (document.querySelector('input[name="q' + index + '"]')) {
                   answers = document.getElementById('q' + index + '_input').value;
@@ -1081,6 +1125,7 @@ app.get('/test/question', checkAuth, (req, res) => {
 
                 const result = await response.json();
                 if (result.success) {
+                  console.log('Answer saved, redirecting to next question');
                   window.location.href = '/test/question?index=' + (index + 1);
                 } else {
                   console.error('Error saving answer:', result.error);
@@ -1090,8 +1135,19 @@ app.get('/test/question', checkAuth, (req, res) => {
               }
             }
 
+            function showConfirm(index) {
+              console.log('Showing confirmation modal for index:', index);
+              document.getElementById('confirm-modal').style.display = 'block';
+            }
+
+            function hideConfirm() {
+              console.log('Hiding confirmation modal');
+              document.getElementById('confirm-modal').style.display = 'none';
+            }
+
             async function finishTest(index) {
               try {
+                console.log('Finishing test for index:', index);
                 let answers = selectedOptions;
                 if (document.querySelector('input[name="q' + index + '"]')) {
                   answers = document.getElementById('q' + index + '_input').value;
@@ -1126,6 +1182,7 @@ app.get('/test/question', checkAuth, (req, res) => {
 
                 const result = await response.json();
                 if (result.success) {
+                  console.log('Test finished, redirecting to /result');
                   window.location.href = '/result';
                 } else {
                   console.error('Error finishing test:', result.error);
@@ -1135,22 +1192,16 @@ app.get('/test/question', checkAuth, (req, res) => {
               }
             }
 
-            function showConfirm(index) {
-              document.getElementById('confirm-modal').style.display = 'block';
-            }
-
-            function hideConfirm() {
-              document.getElementById('confirm-modal').style.display = 'none';
-            }
-
             const sortable = document.getElementById('sortable-options');
             if (sortable) {
+              console.log('Initializing Sortable for ordering question');
               new Sortable(sortable, { animation: 150 });
             }
 
             const leftColumn = document.getElementById('left-column');
             const rightColumn = document.getElementById('right-column');
             if (leftColumn && rightColumn && '${q.type}' === 'matching') {
+              console.log('Initializing Sortable for matching question');
               new Sortable(leftColumn, {
                 group: 'matching',
                 animation: 150,
@@ -1234,6 +1285,7 @@ app.get('/test/question', checkAuth, (req, res) => {
                 console.warn('No droppable items found for matching question');
               }
             }
+            console.log('Test question script initialized successfully');
           </script>
         </body>
       </html>
@@ -1668,12 +1720,12 @@ app.get('/results', checkAuth, async (req, res) => {
           document.getElementById('exportPDF').addEventListener('click', () => {
             const docDefinition = {
               content: [
-                {
+                imageBase64 ? {
                   image: 'data:image/png;base64,' + imageBase64,
                   width: 150,
                   alignment: 'center',
                   margin: [0, 0, 0, 20]
-                },
+                } : { text: 'Логотип відсутній', alignment: 'center', margin: [0, 0, 0, 20] },
                 { text: 'Результат тесту користувача ' + user + ' з тесту ' + testName + ' складає ' + percentage + '%', style: 'header' },
                 { text: 'Кількість питань: ' + totalQuestions },
                 { text: 'Правильних відповідей: ' + correctClicks },
@@ -1777,6 +1829,7 @@ app.get('/admin/users', checkAuth, checkAdmin, async (req, res) => {
     let errorMessage = '';
     try {
       users = await db.collection('users').find({}).toArray();
+      userCache = users; // Обновляем кэш
     } catch (error) {
       console.error('Error fetching users from MongoDB:', error.message, error.stack);
       errorMessage = `Помилка MongoDB: ${error.message}`;
@@ -1944,7 +1997,9 @@ app.post('/admin/add-user', checkAuth, checkAdmin, async (req, res) => {
     }
     const saltRounds = 10;
     const hashedPassword = await bcrypt.hash(password, saltRounds);
-    await db.collection('users').insertOne({ username, password: hashedPassword });
+    const newUser = { username, password: hashedPassword };
+    await db.collection('users').insertOne(newUser);
+    userCache.push(newUser); // Обновляем кэш
     res.send(`
       <!DOCTYPE html>
       <html lang="uk">
@@ -2060,6 +2115,11 @@ app.post('/admin/edit-user', checkAuth, checkAdmin, async (req, res) => {
       { username: oldUsername },
       { $set: updateData }
     );
+    // Обновляем кэш
+    const userIndex = userCache.findIndex(user => user.username === oldUsername);
+    if (userIndex !== -1) {
+      userCache[userIndex] = { ...userCache[userIndex], ...updateData };
+    }
     res.send(`
       <!DOCTYPE html>
       <html lang="uk">
@@ -2087,6 +2147,8 @@ app.post('/admin/delete-user', checkAuth, checkAdmin, async (req, res) => {
   try {
     const { username } = req.body;
     await db.collection('users').deleteOne({ username });
+    // Обновляем кэш
+    userCache = userCache.filter(user => user.username !== username);
     res.json({ success: true });
   } catch (error) {
     console.error('Error deleting user:', error.message, error.stack);
@@ -2104,6 +2166,15 @@ app.get('/admin/questions', checkAuth, checkAdmin, async (req, res) => {
     let errorMessage = '';
     try {
       questions = await db.collection('questions').find({}).sort({ testNumber: 1 }).toArray();
+      // Обновляем кэш вопросов
+      questions.forEach(q => {
+        if (!questionsCache[q.testNumber]) {
+          questionsCache[q.testNumber] = [];
+        }
+        if (!questionsCache[q.testNumber].some(cachedQ => cachedQ._id.toString() === q._id.toString())) {
+          questionsCache[q.testNumber].push(q);
+        }
+      });
     } catch (error) {
       console.error('Error fetching questions from MongoDB:', error.message, error.stack);
       errorMessage = `Помилка MongoDB: ${error.message}`;
@@ -2353,7 +2424,12 @@ app.post('/admin/add-question', checkAuth, checkAdmin, async (req, res) => {
       questionData.correctAnswer = questionData.correctAnswers[0];
     }
 
-    await db.collection('questions').insertOne(questionData);
+    const result = await db.collection('questions').insertOne(questionData);
+    // Обновляем кэш
+    if (!questionsCache[testNumber]) {
+      questionsCache[testNumber] = [];
+    }
+    questionsCache[testNumber].push({ ...questionData, _id: result.insertedId });
     res.send(`
       <!DOCTYPE html>
       <html lang="uk">
@@ -2537,10 +2613,29 @@ app.post('/admin/edit-question', checkAuth, checkAdmin, async (req, res) => {
       questionData.correctAnswer = questionData.correctAnswers[0];
     }
 
+    // Находим старый номер теста для вопроса
+    const oldQuestion = await db.collection('questions').findOne({ _id: new ObjectId(id) });
+    const oldTestNumber = oldQuestion.testNumber;
+
+    // Обновляем вопрос в базе
     await db.collection('questions').updateOne(
       { _id: new ObjectId(id) },
       { $set: questionData }
     );
+
+    // Обновляем кэш
+    if (questionsCache[oldTestNumber]) {
+      const questionIndex = questionsCache[oldTestNumber].findIndex(q => q._id.toString() === id);
+      if (questionIndex !== -1) {
+        // Удаляем из старого кэша
+        questionsCache[oldTestNumber].splice(questionIndex, 1);
+      }
+    }
+    if (!questionsCache[testNumber]) {
+      questionsCache[testNumber] = [];
+    }
+    questionsCache[testNumber].push({ ...questionData, _id: new ObjectId(id) });
+
     res.send(`
       <!DOCTYPE html>
       <html lang="uk">
@@ -2567,7 +2662,12 @@ app.post('/admin/delete-question', checkAuth, checkAdmin, async (req, res) => {
   const startTime = Date.now();
   try {
     const { id } = req.body;
+    const question = await db.collection('questions').findOne({ _id: new ObjectId(id) });
     await db.collection('questions').deleteOne({ _id: new ObjectId(id) });
+    // Обновляем кэш
+    if (question && questionsCache[question.testNumber]) {
+      questionsCache[question.testNumber] = questionsCache[question.testNumber].filter(q => q._id.toString() !== id);
+    }
     res.json({ success: true });
   } catch (error) {
     console.error('Error deleting question:', error.message, error.stack);
@@ -3055,6 +3155,10 @@ app.post('/admin/delete-test', checkAuth, checkAdmin, async (req, res) => {
       return res.status(404).json({ success: false, message: 'Тест не знайдено' });
     }
     delete testNames[testNumber];
+    // Удаляем вопросы из кэша
+    if (questionsCache[testNumber]) {
+      delete questionsCache[testNumber];
+    }
     res.json({ success: true });
   } catch (error) {
     console.error('Ошибка при удалении теста:', error.message, error.stack);
