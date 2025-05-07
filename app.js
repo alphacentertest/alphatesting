@@ -104,12 +104,12 @@ app.use(session({
   resave: false,
   saveUninitialized: false,
   cookie: {
-    secure: true,
+    secure: process.env.NODE_ENV === 'production', // Для локального тестування дозволяємо insecure
     httpOnly: true,
     sameSite: 'none',
     maxAge: 24 * 60 * 60 * 1000
   },
-  name: 'connect.sid' // Явно вказуємо ім'я куки
+  name: 'connect.sid'
 }));
 
 const importUsersToMongoDB = async (filePath) => {
@@ -368,11 +368,14 @@ app.get('/', (req, res) => {
             formData.append('password', password);
 
             try {
+              console.log('Sending login request...');
               const response = await fetch('/login', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
                 credentials: 'include'
               });
+
+              console.log('Response received:', response);
 
               // Перевіряємо, чи відповідь успішна
               if (!response.ok) {
@@ -383,7 +386,7 @@ app.get('/', (req, res) => {
               console.log('Response headers:', response.headers.get('set-cookie'));
 
               const result = await response.json();
-              console.log('Login response:', result);
+              console.log('Parsed login response:', result);
               console.log('Cookies after login:', document.cookie);
 
               // Додатковий дебагінг: чекаємо 1000мс і перевіряємо куки ще раз
@@ -394,9 +397,11 @@ app.get('/', (req, res) => {
               if (result.success) {
                 console.log('Redirecting to:', result.redirect);
                 setTimeout(() => {
+                  console.log('Executing redirect to:', result.redirect);
                   window.location.href = result.redirect + '?nocache=' + Date.now();
                 }, 1000);
               } else {
+                console.log('Login failed with message:', result.message);
                 errorMessage.textContent = result.message || 'Помилка входу';
               }
             } catch (error) {
@@ -455,13 +460,6 @@ app.post('/login', async (req, res) => {
       return res.status(401).json({ success: false, message: 'Невірний пароль' });
     }
 
-    // Очищаємо стару куку connect.sid
-    res.clearCookie('connect.sid', {
-      secure: true,
-      httpOnly: true,
-      sameSite: 'none'
-    });
-
     req.session.user = foundUser.username;
     req.session.testVariant = Math.floor(Math.random() * 3) + 1;
     console.log(`Assigned variant ${req.session.testVariant} to user ${foundUser.username}`);
@@ -486,7 +484,13 @@ app.post('/login', async (req, res) => {
     });
 
     // Дебагінг заголовків відповіді
-    console.log('Response headers after session setup:', res.getHeaders());
+    const headers = res.getHeaders();
+    console.log('Response headers after session setup:', headers);
+    if (headers['set-cookie']) {
+      console.log('Set-Cookie details:', headers['set-cookie']);
+    } else {
+      console.log('No Set-Cookie header found');
+    }
 
     if (foundUser.username === 'admin') {
       console.log('Sending response: redirect to /admin');
