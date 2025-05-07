@@ -4,7 +4,7 @@ const cookieParser = require('cookie-parser');
 const path = require('path');
 const ExcelJS = require('exceljs');
 const session = require('express-session');
-const MongoStore = require('connect-mongo'); // Додаємо імпорт MongoStore
+const MongoStore = require('connect-mongo');
 const { MongoClient, ObjectId } = require('mongodb');
 const bcrypt = require('bcrypt');
 const fs = require('fs');
@@ -57,8 +57,10 @@ let db;
 const connectToMongoDB = async (attempt = 1, maxAttempts = 3) => {
   try {
     console.log(`Attempting to connect to MongoDB (Attempt ${attempt} of ${maxAttempts}) with URI:`, MONGODB_URI);
+    const startTime = Date.now();
     await client.connect();
-    console.log('Connected to MongoDB successfully');
+    const endTime = Date.now();
+    console.log('Connected to MongoDB successfully in', endTime - startTime, 'ms');
     db = client.db('alpha');
     console.log('Database initialized:', db.databaseName);
   } catch (error) {
@@ -106,9 +108,9 @@ app.use(session({
   resave: false,
   saveUninitialized: false,
   cookie: {
-    secure: process.env.NODE_ENV === 'production' ? true : false, // На Heroku secure: true, локально secure: false
+    secure: process.env.NODE_ENV === 'production' ? true : false,
     httpOnly: true,
-    sameSite: process.env.NODE_ENV === 'production' ? 'none' : 'lax', // На Heroku sameSite: 'none', локально sameSite: 'lax'
+    sameSite: process.env.NODE_ENV === 'production' ? 'none' : 'lax',
     maxAge: 24 * 60 * 60 * 1000
   },
   name: 'connect.sid'
@@ -237,11 +239,13 @@ const shuffleArray = (array) => {
 
 const loadQuestions = async (testNumber) => {
   try {
+    const startTime = Date.now();
     const questions = await db.collection('questions').find({ testNumber: testNumber.toString() }).toArray();
+    const endTime = Date.now();
     if (questions.length === 0) {
       throw new Error(`No questions found in MongoDB for test ${testNumber}`);
     }
-    console.log(`Loaded ${questions.length} questions for test ${testNumber} from MongoDB`);
+    console.log(`Loaded ${questions.length} questions for test ${testNumber} from MongoDB in ${endTime - startTime} ms`);
     return questions;
   } catch (error) {
     console.error(`Ошибка в loadQuestions (test ${testNumber}):`, error.message, error.stack);
@@ -262,6 +266,7 @@ const ensureInitialized = (req, res, next) => {
 };
 
 const updateUserPasswords = async () => {
+  const startTime = Date.now();
   const users = await db.collection('users').find({}).toArray();
   const saltRounds = 10;
   for (const user of users) {
@@ -273,7 +278,8 @@ const updateUserPasswords = async () => {
       );
     }
   }
-  console.log('User passwords updated with hashes');
+  const endTime = Date.now();
+  console.log('User passwords updated with hashes in', endTime - startTime, 'ms');
 };
 
 const initializeServer = async () => {
@@ -425,6 +431,7 @@ app.get('/', (req, res) => {
 
 const logActivity = async (user, action, sessionId, ipAddress, additionalInfo = {}) => {
   try {
+    const startTime = Date.now();
     const timestamp = new Date();
     const timeOffset = 3 * 60 * 60 * 1000;
     const adjustedTimestamp = new Date(timestamp.getTime() + timeOffset);
@@ -436,13 +443,15 @@ const logActivity = async (user, action, sessionId, ipAddress, additionalInfo = 
       timestamp: adjustedTimestamp.toISOString(),
       additionalInfo
     });
-    console.log(`Logged activity: ${user} - ${action} at ${adjustedTimestamp}, IP: ${ipAddress}, Session: ${sessionId}`);
+    const endTime = Date.now();
+    console.log(`Logged activity: ${user} - ${action} at ${adjustedTimestamp}, IP: ${ipAddress}, Session: ${sessionId} in ${endTime - startTime} ms`);
   } catch (error) {
     console.error('Error logging activity:', error.message, error.stack);
   }
 };
 
 app.post('/login', async (req, res) => {
+  const startTime = Date.now();
   try {
     const { password } = req.body;
     if (!password) {
@@ -485,18 +494,8 @@ app.post('/login', async (req, res) => {
 
     console.log(`Session ID: ${sessionId}`);
 
-    // Синхронно зберігаємо сесію
-    await new Promise((resolve, reject) => {
-      req.session.save(err => {
-        if (err) {
-          console.error('Error saving session:', err);
-          reject(err);
-        } else {
-          console.log('Session saved successfully');
-          resolve();
-        }
-      });
-    });
+    // Явно позначаємо сесію як змінену
+    req.session.modified = true;
 
     // Дебагінг заголовків відповіді
     const headers = res.getHeaders();
@@ -517,6 +516,9 @@ app.post('/login', async (req, res) => {
   } catch (error) {
     console.error('Ошибка в /login:', error.message, error.stack);
     res.status(500).json({ success: false, message: 'Помилка сервера' });
+  } finally {
+    const endTime = Date.now();
+    console.log(`Route /login executed in ${endTime - startTime} ms`);
   }
 });
 
@@ -560,75 +562,89 @@ const checkAdmin = (req, res, next) => {
 };
 
 app.get('/select-test', checkAuth, (req, res) => {
-  console.log(`Serving /select-test for user: ${req.user}`);
-  if (req.user === 'admin') {
-    console.log('User is admin, redirecting to /admin');
-    return res.redirect('/admin');
+  const startTime = Date.now();
+  try {
+    console.log(`Serving /select-test for user: ${req.user}`);
+    if (req.user === 'admin') {
+      console.log('User is admin, redirecting to /admin');
+      return res.redirect('/admin');
+    }
+    const html = `
+      <!DOCTYPE html>
+      <html lang="uk">
+        <head>
+          <meta charset="UTF-8">
+          <meta name="viewport" content="width=device-width, initial-scale=1.0">
+          <title>Вибір тесту</title>
+          <style>
+            body { font-family: Arial, sans-serif; text-align: center; padding: 20px; padding-bottom: 80px; margin: 0; }
+            h1 { font-size: 24px; margin-bottom: 20px; }
+            .test-buttons { display: flex; flex-direction: column; align-items: center; gap: 10px; }
+            button { padding: 10px; font-size: 18px; cursor: pointer; width: 200px; border: none; border-radius: 5px; background-color: #4CAF50; color: white; }
+            button:hover { background-color: #45a049; }
+            #logout { background-color: #ef5350; color: white; position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%); width: 200px; }
+            @media (max-width: 600px) {
+              h1 { font-size: 28px; }
+              button { font-size: 20px; width: 90%; padding: 15px; }
+              #logout { width: 90%; }
+            }
+          </style>
+        </head>
+        <body>
+          <h1>Виберіть тест</h1>
+          <div class="test-buttons">
+            ${Object.entries(testNames).map(([num, data]) => `
+              <button onclick="window.location.href='/test?test=${num}'">${data.name}</button>
+            `).join('')}
+          </div>
+          <button id="logout" onclick="logout()">Вийти</button>
+          <script>
+            async function logout() {
+              const formData = new URLSearchParams();
+              await fetch('/logout', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                credentials: 'include'
+              });
+              window.location.href = '/';
+            }
+          </script>
+        </body>
+      </html>
+    `;
+    res.send(html);
+  } finally {
+    const endTime = Date.now();
+    console.log(`Route /select-test executed in ${endTime - startTime} ms`);
   }
-  res.send(`
-    <!DOCTYPE html>
-    <html lang="uk">
-      <head>
-        <meta charset="UTF-8">
-        <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>Вибір тесту</title>
-        <style>
-          body { font-family: Arial, sans-serif; text-align: center; padding: 20px; padding-bottom: 80px; margin: 0; }
-          h1 { font-size: 24px; margin-bottom: 20px; }
-          .test-buttons { display: flex; flex-direction: column; align-items: center; gap: 10px; }
-          button { padding: 10px; font-size: 18px; cursor: pointer; width: 200px; border: none; border-radius: 5px; background-color: #4CAF50; color: white; }
-          button:hover { background-color: #45a049; }
-          #logout { background-color: #ef5350; color: white; position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%); width: 200px; }
-          @media (max-width: 600px) {
-            h1 { font-size: 28px; }
-            button { font-size: 20px; width: 90%; padding: 15px; }
-            #logout { width: 90%; }
-          }
-        </style>
-      </head>
-      <body>
-        <h1>Виберіть тест</h1>
-        <div class="test-buttons">
-          ${Object.entries(testNames).map(([num, data]) => `
-            <button onclick="window.location.href='/test?test=${num}'">${data.name}</button>
-          `).join('')}
-        </div>
-        <button id="logout" onclick="logout()">Вийти</button>
-        <script>
-          async function logout() {
-            const formData = new URLSearchParams();
-            await fetch('/logout', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-              credentials: 'include'
-            });
-            window.location.href = '/';
-          }
-        </script>
-      </body>
-    </html>
-  `);
 });
 
 app.post('/logout', (req, res) => {
-  const user = req.session.user;
-  const sessionId = req.session.id;
-  const ipAddress = req.headers['x-forwarded-for'] || req.socket.remoteAddress;
-  if (user) {
-    logActivity(user, 'покинув сайт', sessionId, ipAddress);
-  }
-  req.session.destroy(err => {
-    if (err) {
-      console.error('Error destroying session:', err);
-      return res.status(500).json({ success: false, message: 'Помилка при виході' });
+  const startTime = Date.now();
+  try {
+    const user = req.session.user;
+    const sessionId = req.session.id;
+    const ipAddress = req.headers['x-forwarded-for'] || req.socket.remoteAddress;
+    if (user) {
+      logActivity(user, 'покинув сайт', sessionId, ipAddress);
     }
-    res.json({ success: true });
-  });
+    req.session.destroy(err => {
+      if (err) {
+        console.error('Error destroying session:', err);
+        return res.status(500).json({ success: false, message: 'Помилка при виході' });
+      }
+      res.json({ success: true });
+    });
+  } finally {
+    const endTime = Date.now();
+    console.log(`Route /logout executed in ${endTime - startTime} ms`);
+  }
 });
 
 const userTests = new Map();
 
 const saveResult = async (user, testNumber, score, totalPoints, startTime, endTime, totalClicks, correctClicks, totalQuestions, percentage, suspiciousActivity, answers, scoresPerQuestion, variant) => {
+  const startTimeLog = Date.now();
   try {
     const duration = Math.round((endTime - startTime) / 1000);
     const timeOffset = 3 * 60 * 60 * 1000;
@@ -661,16 +677,20 @@ const saveResult = async (user, testNumber, score, totalPoints, startTime, endTi
   } catch (error) {
     console.error('Ошибка сохранения в MongoDB:', error.message, error.stack);
     throw error;
+  } finally {
+    const endTimeLog = Date.now();
+    console.log(`saveResult executed in ${endTimeLog - startTimeLog} ms`);
   }
 };
 
 app.get('/test', checkAuth, async (req, res) => {
-  if (req.user === 'admin') return res.redirect('/admin');
-  const testNumber = req.query.test;
-  if (!testNumber || !testNames[testNumber]) {
-    return res.status(400).send('Номер тесту не вказано або тест не знайдено');
-  }
+  const startTime = Date.now();
   try {
+    if (req.user === 'admin') return res.redirect('/admin');
+    const testNumber = req.query.test;
+    if (!testNumber || !testNames[testNumber]) {
+      return res.status(400).send('Номер тесту не вказано або тест не знайдено');
+    }
     let questions = await loadQuestions(testNumber);
     const userVariant = req.session.testVariant;
     questions = questions.filter(q => !q.variant || q.variant === '' || q.variant === `Variant ${userVariant}`);
@@ -709,508 +729,558 @@ app.get('/test', checkAuth, async (req, res) => {
   } catch (error) {
     console.error('Ошибка в /test:', error.message, error.stack);
     res.status(500).send('Помилка при завантаженні тесту: ' + error.message);
+  } finally {
+    const endTime = Date.now();
+    console.log(`Route /test executed in ${endTime - startTime} ms`);
   }
 });
 
 app.get('/test/question', checkAuth, (req, res) => {
-  if (req.user === 'admin') return res.redirect('/admin');
-  const userTest = userTests.get(req.user);
-  if (!userTest) {
-    return res.status(400).send('Тест не розпочато');
-  }
-  const { questions, testNumber, answers, currentQuestion, startTime, timeLimit } = userTest;
-  const index = parseInt(req.query.index) || 0;
-  if (index < 0 || index >= questions.length) {
-    return res.status(400).send('Невірний номер питання');
-  }
-  userTest.currentQuestion = index;
-  userTest.answerTimestamps = userTest.answerTimestamps || {};
-  userTest.answerTimestamps[index] = userTest.answerTimestamps[index] || Date.now();
-  const q = questions[index];
-  const progress = Array.from({ length: questions.length }, (_, i) => ({
-    number: i + 1,
-    answered: answers[i] && (Array.isArray(answers[i]) ? answers[i].length > 0 : answers[i].trim() !== '')
-  }));
-  const elapsedTime = Math.floor((Date.now() - startTime) / 1000);
-  const remainingTime = Math.max(0, Math.floor(timeLimit / 1000) - elapsedTime);
-  const minutes = Math.floor(remainingTime / 60).toString().padStart(2, '0');
-  const seconds = (remainingTime % 60).toString().padStart(2, '0');
-  const selectedOptions = answers[index] || [];
-  const selectedOptionsString = JSON.stringify(selectedOptions).replace(/'/g, "\\'");
+  const startTime = Date.now();
+  try {
+    if (req.user === 'admin') return res.redirect('/admin');
+    const userTest = userTests.get(req.user);
+    if (!userTest) {
+      return res.status(400).send('Тест не розпочато');
+    }
+    const { questions, testNumber, answers, currentQuestion, startTime, timeLimit } = userTest;
+    const index = parseInt(req.query.index) || 0;
+    if (index < 0 || index >= questions.length) {
+      return res.status(400).send('Невірний номер питання');
+    }
+    userTest.currentQuestion = index;
+    userTest.answerTimestamps = userTest.answerTimestamps || {};
+    userTest.answerTimestamps[index] = userTest.answerTimestamps[index] || Date.now();
+    const q = questions[index];
+    const progress = Array.from({ length: questions.length }, (_, i) => ({
+      number: i + 1,
+      answered: answers[i] && (Array.isArray(answers[i]) ? answers[i].length > 0 : answers[i].trim() !== '')
+    }));
+    const elapsedTime = Math.floor((Date.now() - startTime) / 1000);
+    const remainingTime = Math.max(0, Math.floor(timeLimit / 1000) - elapsedTime);
+    const minutes = Math.floor(remainingTime / 60).toString().padStart(2, '0');
+    const seconds = (remainingTime % 60).toString().padStart(2, '0');
+    const selectedOptions = answers[index] || [];
+    const selectedOptionsString = JSON.stringify(selectedOptions).replace(/'/g, "\\'");
 
-  let html = `
-    <!DOCTYPE html>
-    <html lang="uk">
-      <head>
-        <meta charset="UTF-8">
-        <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>${testNames[testNumber].name}</title>
-        <script src="https://cdnjs.cloudflare.com/ajax/libs/Sortable/1.15.0/Sortable.min.js"></script>
-        <style>
-          body { font-family: Arial, sans-serif; margin: 0; padding: 20px; padding-bottom: 80px; background-color: #f0f0f0; }
-          h1 { font-size: 24px; text-align: center; }
-          img { max-width: 100%; margin-bottom: 10px; display: block; margin-left: auto; margin-right: auto; }
-          .progress-bar { display: flex; flex-direction: column; gap: 5px; margin-bottom: 20px; width: calc(100% - 40px); margin-left: auto; margin-right: auto; box-sizing: border-box; }
-          .progress-circle { width: 40px; height: 40px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 14px; flex-shrink: 0; }
-          .progress-circle.unanswered { background-color: red; color: white; }
-          .progress-circle.answered { background-color: green; color: white; }
-          .progress-line { width: 5px; height: 2px; background-color: #ccc; margin: 0 2px; align-self: center; flex-shrink: 0; }
-          .progress-line.answered { background-color: green; }
-          .progress-row { display: flex; align-items: center; justify-content: space-around; gap: 2px; flex-wrap: wrap; }
-          .option-box { border: 2px solid #ccc; padding: 10px; margin: 5px 0; border-radius: 5px; cursor: pointer; font-size: 16px; user-select: none; }
-          .option-box.selected { background-color: #90ee90; }
-          .button-container { position: fixed; bottom: 20px; left: 20px; right: 20px; display: flex; justify-content: space-between; }
-          button { padding: 10px 20px; margin: 5px; border: none; cursor: pointer; border-radius: 5px; font-size: 16px; }
-          .back-btn { background-color: red; color: white; }
-          .next-btn { background-color: blue; color: white; }
-          .finish-btn { background-color: green; color: white; }
-          button:disabled { background-color: grey; cursor: not-allowed; }
-          #timer { font-size: 24px; margin-bottom: 20px; text-align: center; }
-          #confirm-modal { display: none; position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%); background: white; padding: 20px; border: 2px solid black; z-index: 1000; }
-          #confirm-modal button { margin: 0 10px; }
-          .question-box { padding: 10px; margin: 5px 0; }
-          .instruction { font-style: italic; color: #555; margin-bottom: 10px; font-size: 18px; }
-          .option-box.draggable { cursor: move; }
-          .option-box.dragging { opacity: 0.5; }
-          #question-container { background-color: white; padding: 20px; border-radius: 8px; box-shadow: 0 0 10px rgba(0, 0, 0, 0.1); width: calc(100% - 40px); margin: 0 auto 20px auto; box-sizing: border-box; }
-          #answers { margin-bottom: 20px; }
-          .matching-container { display: flex; justify-content: space-between; flex-wrap: wrap; }
-          .matching-column { width: 45%; }
-          .matching-item { border: 2px solid #ccc; padding: 10px; margin: 5px 0; border-radius: 5px; cursor: move; font-size: 16px; }
-          .matching-item.matched { background-color: #90ee90; }
-          .blank-input { width: 100px; margin: 0 5px; padding: 5px; border: 1px solid #ccc; border-radius: 4px; display: inline-block; }
-          .question-text { display: inline; }
-          .image-error { color: red; font-style: italic; text-align: center; margin-bottom: 10px; }
-          @media (max-width: 600px) {
-            h1 { font-size: 28px; }
-            .progress-bar { flex-direction: column; }
-            .progress-circle { width: 20px; height: 20px; font-size: 10px; }
-            .progress-line { width: 5px; }
-            .progress-row { justify-content: center; gap: 2px; flex-wrap: wrap; }
-            .option-box, .matching-item { font-size: 18px; padding: 15px; }
-            button { font-size: 18px; padding: 15px; }
-            #timer { font-size: 20px; }
-            .question-box h2 { font-size: 20px; }
-            .matching-container { flex-direction: column; }
-            .matching-column { width: 100%; }
-            .blank-input { width: 80px; }
-          }
-          @media (min-width: 601px) {
-            .progress-bar { flex-direction: row; justify-content: center; }
-            .progress-circle { width: 40px; height: 40px; font-size: 14px; }
-            .progress-line { width: 5px; }
-            .progress-row { justify-content: space-around; }
-          }
-        </style>
-      </head>
-      <body>
-        <h1>${testNames[testNumber].name}</h1>
-        <div id="timer">Залишилось часу: ${minutes} мм ${seconds} с</div>
-        <div class="progress-bar">
-  `;
-  if (progress.length <= 10) {
-    html += `
-      <div class="progress-row">
-        ${progress.map((p, j) => `
-          <div class="progress-circle ${p.answered ? 'answered' : 'unanswered'}">${p.number}</div>
-          ${j < progress.length - 1 ? '<div class="progress-line ' + (p.answered ? 'answered' : '') + '"></div>' : ''}
-        `).join('')}
-      </div>
+    let html = `
+      <!DOCTYPE html>
+      <html lang="uk">
+        <head>
+          <meta charset="UTF-8">
+          <meta name="viewport" content="width=device-width, initial-scale=1.0">
+          <title>${testNames[testNumber].name}</title>
+          <script src="https://cdnjs.cloudflare.com/ajax/libs/Sortable/1.15.0/Sortable.min.js"></script>
+          <style>
+            body { font-family: Arial, sans-serif; margin: 0; padding: 20px; padding-bottom: 80px; background-color: #f0f0f0; }
+            h1 { font-size: 24px; text-align: center; }
+            img { max-width: 100%; margin-bottom: 10px; display: block; margin-left: auto; margin-right: auto; }
+            .progress-bar { display: flex; flex-direction: column; gap: 5px; margin-bottom: 20px; width: calc(100% - 40px); margin-left: auto; margin-right: auto; box-sizing: border-box; }
+            .progress-circle { width: 40px; height: 40px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 14px; flex-shrink: 0; }
+            .progress-circle.unanswered { background-color: red; color: white; }
+            .progress-circle.answered { background-color: green; color: white; }
+            .progress-line { width: 5px; height: 2px; background-color: #ccc; margin: 0 2px; align-self: center; flex-shrink: 0; }
+            .progress-line.answered { background-color: green; }
+            .progress-row { display: flex; align-items: center; justify-content: space-around; gap: 2px; flex-wrap: wrap; }
+            .option-box { border: 2px solid #ccc; padding: 10px; margin: 5px 0; border-radius: 5px; cursor: pointer; font-size: 16px; user-select: none; }
+            .option-box.selected { background-color: #90ee90; }
+            .button-container { position: fixed; bottom: 20px; left: 20px; right: 20px; display: flex; justify-content: space-between; }
+            button { padding: 10px 20px; margin: 5px; border: none; cursor: pointer; border-radius: 5px; font-size: 16px; }
+            .back-btn { background-color: red; color: white; }
+            .next-btn { background-color: blue; color: white; }
+            .finish-btn { background-color: green; color: white; }
+            button:disabled { background-color: grey; cursor: not-allowed; }
+            #timer { font-size: 24px; margin-bottom: 20px; text-align: center; }
+            #confirm-modal { display: none; position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%); background: white; padding: 20px; border: 2px solid black; z-index: 1000; }
+            #confirm-modal button { margin: 0 10px; }
+            .question-box { padding: 10px; margin: 5px 0; }
+            .instruction { font-style: italic; color: #555; margin-bottom: 10px; font-size: 18px; }
+            .option-box.draggable { cursor: move; }
+            .option-box.dragging { opacity: 0.5; }
+            #question-container { background-color: white; padding: 20px; border-radius: 8px; box-shadow: 0 0 10px rgba(0, 0, 0, 0.1); width: calc(100% - 40px); margin: 0 auto 20px auto; box-sizing: border-box; }
+            #answers { margin-bottom: 20px; }
+            .matching-container { display: flex; justify-content: space-between; flex-wrap: wrap; }
+            .matching-column { width: 45%; }
+            .matching-item { border: 2px solid #ccc; padding: 10px; margin: 5px 0; border-radius: 5px; cursor: move; font-size: 16px; }
+            .matching-item.matched { background-color: #90ee90; }
+            .blank-input { width: 100px; margin: 0 5px; padding: 5px; border: 1px solid #ccc; border-radius: 4px; display: inline-block; }
+            .question-text { display: inline; }
+            .image-error { color: red; font-style: italic; text-align: center; margin-bottom: 10px; }
+            @media (max-width: 600px) {
+              h1 { font-size: 28px; }
+              .progress-bar { flex-direction: column; }
+              .progress-circle { width: 20px; height: 20px; font-size: 10px; }
+              .progress-line { width: 5px; }
+              .progress-row { justify-content: center; gap: 2px; flex-wrap: wrap; }
+              .option-box, .matching-item { font-size: 18px; padding: 15px; }
+              button { font-size: 18px; padding: 15px; }
+              #timer { font-size: 20px; }
+              .question-box h2 { font-size: 20px; }
+              .matching-container { flex-direction: column; }
+              .matching-column { width: 100%; }
+              .blank-input { width: 80px; }
+            }
+            @media (min-width: 601px) {
+              .progress-bar { flex-direction: row; justify-content: center; }
+              .progress-circle { width: 40px; height: 40px; font-size: 14px; }
+              .progress-line { width: 5px; }
+              .progress-row { justify-content: space-around; }
+            }
+          </style>
+        </head>
+        <body>
+          <h1>${testNames[testNumber].name}</h1>
+          <div id="timer">Залишилось часу: ${minutes} мм ${seconds} с</div>
+          <div class="progress-bar">
     `;
-  } else {
-    for (let i = 0; i < progress.length; i += 10) {
-      const rowCircles = progress.slice(i, i + 10);
+    if (progress.length <= 10) {
       html += `
         <div class="progress-row">
-          ${rowCircles.map((p, j) => `
+          ${progress.map((p, j) => `
             <div class="progress-circle ${p.answered ? 'answered' : 'unanswered'}">${p.number}</div>
-            ${j < rowCircles.length - 1 ? '<div class="progress-line ' + (p.answered ? 'answered' : '') + '"></div>' : ''}
+            ${j < progress.length - 1 ? '<div class="progress-line ' + (p.answered ? 'answered' : '') + '"></div>' : ''}
           `).join('')}
         </div>
       `;
-    }
-  }
-  html += `
-        </div>
-        <div id="question-container">
-  `;
-  if (q.picture && q.picture.trim() !== '') {
-    html += `
-      <div id="image-container">
-        <img src="${q.picture}" alt="Picture" onerror="this.style.display='none'; document.getElementById('image-error').style.display='block';">
-        <div id="image-error" class="image-error" style="display: none;">Зображення недоступне</div>
-      </div>
-    `;
-  }
-  const instructionText = q.type === 'multiple' ? 'Виберіть усі правильні відповіді' :
-                         q.type === 'input' ? 'Введіть правильну відповідь' :
-                         q.type === 'ordering' ? 'Розташуйте відповіді у правильній послідовності' :
-                         q.type === 'matching' ? 'Складіть правильні пари, перетягуючи елементи' :
-                         q.type === 'fillblank' ? 'Заповніть пропуски у реченні' :
-                         q.type === 'singlechoice' ? 'Виберіть правильну відповідь' : '';
-  html += `
-          <div class="question-box">
-            <h2 id="question-text">${index + 1}. `;
-  if (q.type === 'fillblank') {
-    const userAnswers = Array.isArray(answers[index]) ? answers[index] : [];
-    console.log(`Fillblank question parts for index ${index}:`, q.text.split('___'));
-    const parts = q.text.split('___');
-    let inputHtml = '';
-    parts.forEach((part, i) => {
-      inputHtml += `<span class="question-text">${part}</span>`;
-      if (i < parts.length - 1) {
-        const userAnswer = userAnswers[i] || '';
-        inputHtml += `<input type="text" class="blank-input" id="blank_${i}" value="${userAnswer.replace(/"/g, '"')}" placeholder="Введіть відповідь">`;
-      }
-    });
-    html += inputHtml;
-  } else {
-    html += q.text;
-  }
-  html += `
-            </h2>
-          </div>
-          <p id="instruction" class="instruction">${instructionText}</p>
-          <div id="answers">
-  `;
-  if (q.type === 'matching' && q.pairs) {
-    const leftItems = shuffleArray([...q.pairs.map(p => p.left)]);
-    const rightItems = shuffleArray([...q.pairs.map(p => p.right)]);
-    const userPairs = Array.isArray(answers[index]) ? answers[index] : [];
-    html += `
-      <div class="matching-container">
-        <div class="matching-column" id="left-column">
-          ${leftItems.map((item, idx) => {
-            const escapedItem = item.replace(/'/g, "\\'").replace(/"/g, '\\"');
-            return `<div class="matching-item draggable" data-value="${escapedItem}">${item}</div>`;
-          }).join('')}
-        </div>
-        <div class="matching-column" id="right-column">
-          ${rightItems.map((item, idx) => {
-            const escapedItem = item.replace(/'/g, "\\'").replace(/"/g, '\\"');
-            const matchedLeft = userPairs.find(pair => pair[1] === item)?.[0] || '';
-            return `
-              <div class="matching-item droppable" data-value="${escapedItem}">
-                ${item}${matchedLeft ? `<span class="matched"> (Зіставлено: ${matchedLeft})</span>` : ''}
-              </div>
-            `;
-          }).join('')}
-        </div>
-      </div>
-      <button onclick="resetMatchingPairs()">Скинути зіставлення</button>
-    `;
-  } else if (!q.options || q.options.length === 0) {
-    if (q.type !== 'fillblank') {
-      const userAnswer = answers[index] || '';
-      html += `
-        <input type="text" name="q${index}" id="q${index}_input" value="${userAnswer}" placeholder="Введіть відповідь" class="answer-option"><br>
-      `;
-    }
-  } else {
-    if (q.type === 'ordering') {
-      html += `
-        <div id="sortable-options">
-          ${(answers[index] || q.options).map((option, optIndex) => {
-            const escapedOption = option.replace(/'/g, "\\'").replace(/"/g, '\\"');
-            return `
-              <div class="option-box draggable" data-index="${optIndex}" data-value="${escapedOption}">
-                ${option}
-              </div>
-            `;
-          }).join('')}
-        </div>
-      `;
     } else {
-      q.options.forEach((option, optIndex) => {
-        const selected = selectedOptions.includes(option) ? 'selected' : '';
-        const escapedOption = option.replace(/'/g, "\\'").replace(/"/g, '\\"');
+      for (let i = 0; i < progress.length; i += 10) {
+        const rowCircles = progress.slice(i, i + 10);
         html += `
-          <div class="option-box ${selected}" data-value="${escapedOption}">
-            ${option}
+          <div class="progress-row">
+            ${rowCircles.map((p, j) => `
+              <div class="progress-circle ${p.answered ? 'answered' : 'unanswered'}">${p.number}</div>
+              ${j < rowCircles.length - 1 ? '<div class="progress-line ' + (p.answered ? 'answered' : '') + '"></div>' : ''}
+            `).join('')}
           </div>
         `;
-      });
+      }
     }
-  }
-  html += `
+    html += `
+          </div>
+          <div id="question-container">
+    `;
+    if (q.picture && q.picture.trim() !== '') {
+      html += `
+        <div id="image-container">
+          <img src="${q.picture}" alt="Picture" onerror="this.style.display='none'; document.getElementById('image-error').style.display='block';">
+          <div id="image-error" class="image-error" style="display: none;">Зображення недоступне</div>
+        </div>
+      `;
+    }
+    const instructionText = q.type === 'multiple' ? 'Виберіть усі правильні відповіді' :
+                           q.type === 'input' ? 'Введіть правильну відповідь' :
+                           q.type === 'ordering' ? 'Розташуйте відповіді у правильній послідовності' :
+                           q.type === 'matching' ? 'Складіть правильні пари, перетягуючи елементи' :
+                           q.type === 'fillblank' ? 'Заповніть пропуски у реченні' :
+                           q.type === 'singlechoice' ? 'Виберіть правильну відповідь' : '';
+    html += `
+            <div class="question-box">
+              <h2 id="question-text">${index + 1}. `;
+    if (q.type === 'fillblank') {
+      const userAnswers = Array.isArray(answers[index]) ? answers[index] : [];
+      console.log(`Fillblank question parts for index ${index}:`, q.text.split('___'));
+      const parts = q.text.split('___');
+      let inputHtml = '';
+      parts.forEach((part, i) => {
+        inputHtml += `<span class="question-text">${part}</span>`;
+        if (i < parts.length - 1) {
+          const userAnswer = userAnswers[i] || '';
+          inputHtml += `<input type="text" class="blank-input" id="blank_${i}" value="${userAnswer.replace(/"/g, '"')}" placeholder="Введіть відповідь">`;
+        }
+      });
+      html += inputHtml;
+    } else {
+      html += q.text;
+    }
+    html += `
+              </h2>
+            </div>
+            <p id="instruction" class="instruction">${instructionText}</p>
+            <div id="answers">
+    `;
+    if (q.type === 'matching' && q.pairs) {
+      const leftItems = shuffleArray([...q.pairs.map(p => p.left)]);
+      const rightItems = shuffleArray([...q.pairs.map(p => p.right)]);
+      const userPairs = Array.isArray(answers[index]) ? answers[index] : [];
+      html += `
+        <div class="matching-container">
+          <div class="matching-column" id="left-column">
+            ${leftItems.map((item, idx) => {
+              const escapedItem = item.replace(/'/g, "\\'").replace(/"/g, '\\"');
+              return `<div class="matching-item draggable" data-value="${escapedItem}">${item}</div>`;
+            }).join('')}
+          </div>
+          <div class="matching-column" id="right-column">
+            ${rightItems.map((item, idx) => {
+              const escapedItem = item.replace(/'/g, "\\'").replace(/"/g, '\\"');
+              const matchedLeft = userPairs.find(pair => pair[1] === item)?.[0] || '';
+              return `
+                <div class="matching-item droppable" data-value="${escapedItem}">
+                  ${item}${matchedLeft ? `<span class="matched"> (Зіставлено: ${matchedLeft})</span>` : ''}
+                </div>
+              `;
+            }).join('')}
           </div>
         </div>
-        <div class="button-container">
-          <button class="back-btn" ${index === 0 ? 'disabled' : ''} onclick="window.location.href='/test/question?index=${index - 1}'">Назад</button>
-          <button id="submit-answer" class="next-btn" ${index === questions.length - 1 ? 'disabled' : ''} onclick="saveAndNext(${index})">Далі</button>
-          <button class="finish-btn" onclick="showConfirm(${index})">Завершити тест</button>
-        </div>
-        <div id="confirm-modal">
-          <h2>Ви дійсно бажаєте завершити тест?</h2>
-          <button onclick="finishTest(${index})">Так</button>
-          <button onclick="hideConfirm()">Ні</button>
-        </div>
-        <script>
-          let startTime = ${startTime};
-          let timeLimit = ${timeLimit};
-          const timerElement = document.getElementById('timer');
-          let timeAway = 0;
-          let lastBlurTime = 0;
-          let switchCount = 0;
-          let lastActivityTime = Date.now();
-          let activityCount = 0;
-          let lastMouseMoveTime = 0;
-          const debounceDelay = 100;
-          const questionStartTime = ${userTest.answerTimestamps[index] || Date.now()};
-          let selectedOptions = ${selectedOptionsString};
-          let matchingPairs = ${JSON.stringify(answers[index] || [])};
+        <button onclick="resetMatchingPairs()">Скинути зіставлення</button>
+      `;
+    } else if (!q.options || q.options.length === 0) {
+      if (q.type !== 'fillblank') {
+        const userAnswer = answers[index] || '';
+        html += `
+          <input type="text" name="q${index}" id="q${index}_input" value="${userAnswer}" placeholder="Введіть відповідь" class="answer-option"><br>
+        `;
+      }
+    } else {
+      if (q.type === 'ordering') {
+        html += `
+          <div id="sortable-options">
+            ${(answers[index] || q.options).map((option, optIndex) => {
+              const escapedOption = option.replace(/'/g, "\\'").replace(/"/g, '\\"');
+              return `
+                <div class="option-box draggable" data-index="${optIndex}" data-value="${escapedOption}">
+                  ${option}
+                </div>
+              `;
+            }).join('')}
+          </div>
+        `;
+      } else {
+        q.options.forEach((option, optIndex) => {
+          const selected = selectedOptions.includes(option) ? 'selected' : '';
+          const escapedOption = option.replace(/'/g, "\\'").replace(/"/g, '\\"');
+          html += `
+            <div class="option-box ${selected}" data-value="${escapedOption}">
+              ${option}
+            </div>
+          `;
+        });
+      }
+    }
+    html += `
+            </div>
+          </div>
+          <div class="button-container">
+            <button class="back-btn" ${index === 0 ? 'disabled' : ''} onclick="window.location.href='/test/question?index=${index - 1}'">Назад</button>
+            <button id="submit-answer" class="next-btn" ${index === questions.length - 1 ? 'disabled' : ''} onclick="saveAndNext(${index})">Далі</button>
+            <button class="finish-btn" onclick="showConfirm(${index})">Завершити тест</button>
+          </div>
+          <div id="confirm-modal">
+            <h2>Ви дійсно бажаєте завершити тест?</h2>
+            <button onclick="finishTest(${index})">Так</button>
+            <button onclick="hideConfirm()">Ні</button>
+          </div>
+          <script>
+            let startTime = ${startTime};
+            let timeLimit = ${timeLimit};
+            const timerElement = document.getElementById('timer');
+            let timeAway = 0;
+            let lastBlurTime = 0;
+            let switchCount = 0;
+            let lastActivityTime = Date.now();
+            let activityCount = 0;
+            let lastMouseMoveTime =popup 0;
+            const debounceDelay = 100;
+            const questionStartTime = ${userTest.answerTimestamps[index] || Date.now()};
+            let selectedOptions = ${selectedOptionsString};
+            let matchingPairs = ${JSON.stringify(answers[index] || [])};
 
-          function updateTimer() {
-            const elapsedTime = Math.floor((Date.now() - startTime) / 1000);
-            const remainingTime = Math.max(0, Math.floor(timeLimit / 1000) - elapsedTime);
-            const minutes = Math.floor(remainingTime / 60).toString().padStart(2, '0');
-            const seconds = (remainingTime % 60).toString().padStart(2, '0');
-            timerElement.textContent = 'Залишилось часу: ' + minutes + ' мм ' + seconds + ' с';
-            if (remainingTime <= 0) {
-              window.location.href = '/result';
+            function updateTimer() {
+              const elapsedTime = Math.floor((Date.now() - startTime) / 1000);
+              const remainingTime = Math.max(0, Math.floor(timeLimit / 1000) - elapsedTime);
+              const minutes = Math.floor(remainingTime / 60).toString().padStart(2, '0');
+              const seconds = (remainingTime % 60).toString().padStart(2, '0');
+              timerElement.textContent = 'Залишилось часу: ' + minutes + ' мм ' + seconds + ' с';
+              if (remainingTime <= 0) {
+                window.location.href = '/result';
+              }
             }
-          }
-          updateTimer();
-          setInterval(updateTimer, 1000);
+            updateTimer();
+            setInterval(updateTimer, 1000);
 
-          window.addEventListener('blur', () => {
-            lastBlurTime = Date.now();
-            switchCount++;
-          });
+            window.addEventListener('blur', () => {
+              lastBlurTime = Date.now();
+              switchCount++;
+            });
 
-          window.addEventListener('focus', () => {
-            if (lastBlurTime) {
-              timeAway += Date.now() - lastBlurTime;
+            window.addEventListener('focus', () => {
+              if (lastBlurTime) {
+                timeAway += Date.now() - lastBlurTime;
+              }
+            });
+
+            function debounceMouseMove() {
+              const now = Date.now();
+              if (now - lastMouseMoveTime >= debounceDelay) {
+                lastMouseMoveTime = now;
+                lastActivityTime = now;
+                activityCount++;
+              }
             }
-          });
 
-          function debounceMouseMove() {
-            const now = Date.now();
-            if (now - lastMouseMoveTime >= debounceDelay) {
-              lastMouseMoveTime = now;
-              lastActivityTime = now;
+            document.addEventListener('mousemove', debounceMouseMove);
+            document.addEventListener('keydown', () => {
+              lastActivityTime = Date.now();
               activityCount++;
-            }
-          }
+            });
 
-          document.addEventListener('mousemove', debounceMouseMove);
-          document.addEventListener('keydown', () => {
-            lastActivityTime = Date.now();
-            activityCount++;
-          });
-
-          document.querySelectorAll('.option-box:not(.draggable)').forEach(box => {
-            box.addEventListener('click', () => {
-              const questionType = '${q.type}';
-              const option = box.getAttribute('data-value');
-              if (questionType === 'truefalse' || questionType === 'multiple' || questionType === 'singlechoice') {
-                if (questionType === 'truefalse' || questionType === 'singlechoice') {
-                  selectedOptions = [option];
-                  document.querySelectorAll('.option-box').forEach(b => b.classList.remove('selected'));
-                } else {
-                  const idx = selectedOptions.indexOf(option);
-                  if (idx === -1) {
-                    selectedOptions.push(option);
+            document.querySelectorAll('.option-box:not(.draggable)').forEach(box => {
+              box.addEventListener('click', () => {
+                const questionType = '${q.type}';
+                const option = box.getAttribute('data-value');
+                if (questionType === 'truefalse' || questionType === 'multiple' || questionType === 'singlechoice') {
+                  if (questionType === 'truefalse' || questionType === 'singlechoice') {
+                    selectedOptions = [option];
+                    document.querySelectorAll('.option-box').forEach(b => b.classList.remove('selected'));
                   } else {
-                    selectedOptions.splice(idx, 1);
-                  }
-                }
-                box.classList.toggle('selected');
-              }
-            });
-          });
-
-          async function saveAndNext(index) {
-            try {
-              let answers = selectedOptions;
-              if (document.querySelector('input[name="q' + index + '"]')) {
-                answers = document.getElementById('q' + index + '_input').value;
-              } else if (document.getElementById('sortable-options')) {
-                answers = Array.from(document.querySelectorAll('#sortable-options .option-box')).map(el => el.dataset.value);
-              } else if (document.getElementById('left-column')) {
-                answers = matchingPairs;
-              } else if ('${q.type}' === 'fillblank') {
-                answers = [];
-                for (let i = 0; i < ${q.blankCount || 1}; i++) {
-                  const input = document.getElementById('blank_' + i);
-                  answers.push(input ? input.value.trim() : '');
-                }
-              }
-              console.log('Saving answer for question ' + index + ':', answers);
-              const responseTime = Date.now() - questionStartTime;
-
-              const formData = new URLSearchParams();
-              formData.append('index', index);
-              formData.append('answer', JSON.stringify(answers));
-              formData.append('timeAway', timeAway);
-              formData.append('switchCount', switchCount);
-              formData.append('responseTime', responseTime);
-              formData.append('activityCount', activityCount);
-
-              await fetch('/answer', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-                credentials: 'include'
-              });
-              window.location.href = '/test/question?index=' + (index + 1);
-            } catch (error) {
-              console.error('Error in saveAndNext:', error);
-            }
-          }
-
-          function showConfirm(index) {
-            document.getElementById('confirm-modal').style.display = 'block';
-          }
-
-          function hideConfirm() {
-            document.getElementById('confirm-modal').style.display = 'none';
-          }
-
-          async function finishTest(index) {
-            try {
-              let answers = selectedOptions;
-              if (document.querySelector('input[name="q' + index + '"]')) {
-                answers = document.getElementById('q' + index + '_input').value;
-              } else if (document.getElementById('sortable-options')) {
-                answers = Array.from(document.querySelectorAll('#sortable-options .option-box')).map(el => el.dataset.value);
-              } else if (document.getElementById('left-column')) {
-                answers = matchingPairs;
-              } else if ('${q.type}' === 'fillblank') {
-                answers = [];
-                for (let i = 0; i < ${q.blankCount || 1}; i++) {
-                  const input = document.getElementById('blank_' + i);
-                  answers.push(input ? input.value.trim() : '');
-                }
-              }
-              console.log('Finishing test, answer for question ' + index + ':', answers);
-              const responseTime = Date.now() - questionStartTime;
-
-              const formData = new URLSearchParams();
-              formData.append('index', index);
-              formData.append('answer', JSON.stringify(answers));
-              formData.append('timeAway', timeAway);
-              formData.append('switchCount', switchCount);
-              formData.append('responseTime', responseTime);
-              formData.append('activityCount', activityCount);
-
-              await fetch('/answer', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-                credentials: 'include'
-              });
-              window.location.href = '/result';
-            } catch (error) {
-              console.error('Error in finishTest:', error);
-            }
-          }
-
-          const sortable = document.getElementById('sortable-options');
-          if (sortable) {
-            new Sortable(sortable, { animation: 150 });
-          }
-
-          const leftColumn = document.getElementById('left-column');
-          const rightColumn = document.getElementById('right-column');
-          if (leftColumn && rightColumn && '${q.type}' === 'matching') {
-            new Sortable(leftColumn, {
-              group: 'matching',
-              animation: 150,
-              onStart: function(evt) {
-                evt.item.classList.add('dragging');
-              },
-              onEnd: function(evt) {
-                evt.item.classList.remove('dragging');
-                updateMatchingPairs();
-              }
-            });
-            new Sortable(rightColumn, {
-              group: 'matching',
-              animation: 150,
-              onStart: function(evt) {
-                evt.item.classList.add('dragging');
-              },
-              onEnd: function(evt) {
-                evt.item.classList.remove('dragging');
-                updateMatchingPairs();
-              }
-            });
-
-            function updateMatchingPairs() {
-              matchingPairs = [];
-              const leftItems = Array.from(document.querySelectorAll('#left-column .draggable'));
-              const rightItems = Array.from(document.querySelectorAll('#right-column .droppable'));
-              rightItems.forEach((rightItem, idx) => {
-                const rightValue = rightItem.dataset.value || '';
-                const leftItem = leftItems[idx];
-                const leftValue = leftItem ? leftItem.dataset.value || '' : '';
-                if (leftValue && rightValue) {
-                  matchingPairs.push([leftValue, rightValue]);
-                }
-              });
-              console.log('Updated matching pairs:', matchingPairs);
-            }
-
-            function resetMatchingPairs() {
-              matchingPairs = [];
-              const rightItems = document.querySelectorAll('#right-column .droppable');
-              rightItems.forEach(item => {
-                const rightValue = item.dataset.value || '';
-                item.innerHTML = rightValue;
-              });
-              console.log('Matching pairs reset');
-            }
-
-            const droppableItems = document.querySelectorAll('.droppable');
-            if (droppableItems.length > 0) {
-              console.log('Adding dragover and drop listeners to', droppableItems.length, 'droppable items');
-              droppableItems.forEach(item => {
-                item.addEventListener('dragover', (e) => e.preventDefault());
-                item.addEventListener('drop', (e) => {
-                  e.preventDefault();
-                  const draggable = document.querySelector('.dragging');
-                  if (draggable && draggable.classList.contains('draggable')) {
-                    const leftValue = draggable.dataset.value || '';
-                    const rightValue = item.dataset.value || '';
-                    console.log('Dropped:', { leftValue, rightValue });
-                    if (leftValue && rightValue) {
-                      item.innerHTML = rightValue + ' <span class="matched"> (Зіставлено: ' + leftValue + ')</span>';
-                      const leftColumn = document.getElementById('left-column');
-                      const rightColumn = document.getElementById('right-column');
-                      const leftItems = Array.from(leftColumn.children);
-                      const rightItems = Array.from(rightColumn.children);
-                      const rightIndex = rightItems.indexOf(item);
-                      if (leftItems[rightIndex]) {
-                        leftColumn.insertBefore(draggable, leftItems[rightIndex]);
-                      } else {
-                        leftColumn.appendChild(draggable);
-                      }
-                      updateMatchingPairs();
+                    const idx = selectedOptions.indexOf(option);
+                    if (idx === -1) {
+                      selectedOptions.push(option);
                     } else {
-                      console.warn('Missing leftValue or rightValue:', { leftValue, rightValue });
+                      selectedOptions.splice(idx, 1);
                     }
                   }
-                });
+                  box.classList.toggle('selected');
+                }
               });
-            } else {
-              console.warn('No droppable items found for matching question');
+            });
+
+            async function saveAndNext(index) {
+              try {
+                let answers = selectedOptions;
+                if (document.querySelector('input[name="q' + index + '"]')) {
+                  answers = document.getElementById('q' + index + '_input').value;
+                } else if (document.getElementById('sortable-options')) {
+                  answers = Array.from(document.querySelectorAll('#sortable-options .option-box')).map(el => el.dataset.value);
+                } else if (document.getElementById('left-column')) {
+                  answers = matchingPairs;
+                } else if ('${q.type}' === 'fillblank') {
+                  answers = [];
+                  for (let i = 0; i < ${q.blankCount || 1}; i++) {
+                    const input = document.getElementById('blank_' + i);
+                    answers.push(input ? input.value.trim() : '');
+                  }
+                }
+                console.log('Saving answer for question ' + index + ':', answers);
+                const responseTime = Date.now() - questionStartTime;
+
+                const formData = new URLSearchParams();
+                formData.append('index', index);
+                formData.append('answer', JSON.stringify(answers));
+                formData.append('timeAway', timeAway);
+                formData.append('switchCount', switchCount);
+                formData.append('responseTime', responseTime);
+                formData.append('activityCount', activityCount);
+
+                const response = await fetch('/answer', {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                  credentials: 'include',
+                  body: formData
+                });
+
+                const result = await response.json();
+                if (result.success) {
+                  window.location.href = '/test/question?index=' + (index + 1);
+                } else {
+                  console.error('Error saving answer:', result.error);
+                }
+              } catch (error) {
+                console.error('Error in saveAndNext:', error);
+              }
             }
-          }
-        </script>
-      </body>
-    </html>
-  `;
-  res.send(html);
+
+            async function finishTest(index) {
+              try {
+                let answers = selectedOptions;
+                if (document.querySelector('input[name="q' + index + '"]')) {
+                  answers = document.getElementById('q' + index + '_input').value;
+                } else if (document.getElementById('sortable-options')) {
+                  answers = Array.from(document.querySelectorAll('#sortable-options .option-box')).map(el => el.dataset.value);
+                } else if (document.getElementById('left-column')) {
+                  answers = matchingPairs;
+                } else if ('${q.type}' === 'fillblank') {
+                  answers = [];
+                  for (let i = 0; i < ${q.blankCount || 1}; i++) {
+                    const input = document.getElementById('blank_' + i);
+                    answers.push(input ? input.value.trim() : '');
+                  }
+                }
+                console.log('Finishing test, answer for question ' + index + ':', answers);
+                const responseTime = Date.now() - questionStartTime;
+
+                const formData = new URLSearchParams();
+                formData.append('index', index);
+                formData.append('answer', JSON.stringify(answers));
+                formData.append('timeAway', timeAway);
+                formData.append('switchCount', switchCount);
+                formData.append('responseTime', responseTime);
+                formData.append('activityCount', activityCount);
+
+                const response = await fetch('/answer', {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                  credentials: 'include',
+                  body: formData
+                });
+
+                const result = await response.json();
+                if (result.success) {
+                  window.location.href = '/result';
+                } else {
+                  console.error('Error finishing test:', result.error);
+                }
+              } catch (error) {
+                console.error('Error in finishTest:', error);
+              }
+            }
+
+            function showConfirm(index) {
+              document.getElementById('confirm-modal').style.display = 'block';
+            }
+
+            function hideConfirm() {
+              document.getElementById('confirm-modal').style.display = 'none';
+            }
+
+            const sortable = document.getElementById('sortable-options');
+            if (sortable) {
+              new Sortable(sortable, { animation: 150 });
+            }
+
+            const leftColumn = document.getElementById('left-column');
+            const rightColumn = document.getElementById('right-column');
+            if (leftColumn && rightColumn && '${q.type}' === 'matching') {
+              new Sortable(leftColumn, {
+                group: 'matching',
+                animation: 150,
+                onStart: function(evt) {
+                  evt.item.classList.add('dragging');
+                },
+                onEnd: function(evt) {
+                  evt.item.classList.remove('dragging');
+                  updateMatchingPairs();
+                }
+              });
+              new Sortable(rightColumn, {
+                group: 'matching',
+                animation: 150,
+                onStart: function(evt) {
+                  evt.item.classList.add('dragging');
+                },
+                onEnd: function(evt) {
+                  evt.item.classList.remove('dragging');
+                  updateMatchingPairs();
+                }
+              });
+
+              function updateMatchingPairs() {
+                matchingPairs = [];
+                const leftItems = Array.from(document.querySelectorAll('#left-column .draggable'));
+                const rightItems = Array.from(document.querySelectorAll('#right-column .droppable'));
+                rightItems.forEach((rightItem, idx) => {
+                  const rightValue = rightItem.dataset.value || '';
+                  const leftItem = leftItems[idx];
+                  const leftValue = leftItem ? leftItem.dataset.value || '' : '';
+                  if (leftValue && rightValue) {
+                    matchingPairs.push([leftValue, rightValue]);
+                  }
+                });
+                console.log('Updated matching pairs:', matchingPairs);
+              }
+
+              function resetMatchingPairs() {
+                matchingPairs = [];
+                const rightItems = document.querySelectorAll('#right-column .droppable');
+                rightItems.forEach(item => {
+                  const rightValue = item.dataset.value || '';
+                  item.innerHTML = rightValue;
+                });
+                console.log('Matching pairs reset');
+              }
+
+              const droppableItems = document.querySelectorAll('.droppable');
+              if (droppableItems.length > 0) {
+                console.log('Adding dragover and drop listeners to', droppableItems.length, 'droppable items');
+                droppableItems.forEach(item => {
+                  item.addEventListener('dragover', (e) => e.preventDefault());
+                  item.addEventListener('drop', (e) => {
+                    e.preventDefault();
+                    const draggable = document.querySelector('.dragging');
+                    if (draggable && draggable.classList.contains('draggable')) {
+                      const leftValue = draggable.dataset.value || '';
+                      const rightValue = item.dataset.value || '';
+                      console.log('Dropped:', { leftValue, rightValue });
+                      if (leftValue && rightValue) {
+                        item.innerHTML = rightValue + ' <span class="matched"> (Зіставлено: ' + leftValue + ')</span>';
+                        const leftColumn = document.getElementById('left-column');
+                        const rightColumn = document.getElementById('right-column');
+                        const leftItems = Array.from(leftColumn.children);
+                        const rightItems = Array.from(rightColumn.children);
+                        const rightIndex = rightItems.indexOf(item);
+                        if (leftItems[rightIndex]) {
+                          leftColumn.insertBefore(draggable, leftItems[rightIndex]);
+                        } else {
+                          leftColumn.appendChild(draggable);
+                        }
+                        updateMatchingPairs();
+                      } else {
+                        console.warn('Missing leftValue or rightValue:', { leftValue, rightValue });
+                      }
+                    }
+                  });
+                });
+              } else {
+                console.warn('No droppable items found for matching question');
+              }
+            }
+          </script>
+        </body>
+      </html>
+    `;
+    res.send(html);
+  } finally {
+    const endTime = Date.now();
+    console.log(`Route /test/question executed in ${endTime - startTime} ms`);
+  }
 });
 
-app.post('/answer', checkAuth, express.urlencoded({ extended: true }), (req, res) => {
-  if (req.user === 'admin') return res.redirect('/admin');
+app.post('/answer', checkAuth, express.urlencoded({ extended: true }), async (req, res) => {
+  const startTime = Date.now();
   try {
+    if (req.user === 'admin') return res.redirect('/admin');
     const { index, answer, timeAway, switchCount, responseTime, activityCount } = req.body;
-    const parsedAnswer = JSON.parse(answer);
+
+    console.log('Received /answer data:', req.body);
+
+    // Проверка входных данных
+    if (!index || !answer) {
+      console.log('Missing required fields in /answer:', { index, answer });
+      return res.status(400).json({ success: false, error: 'Необхідно надати index та answer' });
+    }
+
+    let parsedAnswer;
+    try {
+      // Проверяем, является ли answer строкой и пытаемся распарсить как JSON
+      if (typeof answer === 'string') {
+        if (answer.trim() === '') {
+          parsedAnswer = [];
+        } else {
+          parsedAnswer = JSON.parse(answer);
+        }
+      } else {
+        parsedAnswer = answer;
+      }
+    } catch (error) {
+      console.error('Ошибка парсинга ответа в /answer:', error.message, error.stack);
+      return res.status(400).json({ success: false, error: 'Невірний формат відповіді' });
+    }
+
     const userTest = userTests.get(req.user);
     if (!userTest) {
-      return res.status(400).json({ error: 'Тест не розпочато' });
+      return res.status(400).json({ success: false, error: 'Тест не розпочато' });
     }
+
     console.log(`Saving answer for question ${index}:`, parsedAnswer);
     userTest.answers[index] = parsedAnswer;
     userTest.suspiciousActivity = userTest.suspiciousActivity || { timeAway: 0, switchCount: 0, responseTimes: [], activityCounts: [] };
@@ -1218,157 +1288,371 @@ app.post('/answer', checkAuth, express.urlencoded({ extended: true }), (req, res
     userTest.suspiciousActivity.switchCount = (userTest.suspiciousActivity.switchCount || 0) + (parseInt(switchCount) || 0);
     userTest.suspiciousActivity.responseTimes[index] = parseInt(responseTime) || 0;
     userTest.suspiciousActivity.activityCounts[index] = parseInt(activityCount) || 0;
+
     res.json({ success: true });
   } catch (error) {
     console.error('Ошибка в /answer:', error.message, error.stack);
-    res.status(500).json({ error: 'Помилка сервера' });
+    res.status(500).json({ success: false, error: 'Помилка сервера' });
+  } finally {
+    const endTime = Date.now();
+    console.log(`Route /answer executed in ${endTime - startTime} ms`);
   }
 });
 
 app.get('/result', checkAuth, async (req, res) => {
-  if (req.user === 'admin') return res.redirect('/admin');
-  const userTest = userTests.get(req.user);
-  if (!userTest) {
-    return res.status(400).json({ error: 'Тест не розпочато' });
-  }
-  const { questions, answers, testNumber, startTime, suspiciousActivity, variant } = userTest;
-  let score = 0;
-  const totalPoints = questions.reduce((sum, q) => sum + q.points, 0);
-  const scoresPerQuestion = questions.map((q, index) => {
-    const userAnswer = answers[index];
-    let questionScore = 0;
-    if (q.type === 'multiple' && userAnswer && Array.isArray(userAnswer)) {
-      const correctAnswers = q.correctAnswers.map(val => String(val).trim().toLowerCase());
-      const userAnswers = userAnswer.map(val => String(val).trim().toLowerCase().replace(/\\'/g, "'"));
-      const isCorrect = correctAnswers.length === userAnswers.length &&
-        correctAnswers.every(val => userAnswers.includes(val)) &&
-        userAnswers.every(val => correctAnswers.includes(val));
-      if (isCorrect) {
-        questionScore = q.points;
-      }
-    } else if (q.type === 'input' && userAnswer) {
-      const normalizedUserAnswer = String(userAnswer).trim().toLowerCase().replace(/\s+/g, '').replace(',', '.');
-      const normalizedCorrectAnswer = String(q.correctAnswers[0]).trim().toLowerCase().replace(/\s+/g, '').replace(',', '.');
-      const isCorrect = normalizedUserAnswer === normalizedCorrectAnswer;
-      if (isCorrect) {
-        questionScore = q.points;
-      }
-    } else if (q.type === 'ordering' && userAnswer && Array.isArray(userAnswer)) {
-      const userAnswers = userAnswer.map(val => String(val).trim().toLowerCase());
-      const correctAnswers = q.correctAnswers.map(val => String(val).trim().toLowerCase());
-      const isCorrect = userAnswers.join(',') === correctAnswers.join(',');
-      if (isCorrect) {
-        questionScore = q.points;
-      }
-    } else if (q.type === 'matching' && userAnswer && Array.isArray(userAnswer)) {
-      const userPairs = userAnswer.map(pair => [String(pair[0]).trim().toLowerCase(), String(pair[1]).trim().toLowerCase()]);
-      const correctPairs = q.correctPairs.map(pair => [String(pair[0]).trim().toLowerCase(), String(pair[1]).trim().toLowerCase()]);
-      const isCorrect = userPairs.length === correctPairs.length &&
-        userPairs.every(userPair => correctPairs.some(correctPair => userPair[0] === correctPair[0] && userPair[1] === correctPair[1]));
-      if (isCorrect) {
-        questionScore = q.points;
-      }
-    } else if (q.type === 'fillblank' && userAnswer && Array.isArray(userAnswer)) {
-      const userAnswers = userAnswer.map(val => String(val).trim().toLowerCase().replace(/\s+/g, '').replace(',', '.'));
-      const correctAnswers = q.correctAnswers.map(val => String(val).trim().toLowerCase().replace(/\s+/g, '').replace(',', '.'));
-      console.log(`Fillblank question ${index + 1}: userAnswers=${userAnswers}, correctAnswers=${correctAnswers}`);
-      const isCorrect = userAnswers.length === correctAnswers.length &&
-        userAnswers.every((answer, idx) => answer === correctAnswers[idx]);
-      if (isCorrect) {
-        questionScore = q.points;
-      }
-    } else if (q.type === 'singlechoice' && userAnswer && Array.isArray(userAnswer)) {
-      const userAnswers = userAnswer.map(val => String(val).trim().toLowerCase());
-      const correctAnswer = String(q.correctAnswer).trim().toLowerCase();
-      console.log(`Single choice question ${index + 1}: userAnswers=${userAnswers}, correctAnswer=${correctAnswer}`);
-      const isCorrect = userAnswers.length === 1 && userAnswers[0] === correctAnswer;
-      if (isCorrect) {
-        questionScore = q.points;
-      }
+  const startTime = Date.now();
+  try {
+    if (req.user === 'admin') return res.redirect('/admin');
+    const userTest = userTests.get(req.user);
+    if (!userTest) {
+      return res.status(400).json({ error: 'Тест не розпочато' });
     }
-    return questionScore;
-  });
-  score = scoresPerQuestion.reduce((sum, s) => sum + s, 0);
-  const endTime = Date.now();
-  const percentage = (score / totalPoints) * 100;
-  const totalClicks = Object.keys(answers).length;
-  const correctClicks = scoresPerQuestion.filter(s => s > 0).length;
-  const totalQuestions = questions.length;
+    const { questions, answers, testNumber, startTime, suspiciousActivity, variant } = userTest;
+    let score = 0;
+    const totalPoints = questions.reduce((sum, q) => sum + q.points, 0);
+    const scoresPerQuestion = questions.map((q, index) => {
+      const userAnswer = answers[index];
+      let questionScore = 0;
+      if (q.type === 'multiple' && userAnswer && Array.isArray(userAnswer)) {
+        const correctAnswers = q.correctAnswers.map(val => String(val).trim().toLowerCase());
+        const userAnswers = userAnswer.map(val => String(val).trim().toLowerCase().replace(/\\'/g, "'"));
+        const isCorrect = correctAnswers.length === userAnswers.length &&
+          correctAnswers.every(val => userAnswers.includes(val)) &&
+          userAnswers.every(val => correctAnswers.includes(val));
+        if (isCorrect) {
+          questionScore = q.points;
+        }
+      } else if (q.type === 'input' && userAnswer) {
+        const normalizedUserAnswer = String(userAnswer).trim().toLowerCase().replace(/\s+/g, '').replace(',', '.');
+        const normalizedCorrectAnswer = String(q.correctAnswers[0]).trim().toLowerCase().replace(/\s+/g, '').replace(',', '.');
+        const isCorrect = normalizedUserAnswer === normalizedCorrectAnswer;
+        if (isCorrect) {
+          questionScore = q.points;
+        }
+      } else if (q.type === 'ordering' && userAnswer && Array.isArray(userAnswer)) {
+        const userAnswers = userAnswer.map(val => String(val).trim().toLowerCase());
+        const correctAnswers = q.correctAnswers.map(val => String(val).trim().toLowerCase());
+        const isCorrect = userAnswers.join(',') === correctAnswers.join(',');
+        if (isCorrect) {
+          questionScore = q.points;
+        }
+      } else if (q.type === 'matching' && userAnswer && Array.isArray(userAnswer)) {
+        const userPairs = userAnswer.map(pair => [String(pair[0]).trim().toLowerCase(), String(pair[1]).trim().toLowerCase()]);
+        const correctPairs = q.correctPairs.map(pair => [String(pair[0]).trim().toLowerCase(), String(pair[1]).trim().toLowerCase()]);
+        const isCorrect = userPairs.length === correctPairs.length &&
+          userPairs.every(userPair => correctPairs.some(correctPair => userPair[0] === correctPair[0] && userPair[1] === correctPair[1]));
+        if (isCorrect) {
+          questionScore = q.points;
+        }
+      } else if (q.type === 'fillblank' && userAnswer && Array.isArray(userAnswer)) {
+        const userAnswers = userAnswer.map(val => String(val).trim().toLowerCase().replace(/\s+/g, '').replace(',', '.'));
+        const correctAnswers = q.correctAnswers.map(val => String(val).trim().toLowerCase().replace(/\s+/g, '').replace(',', '.'));
+        console.log(`Fillblank question ${index + 1}: userAnswers=${userAnswers}, correctAnswers=${correctAnswers}`);
+        const isCorrect = userAnswers.length === correctAnswers.length &&
+          userAnswers.every((answer, idx) => answer === correctAnswers[idx]);
+        if (isCorrect) {
+          questionScore = q.points;
+        }
+      } else if (q.type === 'singlechoice' && userAnswer && Array.isArray(userAnswer)) {
+        const userAnswers = userAnswer.map(val => String(val).trim().toLowerCase());
+        const correctAnswer = String(q.correctAnswer).trim().toLowerCase();
+        console.log(`Single choice question ${index + 1}: userAnswers=${userAnswers}, correctAnswer=${correctAnswer}`);
+        const isCorrect = userAnswers.length === 1 && userAnswers[0] === correctAnswer;
+        if (isCorrect) {
+          questionScore = q.points;
+        }
+      }
+      return questionScore;
+    });
+    score = scoresPerQuestion.reduce((sum, s) => sum + s, 0);
+    const endTime = Date.now();
+    const percentage = (score / totalPoints) * 100;
+    const totalClicks = Object.keys(answers).length;
+    const correctClicks = scoresPerQuestion.filter(s => s > 0).length;
+    const totalQuestions = questions.length;
 
-  const duration = Math.round((endTime - startTime) / 1000);
-  const timeAwayPercent = suspiciousActivity && suspiciousActivity.timeAway
-    ? Math.round((suspiciousActivity.timeAway / (duration * 1000)) * 100)
-    : 0;
-  const switchCount = suspiciousActivity ? suspiciousActivity.switchCount || 0 : 0;
-  const avgResponseTime = suspiciousActivity && suspiciousActivity.responseTimes
-    ? (suspiciousActivity.responseTimes.reduce((sum, time) => sum + (time || 0), 0) / suspiciousActivity.responseTimes.length / 1000).toFixed(2)
-    : 0;
-  const totalActivityCount = suspiciousActivity && suspiciousActivity.activityCounts
-    ? suspiciousActivity.activityCounts.reduce((sum, count) => sum + (count || 0), 0).toFixed(0)
-    : 0;
+    const duration = Math.round((endTime - startTime) / 1000);
+    const timeAwayPercent = suspiciousActivity && suspiciousActivity.timeAway
+      ? Math.round((suspiciousActivity.timeAway / (duration * 1000)) * 100)
+      : 0;
+    const switchCount = suspiciousActivity ? suspiciousActivity.switchCount || 0 : 0;
+    const avgResponseTime = suspiciousActivity && suspiciousActivity.responseTimes
+      ? (suspiciousActivity.responseTimes.reduce((sum, time) => sum + (time || 0), 0) / suspiciousActivity.responseTimes.length / 1000).toFixed(2)
+      : 0;
+    const totalActivityCount = suspiciousActivity && suspiciousActivity.activityCounts
+      ? suspiciousActivity.activityCounts.reduce((sum, count) => sum + (count || 0), 0).toFixed(0)
+      : 0;
 
-  if (timeAwayPercent > 50 || switchCount > 5) {
-    const activityDetails = {
-      timeAwayPercent,
-      switchCount,
-      avgResponseTime,
-      totalActivityCount
-    };
-    await sendSuspiciousActivityEmail(req.user, activityDetails);
+    if (timeAwayPercent > 50 || switchCount > 5) {
+      const activityDetails = {
+        timeAwayPercent,
+        switchCount,
+        avgResponseTime,
+        totalActivityCount
+      };
+      await sendSuspiciousActivityEmail(req.user, activityDetails);
+    }
+
+    const ipAddress = req.headers['x-forwarded-for'] || req.socket.remoteAddress;
+    const sessionId = req.session.id;
+    await logActivity(req.user, `завершив тест ${testNames[testNumber].name} з результатом ${Math.round(percentage)}%`, sessionId, ipAddress, { percentage: Math.round(percentage) });
+
+    try {
+      await saveResult(req.user, testNumber, score, totalPoints, startTime, endTime, totalClicks, correctClicks, totalQuestions, percentage, suspiciousActivity, answers, scoresPerQuestion, variant);
+    } catch (error) {
+      return res.status(500).send('Помилка при збереженні результату');
+    }
+
+    const endDateTime = new Date(endTime);
+    const formattedTime = endDateTime.toLocaleTimeString('uk-UA', { hour12: false });
+    const formattedDate = endDateTime.toLocaleDateString('uk-UA');
+    const imagePath = path.join(__dirname, 'public', 'images', 'A.png');
+    let imageBase64 = '';
+    try {
+      const imageBuffer = fs.readFileSync(imagePath);
+      imageBase64 = imageBuffer.toString('base64');
+    } catch (error) {
+      console.error('Error reading image A.png:', error.message, error.stack);
+    }
+
+    const resultHtml = `
+      <!DOCTYPE html>
+      <html lang="uk">
+        <head>
+          <meta charset="UTF-8">
+          <title>Результати ${testNames[testNumber].name}</title>
+          <style>
+            body { font-family: Arial, sans-serif; text-align: center; padding: 20px; background-color: #f5f5f5; }
+            .result-circle { width: 100px; height: 100px; background-color: #ff4d4d; color: white; font-size: 24px; line-height: 100px; border-radius: 50%; margin: 0 auto; }
+            .buttons { margin-top: 20px; }
+            button { padding: 10px 20px; margin: 5px; cursor: pointer; border: none; border-radius: 5px; font-size: 16px; }
+            #exportPDF { background-color: #ffeb3b; }
+            #restart { background-color: #ef5350; }
+          </style>
+          <script src="https://cdnjs.cloudflare.com/ajax/libs/pdfmake/0.2.7/pdfmake.min.js"></script>
+          <script src="https://cdnjs.cloudflare.com/ajax/libs/pdfmake/0.2.7/vfs_fonts.js"></script>
+        </head>
+        <body>
+          <h1>Результат тесту</h1>
+          <div class="result-circle">${Math.round(percentage)}%</div>
+          <p>
+            Кількість питань: ${totalQuestions}<br>
+            Правильних відповідей: ${correctClicks}<br>
+            Набрано балів: ${score}<br>
+            Максимально можлива кількість балів: ${totalPoints}<br>
+          </p>
+          <div class="buttons">
+            <button id="exportPDF">Експортувати в PDF</button>
+            <button id="restart">Вихід</button>
+          </div>
+          <script>
+            const user = "${req.user}";
+            const testName = "${testNames[testNumber].name}";
+            const totalQuestions = ${totalQuestions};
+            const correctClicks = ${correctClicks};
+            const score = ${score};
+            const totalPoints = ${totalPoints};
+            const percentage = ${Math.round(percentage)};
+            const time = "${formattedTime}";
+            const date = "${formattedDate}";
+            const imageBase64 = "${imageBase64}";
+
+            document.getElementById('exportPDF').addEventListener('click', () => {
+              const docDefinition = {
+                content: [
+                  imageBase64 ? {
+                    image: 'data:image/png;base64,' + imageBase64,
+                    width: 50,
+                    alignment: 'center',
+                    margin: [0, 0, 0, 20]
+                  } : { text: 'Логотип відсутній', alignment: 'center', margin: [0, 0, 0, 20], lineHeight: 2 },
+                  { text: 'Результат тесту користувача ' + user + ' з тесту ' + testName + ' складає ' + percentage + '%', style: 'header' },
+                  { text: 'Кількість питань: ' + totalQuestions, lineHeight: 2 },
+                  { text: 'Правильних відповідей: ' + correctClicks, lineHeight: 2 },
+                  { text: 'Набрано балів: ' + score, lineHeight: 2 },
+                  { text: 'Максимально можлива кількість балів: ' + totalPoints, lineHeight: 2 },
+                  {
+                    columns: [
+                      { text: 'Час: ' + time, width: '50%', lineHeight: 2 },
+                      { text: 'Дата: ' + date, width: '50%', alignment: 'right', lineHeight: 2 }
+                    ],
+                    margin: [0, 10, 0, 0]
+                  }
+                ],
+                styles: {
+                  header: { fontSize: 14, bold: true, margin: [0, 0, 0, 10], lineHeight: 2 }
+                }
+              };
+              pdfMake.createPdf(docDefinition).download('result.pdf');
+            });
+
+            document.getElementById('restart').addEventListener('click', () => {
+              window.location.href = '/select-test';
+            });
+          </script>
+        </body>
+      </html>
+    `;
+    res.send(resultHtml);
+  } finally {
+    const endTime = Date.now();
+    console.log(`Route /result executed in ${endTime - startTime} ms`);
   }
+});
 
-  const ipAddress = req.headers['x-forwarded-for'] || req.socket.remoteAddress;
-  const sessionId = req.session.id;
-  await logActivity(req.user, `завершив тест ${testNames[testNumber].name} з результатом ${Math.round(percentage)}%`, sessionId, ipAddress, { percentage: Math.round(percentage) });
-
+app.get('/results', checkAuth, async (req, res) => {
+  const startTime = Date.now();
   try {
-    await saveResult(req.user, testNumber, score, totalPoints, startTime, endTime, totalClicks, correctClicks, totalQuestions, percentage, suspiciousActivity, answers, scoresPerQuestion, variant);
-  } catch (error) {
-    return res.status(500).send('Помилка при збереженні результату');
-  }
+    if (req.user === 'admin') return res.redirect('/admin');
+    const userTest = userTests.get(req.user);
+    let resultsHtml = `
+      <!DOCTYPE html>
+      <html lang="uk">
+        <head>
+          <meta charset="UTF-8">
+          <title>Результати</title>
+          <style>
+            body { font-family: Arial, sans-serif; padding: 20px; }
+            table { border-collapse: collapse; width: 100%; margin-top: 20px; }
+            th, td { border: 1px solid black; padding: 8px; text-align: left; }
+            th { background-color: #f2f2f2; }
+            .error { color: red; }
+            .answers { white-space: pre-wrap; max-width: 300px; overflow-wrap: break-word; line-height: 1.8; }
+            .buttons { margin-top: 20px; }
+            button { padding: 10px 20px; margin: 5px; cursor: pointer; border: none; border-radius: 5px; font-size: 16px; }
+            #exportPDF { background-color: #ffeb3b; }
+            #restart { background-color: #ef5350; }
+          </style>
+        </head>
+        <body>
+          <h1>Результати</h1>
+    `;
+    if (userTest) {
+      const { questions, answers, testNumber, startTime, variant } = userTest;
+      let score = 0;
+      const totalPoints = questions.reduce((sum, q) => sum + q.points, 0);
+      const scoresPerQuestion = questions.map((q, index) => {
+        const userAnswer = answers[index];
+        let questionScore = 0;
+        if (q.type === 'multiple' && userAnswer && Array.isArray(userAnswer)) {
+          const correctAnswers = q.correctAnswers.map(val => String(val).trim().toLowerCase());
+          const userAnswers = userAnswer.map(val => String(val).trim().toLowerCase());
+          if (correctAnswers.length === userAnswers.length &&
+              correctAnswers.every(val => userAnswers.includes(val)) &&
+              userAnswers.every(val => correctAnswers.includes(val))) {
+            questionScore = q.points;
+          }
+        } else if (q.type === 'input' && userAnswer) {
+          if (String(userAnswer).trim().toLowerCase() === String(q.correctAnswers[0]).trim().toLowerCase()) {
+            questionScore = q.points;
+          }
+        } else if (q.type === 'ordering' && userAnswer && Array.isArray(userAnswer)) {
+          const userAnswers = userAnswer.map(val => String(val).trim().toLowerCase());
+          const correctAnswers = q.correctAnswers.map(val => String(val).trim().toLowerCase());
+          if (userAnswers.join(',') === correctAnswers.join(',')) {
+            questionScore = q.points;
+          }
+        } else if (q.type === 'matching' && userAnswer && Array.isArray(userAnswer)) {
+          const userPairs = userAnswer.map(pair => [String(pair[0]).trim().toLowerCase(), String(pair[1]).trim().toLowerCase()]);
+          const correctPairs = q.correctPairs.map(pair => [String(pair[0]).trim().toLowerCase(), String(pair[1]).trim().toLowerCase()]);
+          if (userPairs.length === correctPairs.length &&
+              userPairs.every(userPair => correctPairs.some(correctPair => userPair[0] === correctPair[0] && userPair[1] === correctPair[1]))) {
+            questionScore = q.points;
+          }
+        } else if (q.type === 'fillblank' && userAnswer && Array.isArray(userAnswer)) {
+          const userAnswers = userAnswer.map(val => String(val).trim().toLowerCase().replace(/\s+/g, '').replace(',', '.'));
+          const correctAnswers = q.correctAnswers.map(val => String(val).trim().toLowerCase().replace(/\s+/g, '').replace(',', '.'));
+          console.log(`Fillblank question ${index + 1} in /results: userAnswers=${userAnswers}, correctAnswers=${correctAnswers}`);
+          if (userAnswers.length === correctAnswers.length &&
+              userAnswers.every((answer, idx) => answer === correctAnswers[idx])) {
+            questionScore = q.points;
+          }
+        } else if (q.type === 'singlechoice' && userAnswer && Array.isArray(userAnswer)) {
+          const userAnswers = userAnswer.map(val => String(val).trim().toLowerCase());
+          const correctAnswer = String(q.correctAnswer).trim().toLowerCase();
+          console.log(`Single choice question ${index + 1} in /results: userAnswers=${userAnswers}, correctAnswer=${correctAnswer}`);
+          const isCorrect = userAnswers.length === 1 && userAnswers[0] === correctAnswer;
+          if (isCorrect) {
+            questionScore = q.points;
+          }
+        }
+        return questionScore;
+      });
+      score = scoresPerQuestion.reduce((sum, s) => sum + s, 0);
+      const endTime = Date.now();
+      const duration = Math.round((endTime - startTime) / 1000);
+      const percentage = (score / totalPoints) * 100;
+      const totalClicks = Object.keys(answers).length;
+      const correctClicks = scoresPerQuestion.filter(s => s > 0).length;
+      const totalQuestions = questions.length;
+      const formattedTime = new Date(endTime).toLocaleTimeString('uk-UA', { hour12: false });
+      const formattedDate = new Date(endTime).toLocaleDateString('uk-UA');
+      const imagePath = path.join(__dirname, 'public', 'images', 'A.png');
+      let imageBase64 = '';
+      try {
+        const imageBuffer = fs.readFileSync(imagePath);
+        imageBase64 = imageBuffer.toString('base64');
+      } catch (error) {
+        console.error('Error reading image A.png:', error.message, error.stack);
+      }
 
-  const endDateTime = new Date(endTime);
-  const formattedTime = endDateTime.toLocaleTimeString('uk-UA', { hour12: false });
-  const formattedDate = endDateTime.toLocaleDateString('uk-UA');
-  const imagePath = path.join(__dirname, 'public', 'images', 'A.png');
-  let imageBase64 = '';
-  try {
-    const imageBuffer = fs.readFileSync(imagePath);
-    imageBase64 = imageBuffer.toString('base64');
-  } catch (error) {
-    console.error('Error reading image A.png:', error.message, error.stack);
-  }
-
-  const resultHtml = `
-    <!DOCTYPE html>
-    <html lang="uk">
-      <head>
-        <meta charset="UTF-8">
-        <title>Результати ${testNames[testNumber].name}</title>
-        <style>
-          body { font-family: Arial, sans-serif; text-align: center; padding: 20px; background-color: #f5f5f5; }
-          .result-circle { width: 100px; height: 100px; background-color: #ff4d4d; color: white; font-size: 24px; line-height: 100px; border-radius: 50%; margin: 0 auto; }
-          .buttons { margin-top: 20px; }
-          button { padding: 10px 20px; margin: 5px; cursor: pointer; border: none; border-radius: 5px; font-size: 16px; }
-          #exportPDF { background-color: #ffeb3b; }
-          #restart { background-color: #ef5350; }
-        </style>
-        <script src="https://cdnjs.cloudflare.com/ajax/libs/pdfmake/0.2.7/pdfmake.min.js"></script>
-        <script src="https://cdnjs.cloudflare.com/ajax/libs/pdfmake/0.2.7/vfs_fonts.js"></script>
-      </head>
-      <body>
-        <h1>Результат тесту</h1>
-        <div class="result-circle">${Math.round(percentage)}%</div>
+      resultsHtml += `
         <p>
+          Результат тесту<br>
+          ${Math.round(percentage)}%<br>
           Кількість питань: ${totalQuestions}<br>
           Правильних відповідей: ${correctClicks}<br>
           Набрано балів: ${score}<br>
           Максимально можлива кількість балів: ${totalPoints}<br>
         </p>
+        <table>
+          <tr>
+            <th>Питання</th>
+            <th>Ваш відповідь</th>
+            <th>Правильна відповідь</th>
+            <th>Бали</th>
+          </tr>
+      `;
+      questions.forEach((q, index) => {
+        const userAnswer = answers[index] || 'Не відповіли';
+        let correctAnswer;
+        if (q.type === 'matching') {
+          correctAnswer = q.correctPairs.map(pair => `${pair[0]} -> ${pair[1]}`).join(', ');
+        } else if (q.type === 'fillblank') {
+          correctAnswer = q.correctAnswers.join(', ');
+        } else if (q.type === 'singlechoice') {
+          correctAnswer = q.correctAnswer;
+        } else {
+          correctAnswer = q.correctAnswers.join(', ');
+        }
+        const questionScore = scoresPerQuestion[index];
+        let userAnswerDisplay;
+        if (q.type === 'matching' && Array.isArray(userAnswer)) {
+          userAnswerDisplay = userAnswer.map(pair => `${pair[0]} -> ${pair[1]}`).join(', ');
+        } else if (q.type === 'fillblank' && Array.isArray(userAnswer)) {
+          userAnswerDisplay = userAnswer.join(', ');
+        } else if (Array.isArray(userAnswer)) {
+          userAnswerDisplay = userAnswer.join(', ');
+        } else {
+          userAnswerDisplay = userAnswer;
+        }
+        resultsHtml += `
+          <tr>
+            <td>${q.text}</td>
+            <td>${userAnswerDisplay}</td>
+            <td>${correctAnswer}</td>
+            <td>${questionScore} з ${q.points}</td>
+          </tr>
+        `;
+      });
+      resultsHtml += `
+        </table>
         <div class="buttons">
           <button id="exportPDF">Експортувати в PDF</button>
-          <button id="restart">Вихід</button>
+          <button id="restart">Повернутися на головну</button>
         </div>
+        <script src="https://cdnjs.cloudflare.com/ajax/libs/pdfmake/0.2.7/pdfmake.min.js"></script>
+        <script src="https://cdnjs.cloudflare.com/ajax/libs/pdfmake/0.2.7/vfs_fonts.js"></script>
         <script>
           const user = "${req.user}";
           const testName = "${testNames[testNumber].name}";
@@ -1384,442 +1668,265 @@ app.get('/result', checkAuth, async (req, res) => {
           document.getElementById('exportPDF').addEventListener('click', () => {
             const docDefinition = {
               content: [
-                imageBase64 ? {
+                {
                   image: 'data:image/png;base64,' + imageBase64,
-                  width: 50,
+                  width: 150,
                   alignment: 'center',
                   margin: [0, 0, 0, 20]
-                } : { text: 'Логотип відсутній', alignment: 'center', margin: [0, 0, 0, 20], lineHeight: 2 },
+                },
                 { text: 'Результат тесту користувача ' + user + ' з тесту ' + testName + ' складає ' + percentage + '%', style: 'header' },
-                { text: 'Кількість питань: ' + totalQuestions, lineHeight: 2 },
-                { text: 'Правильних відповідей: ' + correctClicks, lineHeight: 2 },
-                { text: 'Набрано балів: ' + score, lineHeight: 2 },
-                { text: 'Максимально можлива кількість балів: ' + totalPoints, lineHeight: 2 },
+                { text: 'Кількість питань: ' + totalQuestions },
+                { text: 'Правильних відповідей: ' + correctClicks },
+                { text: 'Набрано балів: ' + score },
+                { text: 'Максимально можлива кількість балів: ' + totalPoints },
                 {
                   columns: [
-                    { text: 'Час: ' + time, width: '50%', lineHeight: 2 },
-                    { text: 'Дата: ' + date, width: '50%', alignment: 'right', lineHeight: 2 }
+                    { text: 'Час: ' + time, width: '50%' },
+                    { text: 'Дата: ' + date, width: '50%', alignment: 'right' }
                   ],
                   margin: [0, 10, 0, 0]
                 }
               ],
               styles: {
-                header: { fontSize: 14, bold: true, margin: [0, 0, 0, 10], lineHeight: 2 }
+                header: { fontSize: 14, bold: true, margin: [0, 0, 0, 10] }
               }
             };
-            pdfMake.createPdf(docDefinition).download('result.pdf');
+            pdfMake.createPdf(docDefinition).download('results.pdf');
           });
 
           document.getElementById('restart').addEventListener('click', () => {
-            window.location.href = '/select-test';
+            window.location.href = '/';
           });
         </script>
-      </body>
-    </html>
-  `;
-  res.send(resultHtml);
-});
-
-app.get('/results', checkAuth, async (req, res) => {
-  if (req.user === 'admin') return res.redirect('/admin');
-  const userTest = userTests.get(req.user);
-  let resultsHtml = `
-    <!DOCTYPE html>
-    <html lang="uk">
-      <head>
-        <meta charset="UTF-8">
-        <title>Результати</title>
-        <style>
-          body { font-family: Arial, sans-serif; padding: 20px; }
-          table { border-collapse: collapse; width: 100%; margin-top: 20px; }
-          th, td { border: 1px solid black; padding: 8px; text-align: left; }
-          th { background-color: #f2f2f2; }
-          .error { color: red; }
-          .answers { white-space: pre-wrap; max-width: 300px; overflow-wrap: break-word; line-height: 1.8; }
-          .buttons { margin-top: 20px; }
-          button { padding: 10px 20px; margin: 5px; cursor: pointer; border: none; border-radius: 5px; font-size: 16px; }
-          #exportPDF { background-color: #ffeb3b; }
-          #restart { background-color: #ef5350; }
-        </style>
-      </head>
-      <body>
-        <h1>Результати</h1>
-  `;
-  if (userTest) {
-    const { questions, answers, testNumber, startTime, variant } = userTest;
-    let score = 0;
-    const totalPoints = questions.reduce((sum, q) => sum + q.points, 0);
-    const scoresPerQuestion = questions.map((q, index) => {
-      const userAnswer = answers[index];
-      let questionScore = 0;
-      if (q.type === 'multiple' && userAnswer && Array.isArray(userAnswer)) {
-        const correctAnswers = q.correctAnswers.map(val => String(val).trim().toLowerCase());
-        const userAnswers = userAnswer.map(val => String(val).trim().toLowerCase());
-        if (correctAnswers.length === userAnswers.length &&
-            correctAnswers.every(val => userAnswers.includes(val)) &&
-            userAnswers.every(val => correctAnswers.includes(val))) {
-          questionScore = q.points;
-        }
-      } else if (q.type === 'input' && userAnswer) {
-        if (String(userAnswer).trim().toLowerCase() === String(q.correctAnswers[0]).trim().toLowerCase()) {
-          questionScore = q.points;
-        }
-      } else if (q.type === 'ordering' && userAnswer && Array.isArray(userAnswer)) {
-        const userAnswers = userAnswer.map(val => String(val).trim().toLowerCase());
-        const correctAnswers = q.correctAnswers.map(val => String(val).trim().toLowerCase());
-        if (userAnswers.join(',') === correctAnswers.join(',')) {
-          questionScore = q.points;
-        }
-      } else if (q.type === 'matching' && userAnswer && Array.isArray(userAnswer)) {
-        const userPairs = userAnswer.map(pair => [String(pair[0]).trim().toLowerCase(), String(pair[1]).trim().toLowerCase()]);
-        const correctPairs = q.correctPairs.map(pair => [String(pair[0]).trim().toLowerCase(), String(pair[1]).trim().toLowerCase()]);
-        if (userPairs.length === correctPairs.length &&
-            userPairs.every(userPair => correctPairs.some(correctPair => userPair[0] === correctPair[0] && userPair[1] === correctPair[1]))) {
-          questionScore = q.points;
-        }
-      } else if (q.type === 'fillblank' && userAnswer && Array.isArray(userAnswer)) {
-        const userAnswers = userAnswer.map(val => String(val).trim().toLowerCase().replace(/\s+/g, '').replace(',', '.'));
-        const correctAnswers = q.correctAnswers.map(val => String(val).trim().toLowerCase().replace(/\s+/g, '').replace(',', '.'));
-        console.log(`Fillblank question ${index + 1} in /results: userAnswers=${userAnswers}, correctAnswers=${correctAnswers}`);
-        if (userAnswers.length === correctAnswers.length &&
-            userAnswers.every((answer, idx) => answer === correctAnswers[idx])) {
-          questionScore = q.points;
-        }
-      } else if (q.type === 'singlechoice' && userAnswer && Array.isArray(userAnswer)) {
-        const userAnswers = userAnswer.map(val => String(val).trim().toLowerCase());
-        const correctAnswer = String(q.correctAnswer).trim().toLowerCase();
-        console.log(`Single choice question ${index + 1} in /results: userAnswers=${userAnswers}, correctAnswer=${correctAnswer}`);
-        const isCorrect = userAnswers.length === 1 && userAnswers[0] === correctAnswer;
-        if (isCorrect) {
-          questionScore = q.points;
-        }
-      }
-      return questionScore;
-    });
-    score = scoresPerQuestion.reduce((sum, s) => sum + s, 0);
-    const endTime = Date.now();
-    const duration = Math.round((endTime - startTime) / 1000);
-    const percentage = (score / totalPoints) * 100;
-    const totalClicks = Object.keys(answers).length;
-    const correctClicks = scoresPerQuestion.filter(s => s > 0).length;
-    const totalQuestions = questions.length;
-    const formattedTime = new Date(endTime).toLocaleTimeString('uk-UA', { hour12: false });
-    const formattedDate = new Date(endTime).toLocaleDateString('uk-UA');
-    const imagePath = path.join(__dirname, 'public', 'images', 'A.png');
-    let imageBase64 = '';
-    try {
-      const imageBuffer = fs.readFileSync(imagePath);
-      imageBase64 = imageBuffer.toString('base64');
-    } catch (error) {
-      console.error('Error reading image A.png:', error.message, error.stack);
-    }
-
-    resultsHtml += `
-      <p>
-        Результат тесту<br>
-        ${Math.round(percentage)}%<br>
-        Кількість питань: ${totalQuestions}<br>
-        Правильних відповідей: ${correctClicks}<br>
-        Набрано балів: ${score}<br>
-        Максимально можлива кількість балів: ${totalPoints}<br>
-      </p>
-      <table>
-        <tr>
-          <th>Питання</th>
-          <th>Ваш відповідь</th>
-          <th>Правильна відповідь</th>
-          <th>Бали</th>
-        </tr>
-    `;
-    questions.forEach((q, index) => {
-      const userAnswer = answers[index] || 'Не відповіли';
-      let correctAnswer;
-      if (q.type === 'matching') {
-        correctAnswer = q.correctPairs.map(pair => `${pair[0]} -> ${pair[1]}`).join(', ');
-      } else if (q.type === 'fillblank') {
-        correctAnswer = q.correctAnswers.join(', ');
-      } else if (q.type === 'singlechoice') {
-        correctAnswer = q.correctAnswer;
-      } else {
-        correctAnswer = q.correctAnswers.join(', ');
-      }
-      const questionScore = scoresPerQuestion[index];
-      let userAnswerDisplay;
-      if (q.type === 'matching' && Array.isArray(userAnswer)) {
-        userAnswerDisplay = userAnswer.map(pair => `${pair[0]} -> ${pair[1]}`).join(', ');
-      } else if (q.type === 'fillblank' && Array.isArray(userAnswer)) {
-        userAnswerDisplay = userAnswer.join(', ');
-      } else if (Array.isArray(userAnswer)) {
-        userAnswerDisplay = userAnswer.join(', ');
-      } else {
-        userAnswerDisplay = userAnswer;
-      }
-      resultsHtml += `
-        <tr>
-          <td>${q.text}</td>
-          <td>${userAnswerDisplay}</td>
-          <td>${correctAnswer}</td>
-          <td>${questionScore} з ${q.points}</td>
-        </tr>
       `;
-    });
+      userTests.delete(req.user);
+    } else {
+      resultsHtml += '<p>Немає завершених тестів</p>';
+    }
     resultsHtml += `
-      </table>
-      <div class="buttons">
-        <button id="exportPDF">Експортувати в PDF</button>
-        <button id="restart">Повернутися на головну</button>
-      </div>
-      <script src="https://cdnjs.cloudflare.com/ajax/libs/pdfmake/0.2.7/pdfmake.min.js"></script>
-      <script src="https://cdnjs.cloudflare.com/ajax/libs/pdfmake/0.2.7/vfs_fonts.js"></script>
-      <script>
-        const user = "${req.user}";
-        const testName = "${testNames[testNumber].name}";
-        const totalQuestions = ${totalQuestions};
-        const correctClicks = ${correctClicks};
-        const score = ${score};
-        const totalPoints = ${totalPoints};
-        const percentage = ${Math.round(percentage)};
-        const time = "${formattedTime}";
-        const date = "${formattedDate}";
-        const imageBase64 = "${imageBase64}";
-
-        document.getElementById('exportPDF').addEventListener('click', () => {
-          const docDefinition = {
-            content: [
-              {
-                image: 'data:image/png;base64,' + imageBase64,
-                width: 150,
-                alignment: 'center',
-                margin: [0, 0, 0, 20]
-              },
-              { text: 'Результат тесту користувача ' + user + ' з тесту ' + testName + ' складає ' + percentage + '%', style: 'header' },
-              { text: 'Кількість питань: ' + totalQuestions },
-              { text: 'Правильних відповідей: ' + correctClicks },
-              { text: 'Набрано балів: ' + score },
-              { text: 'Максимально можлива кількість балів: ' + totalPoints },
-              {
-                columns: [
-                  { text: 'Час: ' + time, width: '50%' },
-                  { text: 'Дата: ' + date, width:                 '50%', alignment: 'right'
-              ],
-              margin: [0, 10, 0, 0]
-            }
-          ],
-          styles: {
-            header: { fontSize: 14, bold: true, margin: [0, 0, 0, 10] }
-          }
-        };
-        pdfMake.createPdf(docDefinition).download('results.pdf');
-      });
-
-      document.getElementById('restart').addEventListener('click', () => {
-        window.location.href = '/';
-      });
-    </script>
-  `;
-  userTests.delete(req.user);
-} else {
-  resultsHtml += '<p>Немає завершених тестів</p>';
-}
-resultsHtml += `
-    </body>
-  </html>
-`;
-res.send(resultsHtml);
+        </body>
+      </html>
+    `;
+    res.send(resultsHtml);
+  } finally {
+    const endTime = Date.now();
+    console.log(`Route /results executed in ${endTime - startTime} ms`);
+  }
 });
 
 app.get('/admin', checkAuth, checkAdmin, (req, res) => {
-  res.send(`
-    <!DOCTYPE html>
-    <html lang="uk">
-      <head>
-        <meta charset="UTF-8">
-        <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>Адмін-панель</title>
-        <style>
-          body { font-family: Arial, sans-serif; text-align: center; padding: 50px; font-size: 24px; margin: 0; }
-          h1 { font-size: 36px; margin-bottom: 20px; }
-          button { padding: 15px 30px; margin: 10px; font-size: 24px; cursor: pointer; width: 300px; border: none; border-radius: 5px; background-color: #4CAF50; color: white; }
-          button:hover { background-color: #45a049; }
-          #logout { background-color: #ef5350; color: white; }
-          @media (max-width: 600px) {
-            body { padding: 20px; padding-bottom: 80px; }
-            h1 { font-size: 32px; }
-            button { font-size: 20px; width: 90%; padding: 15px; }
-            #logout { position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%); width: 90%; }
-          }
-        </style>
-      </head>
-      <body>
-        <h1>Адмін-панель</h1>
-        <button onclick="window.location.href='/admin/users'">Керування користувачами</button><br>
-        <button onclick="window.location.href='/admin/questions'">Керування питаннями</button><br>
-        <button onclick="window.location.href='/admin/import-users'">Імпорт користувачів</button><br>
-        <button onclick="window.location.href='/admin/import-questions'">Імпорт питань</button><br>
-        <button onclick="window.location.href='/admin/results'">Перегляд результатів</button><br>
-        <button onclick="window.location.href='/admin/edit-tests'">Редагувати назви тестів</button><br>
-        <button onclick="window.location.href='/admin/create-test'">Створити новий тест</button><br>
-        <button onclick="window.location.href='/admin/activity-log'">Журнал дій</button><br>
-        <button id="logout" onclick="logout()">Вийти</button>
-        <script>
-          async function logout() {
-            const formData = new URLSearchParams();
-            await fetch('/logout', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-              credentials: 'include'
-            });
-            window.location.href = '/';
-          }
-        </script>
-      </body>
-    </html>
-  `);
+  const startTime = Date.now();
+  try {
+    const html = `
+      <!DOCTYPE html>
+      <html lang="uk">
+        <head>
+          <meta charset="UTF-8">
+          <meta name="viewport" content="width=device-width, initial-scale=1.0">
+          <title>Адмін-панель</title>
+          <style>
+            body { font-family: Arial, sans-serif; text-align: center; padding: 50px; font-size: 24px; margin: 0; }
+            h1 { font-size: 36px; margin-bottom: 20px; }
+            button { padding: 15px 30px; margin: 10px; font-size: 24px; cursor: pointer; width: 300px; border: none; border-radius: 5px; background-color: #4CAF50; color: white; }
+            button:hover { background-color: #45a049; }
+            #logout { background-color: #ef5350; color: white; }
+            @media (max-width: 600px) {
+              body { padding: 20px; padding-bottom: 80px; }
+              h1 { font-size: 32px; }
+              button { font-size: 20px; width: 90%; padding: 15px; }
+              #logout { position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%); width: 90%; }
+            }
+          </style>
+        </head>
+        <body>
+          <h1>Адмін-панель</h1>
+          <button onclick="window.location.href='/admin/users'">Керування користувачами</button><br>
+          <button onclick="window.location.href='/admin/questions'">Керування питаннями</button><br>
+          <button onclick="window.location.href='/admin/import-users'">Імпорт користувачів</button><br>
+          <button onclick="window.location.href='/admin/import-questions'">Імпорт питань</button><br>
+          <button onclick="window.location.href='/admin/results'">Перегляд результатів</button><br>
+          <button onclick="window.location.href='/admin/edit-tests'">Редагувати назви тестів</button><br>
+          <button onclick="window.location.href='/admin/create-test'">Створити новий тест</button><br>
+          <button onclick="window.location.href='/admin/activity-log'">Журнал дій</button><br>
+          <button id="logout" onclick="logout()">Вийти</button>
+          <script>
+            async function logout() {
+              const formData = new URLSearchParams();
+              await fetch('/logout', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                credentials: 'include'
+              });
+              window.location.href = '/';
+            }
+          </script>
+        </body>
+      </html>
+    `;
+    res.send(html);
+  } finally {
+    const endTime = Date.now();
+    console.log(`Route /admin executed in ${endTime - startTime} ms`);
+  }
 });
 
 app.get('/admin/users', checkAuth, checkAdmin, async (req, res) => {
-  let users = [];
-  let errorMessage = '';
+  const startTime = Date.now();
   try {
-    users = await db.collection('users').find({}).toArray();
-  } catch (error) {
-    console.error('Error fetching users from MongoDB:', error.message, error.stack);
-    errorMessage = `Помилка MongoDB: ${error.message}`;
-  }
+    let users = [];
+    let errorMessage = '';
+    try {
+      users = await db.collection('users').find({}).toArray();
+    } catch (error) {
+      console.error('Error fetching users from MongoDB:', error.message, error.stack);
+      errorMessage = `Помилка MongoDB: ${error.message}`;
+    }
 
-  let adminHtml = `
-    <!DOCTYPE html>
-    <html lang="uk">
-      <head>
-        <meta charset="UTF-8">
-        <title>Керування користувачами</title>
-        <style>
-          body { font-family: Arial, sans-serif; padding: 20px; }
-          table { border-collapse: collapse; width: 100%; margin-top: 20px; }
-          th, td { border: 1px solid black; padding: 8px; text-align: left; }
-          th { background-color: #f2f2f2; }
-          .error { color: red; }
-          .nav-btn, .action-btn { padding: 10px 20px; margin: 5px; cursor: pointer; border: none; border-radius: 5px; }
-          .action-btn.edit { background-color: #4CAF50; color: white; }
-          .action-btn.delete { background-color: #ff4d4d; color: white; }
-          .nav-btn { background-color: #007bff; color: white; }
-        </style>
-      </head>
-      <body>
-        <h1>Керування користувачами</h1>
-        <button class="nav-btn" onclick="window.location.href='/admin'">Повернутися до адмін-панелі</button>
-        <button class="nav-btn" onclick="window.location.href='/admin/add-user'">Додати користувача</button>
-  `;
-  if (errorMessage) {
-    adminHtml += `<p class="error">${errorMessage}</p>`;
-  }
-  adminHtml += `
-        <table>
+    let adminHtml = `
+      <!DOCTYPE html>
+      <html lang="uk">
+        <head>
+          <meta charset="UTF-8">
+          <title>Керування користувачами</title>
+          <style>
+            body { font-family: Arial, sans-serif; padding: 20px; }
+            table { border-collapse: collapse; width: 100%; margin-top: 20px; }
+            th, td { border: 1px solid black; padding: 8px; text-align: left; }
+            th { background-color: #f2f2f2; }
+            .error { color: red; }
+            .nav-btn, .action-btn { padding: 10px 20px; margin: 5px; cursor: pointer; border: none; border-radius: 5px; }
+            .action-btn.edit { background-color: #4CAF50; color: white; }
+            .action-btn.delete { background-color: #ff4d4d; color: white; }
+            .nav-btn { background-color: #007bff; color: white; }
+          </style>
+        </head>
+        <body>
+          <h1>Керування користувачами</h1>
+          <button class="nav-btn" onclick="window.location.href='/admin'">Повернутися до адмін-панелі</button>
+          <button class="nav-btn" onclick="window.location.href='/admin/add-user'">Додати користувача</button>
+    `;
+    if (errorMessage) {
+      adminHtml += `<p class="error">${errorMessage}</p>`;
+    }
+    adminHtml += `
+          <table>
+            <tr>
+              <th>Ім'я користувача</th>
+              <th>Дії</th>
+            </tr>
+    `;
+    if (!users || users.length === 0) {
+      adminHtml += '<tr><td colspan="2">Немає користувачів</td></tr>';
+    } else {
+      users.forEach(user => {
+        adminHtml += `
           <tr>
-            <th>Ім'я користувача</th>
-            <th>Дії</th>
+            <td>${user.username}</td>
+            <td>
+              <button class="action-btn edit" onclick="window.location.href='/admin/edit-user?username=${user.username}'">Редагувати</button>
+              <button class="action-btn delete" onclick="deleteUser('${user.username}')">Видалити</button>
+            </td>
           </tr>
-  `;
-  if (!users || users.length === 0) {
-    adminHtml += '<tr><td colspan="2">Немає користувачів</td></tr>';
-  } else {
-    users.forEach(user => {
-      adminHtml += `
-        <tr>
-          <td>${user.username}</td>
-          <td>
-            <button class="action-btn edit" onclick="window.location.href='/admin/edit-user?username=${user.username}'">Редагувати</button>
-            <button class="action-btn delete" onclick="deleteUser('${user.username}')">Видалити</button>
-          </td>
-        </tr>
-      `;
-    });
-  }
-  adminHtml += `
-        </table>
-        <script>
-          async function deleteUser(username) {
-            if (confirm('Ви впевнені, що хочете видалити користувача ' + username + '?')) {
-              try {
-                const formData = new URLSearchParams();
-                formData.append('username', username);
-                const response = await fetch('/admin/delete-user', {
-                  method: 'POST',
-                  headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-                  credentials: 'include'
-                });
-                const result = await response.json();
-                if (result.success) {
-                  window.location.reload();
-                } else {
-                  alert('Помилка при видаленні користувача: ' + result.message);
+        `;
+      });
+    }
+    adminHtml += `
+          </table>
+          <script>
+            async function deleteUser(username) {
+              if (confirm('Ви впевнені, що хочете видалити користувача ' + username + '?')) {
+                try {
+                  const formData = new URLSearchParams();
+                  formData.append('username', username);
+                  const response = await fetch('/admin/delete-user', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                    credentials: 'include'
+                  });
+                  const result = await response.json();
+                  if (result.success) {
+                    window.location.reload();
+                  } else {
+                    alert('Помилка при видаленні користувача: ' + result.message);
+                  }
+                } catch (error) {
+                  alert('Помилка при видаленні користувача');
                 }
-              } catch (error) {
-                alert('Помилка при видаленні користувача');
               }
             }
-          }
-        </script>
-      </body>
-    </html>
-  `;
-  res.send(adminHtml);
+          </script>
+        </body>
+      </html>
+    `;
+    res.send(adminHtml);
+  } finally {
+    const endTime = Date.now();
+    console.log(`Route /admin/users executed in ${endTime - startTime} ms`);
+  }
 });
 
 app.get('/admin/add-user', checkAuth, checkAdmin, (req, res) => {
-  res.send(`
-    <!DOCTYPE html>
-    <html lang="uk">
-      <head>
-        <meta charset="UTF-8">
-        <title>Додати користувача</title>
-        <style>
-          body { font-family: Arial, sans-serif; padding: 20px; }
-          label { display: block; margin: 10px 0 5px; }
-          input { padding: 5px; width: 300px; margin-bottom: 10px; }
-          button { padding: 10px 20px; margin: 5px; cursor: pointer; border: none; border-radius: 5px; }
-          .nav-btn { background-color: #007bff; color: white; }
-          .submit-btn { background-color: #4CAF50; color: white; }
-          .error { color: red; }
-        </style>
-      </head>
-      <body>
-        <h1>Додати користувача</h1>
-        <form method="POST" action="/admin/add-user" onsubmit="return validateForm()">
-          <label for="username">Ім'я користувача:</label>
-          <input type="text" id="username" name="username" required>
-          <label for="password">Пароль:</label>
-          <input type="text" id="password" name="password" required>
-          <button type="submit" class="submit-btn">Додати</button>
-        </form>
-        <div id="error-message" class="error"></div>
-        <button class="nav-btn" onclick="window.location.href='/admin/users'">Повернутися до списку користувачів</button>
-        <script>
-          function validateForm() {
-            const username = document.getElementById('username').value;
-            const password = document.getElementById('password').value;
-            const errorMessage = document.getElementById('error-message');
-            if (username.length < 3 || username.length > 50) {
-              errorMessage.textContent = 'Ім’я користувача має бути від 3 до 50 символів';
-              return false;
+  const startTime = Date.now();
+  try {
+    const html = `
+      <!DOCTYPE html>
+      <html lang="uk">
+        <head>
+          <meta charset="UTF-8">
+          <title>Додати користувача</title>
+          <style>
+            body { font-family: Arial, sans-serif; padding: 20px; }
+            label { display: block; margin: 10px 0 5px; }
+            input { padding: 5px; width: 300px; margin-bottom: 10px; }
+            button { padding: 10px 20px; margin: 5px; cursor: pointer; border: none; border-radius: 5px; }
+            .nav-btn { background-color: #007bff; color: white; }
+            .submit-btn { background-color: #4CAF50; color: white; }
+            .error { color: red; }
+          </style>
+        </head>
+        <body>
+          <h1>Додати користувача</h1>
+          <form method="POST" action="/admin/add-user" onsubmit="return validateForm()">
+            <label for="username">Ім'я користувача:</label>
+            <input type="text" id="username" name="username" required>
+            <label for="password">Пароль:</label>
+            <input type="text" id="password" name="password" required>
+            <button type="submit" class="submit-btn">Додати</button>
+          </form>
+          <div id="error-message" class="error"></div>
+          <button class="nav-btn" onclick="window.location.href='/admin/users'">Повернутися до списку користувачів</button>
+          <script>
+            function validateForm() {
+              const username = document.getElementById('username').value;
+              const password = document.getElementById('password').value;
+              const errorMessage = document.getElementById('error-message');
+              if (username.length < 3 || username.length > 50) {
+                errorMessage.textContent = 'Ім’я користувача має бути від 3 до 50 символів';
+                return false;
+              }
+              if (!/^[a-zA-Z0-9а-яА-Я]+$/.test(username)) {
+                errorMessage.textContent = 'Ім’я користувача може містити лише літери та цифри';
+                return false;
+              }
+              if (password.length < 6 || password.length > 100) {
+                errorMessage.textContent = 'Пароль має бути від 6 до 100 символів';
+                return false;
+              }
+              return true;
             }
-            if (!/^[a-zA-Z0-9а-яА-Я]+$/.test(username)) {
-              errorMessage.textContent = 'Ім’я користувача може містити лише літери та цифри';
-              return false;
-            }
-            if (password.length < 6 || password.length > 100) {
-              errorMessage.textContent = 'Пароль має бути від 6 до 100 символів';
-              return false;
-            }
-            return true;
-          }
-        </script>
-      </body>
-    </html>
-  `);
+          </script>
+        </body>
+      </html>
+    `;
+    res.send(html);
+  } finally {
+    const endTime = Date.now();
+    console.log(`Route /admin/add-user executed in ${endTime - startTime} ms`);
+  }
 });
 
 app.post('/admin/add-user', checkAuth, checkAdmin, async (req, res) => {
+  const startTime = Date.now();
   try {
     const { username, password } = req.body;
     if (!username || username.length < 3 || username.length > 50) {
@@ -1854,69 +1961,80 @@ app.post('/admin/add-user', checkAuth, checkAdmin, async (req, res) => {
   } catch (error) {
     console.error('Error adding user:', error.message, error.stack);
     res.status(500).send('Помилка при додаванні користувача');
+  } finally {
+    const endTime = Date.now();
+    console.log(`Route /admin/add-user (POST) executed in ${endTime - startTime} ms`);
   }
 });
 
 app.get('/admin/edit-user', checkAuth, checkAdmin, async (req, res) => {
-  const { username } = req.query;
-  const user = await db.collection('users').findOne({ username });
-  if (!user) {
-    return res.status(404).send('Користувача не знайдено');
+  const startTime = Date.now();
+  try {
+    const { username } = req.query;
+    const user = await db.collection('users').findOne({ username });
+    if (!user) {
+      return res.status(404).send('Користувача не знайдено');
+    }
+    const html = `
+      <!DOCTYPE html>
+      <html lang="uk">
+        <head>
+          <meta charset="UTF-8">
+          <title>Редагувати користувача</title>
+          <style>
+            body { font-family: Arial, sans-serif; padding: 20px; }
+            label { display: block; margin: 10px 0 5px; }
+            input { padding: 5px; width: 300px; margin-bottom: 10px; }
+            button { padding: 10px 20px; margin: 5px; cursor: pointer; border: none; border-radius: 5px; }
+            .nav-btn { background-color: #007bff; color: white; }
+            .submit-btn { background-color: #4CAF50; color: white; }
+            .error { color: red; }
+          </style>
+        </head>
+        <body>
+          <h1>Редагувати користувача: ${username}</h1>
+          <form method="POST" action="/admin/edit-user" onsubmit="return validateForm()">
+            <input type="hidden" name="oldUsername" value="${username}">
+            <label for="username">Нове ім'я користувача:</label>
+            <input type="text" id="username" name="username" value="${username}" required>
+            <label for="password">Новий пароль (залиште порожнім, щоб не змінювати):</label>
+            <input type="text" id="password" name="password" placeholder="Введіть новий пароль">
+            <button type="submit" class="submit-btn">Зберегти</button>
+          </form>
+          <div id="error-message" class="error"></div>
+          <button class="nav-btn" onclick="window.location.href='/admin/users'">Повернутися до списку користувачів</button>
+          <script>
+            function validateForm() {
+              const username = document.getElementById('username').value;
+              const password = document.getElementById('password').value;
+              const errorMessage = document.getElementById('error-message');
+              if (username.length < 3 || username.length > 50) {
+                errorMessage.textContent = 'Ім’я користувача має бути від 3 до 50 символів';
+                return false;
+              }
+              if (!/^[a-zA-Z0-9а-яА-Я]+$/.test(username)) {
+                errorMessage.textContent = 'Ім’я користувача може містити лише літери та цифри';
+                return false;
+              }
+              if (password && (password.length < 6 || password.length > 100)) {
+                errorMessage.textContent = 'Пароль має бути від 6 до 100 символів';
+                return false;
+              }
+              return true;
+            }
+          </script>
+        </body>
+      </html>
+    `;
+    res.send(html);
+  } finally {
+    const endTime = Date.now();
+    console.log(`Route /admin/edit-user executed in ${endTime - startTime} ms`);
   }
-  res.send(`
-    <!DOCTYPE html>
-    <html lang="uk">
-      <head>
-        <meta charset="UTF-8">
-        <title>Редагувати користувача</title>
-        <style>
-          body { font-family: Arial, sans-serif; padding: 20px; }
-          label { display: block; margin: 10px 0 5px; }
-          input { padding: 5px; width: 300px; margin-bottom: 10px; }
-          button { padding: 10px 20px; margin: 5px; cursor: pointer; border: none; border-radius: 5px; }
-          .nav-btn { background-color: #007bff; color: white; }
-          .submit-btn { background-color: #4CAF50; color: white; }
-          .error { color: red; }
-        </style>
-      </head>
-      <body>
-        <h1>Редагувати користувача: ${username}</h1>
-        <form method="POST" action="/admin/edit-user" onsubmit="return validateForm()">
-          <input type="hidden" name="oldUsername" value="${username}">
-          <label for="username">Нове ім'я користувача:</label>
-          <input type="text" id="username" name="username" value="${username}" required>
-          <label for="password">Новий пароль (залиште порожнім, щоб не змінювати):</label>
-          <input type="text" id="password" name="password" placeholder="Введіть новий пароль">
-          <button type="submit" class="submit-btn">Зберегти</button>
-        </form>
-        <div id="error-message" class="error"></div>
-        <button class="nav-btn" onclick="window.location.href='/admin/users'">Повернутися до списку користувачів</button>
-        <script>
-          function validateForm() {
-            const username = document.getElementById('username').value;
-            const password = document.getElementById('password').value;
-            const errorMessage = document.getElementById('error-message');
-            if (username.length < 3 || username.length > 50) {
-              errorMessage.textContent = 'Ім’я користувача має бути від 3 до 50 символів';
-              return false;
-            }
-            if (!/^[a-zA-Z0-9а-яА-Я]+$/.test(username)) {
-              errorMessage.textContent = 'Ім’я користувача може містити лише літери та цифри';
-              return false;
-            }
-            if (password && (password.length < 6 || password.length > 100)) {
-              errorMessage.textContent = 'Пароль має бути від 6 до 100 символів';
-              return false;
-            }
-            return true;
-          }
-        </script>
-      </body>
-    </html>
-  `);
 });
 
 app.post('/admin/edit-user', checkAuth, checkAdmin, async (req, res) => {
+  const startTime = Date.now();
   try {
     const { oldUsername, username, password } = req.body;
     if (!username || username.length < 3 || username.length > 50) {
@@ -1958,10 +2076,14 @@ app.post('/admin/edit-user', checkAuth, checkAdmin, async (req, res) => {
   } catch (error) {
     console.error('Error editing user:', error.message, error.stack);
     res.status(500).send('Помилка при редагуванні користувача');
+  } finally {
+    const endTime = Date.now();
+    console.log(`Route /admin/edit-user (POST) executed in ${endTime - startTime} ms`);
   }
 });
 
 app.post('/admin/delete-user', checkAuth, checkAdmin, async (req, res) => {
+  const startTime = Date.now();
   try {
     const { username } = req.body;
     await db.collection('users').deleteOne({ username });
@@ -1969,187 +2091,204 @@ app.post('/admin/delete-user', checkAuth, checkAdmin, async (req, res) => {
   } catch (error) {
     console.error('Error deleting user:', error.message, error.stack);
     res.status(500).json({ success: false, message: 'Помилка при видаленні користувача' });
+  } finally {
+    const endTime = Date.now();
+    console.log(`Route /admin/delete-user executed in ${endTime - startTime} ms`);
   }
 });
 
 app.get('/admin/questions', checkAuth, checkAdmin, async (req, res) => {
-  let questions = [];
-  let errorMessage = '';
+  const startTime = Date.now();
   try {
-    questions = await db.collection('questions').find({}).sort({ testNumber: 1 }).toArray();
-  } catch (error) {
-    console.error('Error fetching questions from MongoDB:', error.message, error.stack);
-    errorMessage = `Помилка MongoDB: ${error.message}`;
-  }
+    let questions = [];
+    let errorMessage = '';
+    try {
+      questions = await db.collection('questions').find({}).sort({ testNumber: 1 }).toArray();
+    } catch (error) {
+      console.error('Error fetching questions from MongoDB:', error.message, error.stack);
+      errorMessage = `Помилка MongoDB: ${error.message}`;
+    }
 
-  let adminHtml = `
-    <!DOCTYPE html>
-    <html lang="uk">
-      <head>
-        <meta charset="UTF-8">
-        <title>Керування питаннями</title>
-        <style>
-          body { font-family: Arial, sans-serif; padding: 20px; }
-          table { border-collapse: collapse; width: 100%; margin-top: 20px; }
-          th, td { border: 1px solid black; padding: 8px; text-align: left; }
-          th { background-color: #f2f2f2; }
-          .error { color: red; }
-          .nav-btn, .action-btn { padding: 10px 20px; margin: 5px; cursor: pointer; border: none; border-radius: 5px; }
-          .action-btn.edit { background-color: #4CAF50; color: white; }
-          .action-btn.delete { background-color: #ff4d4d; color: white; }
-          .nav-btn { background-color: #007bff; color: white; }
-        </style>
-      </head>
-      <body>
-        <h1>Керування питаннями</h1>
-        <button class="nav-btn" onclick="window.location.href='/admin'">Повернутися до адмін-панелі</button>
-        <button class="nav-btn" onclick="window.location.href='/admin/add-question'">Додати питання</button>
-  `;
-  if (errorMessage) {
-    adminHtml += `<p class="error">${errorMessage}</p>`;
-  }
-  adminHtml += `
-        <table>
+    let adminHtml = `
+      <!DOCTYPE html>
+      <html lang="uk">
+        <head>
+          <meta charset="UTF-8">
+          <title>Керування питаннями</title>
+          <style>
+            body { font-family: Arial, sans-serif; padding: 20px; }
+            table { border-collapse: collapse; width: 100%; margin-top: 20px; }
+            th, td { border: 1px solid black; padding: 8px; text-align: left; }
+            th { background-color: #f2f2f2; }
+            .error { color: red; }
+            .nav-btn, .action-btn { padding: 10px 20px; margin: 5px; cursor: pointer; border: none; border-radius: 5px; }
+            .action-btn.edit { background-color: #4CAF50; color: white; }
+            .action-btn.delete { background-color: #ff4d4d; color: white; }
+            .nav-btn { background-color: #007bff; color: white; }
+          </style>
+        </head>
+        <body>
+          <h1>Керування питаннями</h1>
+          <button class="nav-btn" onclick="window.location.href='/admin'">Повернутися до адмін-панелі</button>
+          <button class="nav-btn" onclick="window.location.href='/admin/add-question'">Додати питання</button>
+    `;
+    if (errorMessage) {
+      adminHtml += `<p class="error">${errorMessage}</p>`;
+    }
+    adminHtml += `
+          <table>
+            <tr>
+              <th>Тест</th>
+              <th>Текст питання</th>
+              <th>Тип</th>
+              <th>Варіант</th>
+              <th>Дії</th>
+            </tr>
+    `;
+    if (!questions || questions.length === 0) {
+      adminHtml += '<tr><td colspan="5">Немає питань</td></tr>';
+    } else {
+      questions.forEach(question => {
+        adminHtml += `
           <tr>
-            <th>Тест</th>
-            <th>Текст питання</th>
-            <th>Тип</th>
-            <th>Варіант</th>
-            <th>Дії</th>
+            <td>${testNames[question.testNumber]?.name || 'Невідомий тест'}</td>
+            <td>${question.text}</td>
+            <td>${question.type}</td>
+            <td>${question.variant || 'Немає'}</td>
+            <td>
+              <button class="action-btn edit" onclick="window.location.href='/admin/edit-question?id=${question._id}'">Редагувати</button>
+              <button class="action-btn delete" onclick="deleteQuestion('${question._id}')">Видалити</button>
+            </td>
           </tr>
-  `;
-  if (!questions || questions.length === 0) {
-    adminHtml += '<tr><td colspan="5">Немає питань</td></tr>';
-  } else {
-    questions.forEach(question => {
-      adminHtml += `
-        <tr>
-          <td>${testNames[question.testNumber]?.name || 'Невідомий тест'}</td>
-          <td>${question.text}</td>
-          <td>${question.type}</td>
-          <td>${question.variant || 'Немає'}</td>
-          <td>
-            <button class="action-btn edit" onclick="window.location.href='/admin/edit-question?id=${question._id}'">Редагувати</button>
-            <button class="action-btn delete" onclick="deleteQuestion('${question._id}')">Видалити</button>
-          </td>
-        </tr>
-      `;
-    });
-  }
-  adminHtml += `
-        </table>
-        <script>
-          async function deleteQuestion(id) {
-            if (confirm('Ви впевнені, що хочете видалити це питання?')) {
-              try {
-                const formData = new URLSearchParams();
-                formData.append('id', id);
-                const response = await fetch('/admin/delete-question', {
-                  method: 'POST',
-                  headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-                  credentials: 'include'
-                });
-                const result = await response.json();
-                if (result.success) {
-                  window.location.reload();
-                } else {
-                  alert('Помилка при видаленні питання: ' + result.message);
+        `;
+      });
+    }
+    adminHtml += `
+          </table>
+          <script>
+            async function deleteQuestion(id) {
+              if (confirm('Ви впевнені, що хочете видалити це питання?')) {
+                try {
+                  const formData = new URLSearchParams();
+                  formData.append('id', id);
+                  const response = await fetch('/admin/delete-question', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                    credentials: 'include'
+                  });
+                  const result = await response.json();
+                  if (result.success) {
+                    window.location.reload();
+                  } else {
+                    alert('Помилка при видаленні питання: ' + result.message);
+                  }
+                } catch (error) {
+                  alert('Помилка при видаленні питання');
                 }
-              } catch (error) {
-                alert('Помилка при видаленні питання');
               }
             }
-          }
-        </script>
-      </body>
-    </html>
-  `;
-  res.send(adminHtml);
+          </script>
+        </body>
+      </html>
+    `;
+    res.send(adminHtml);
+  } finally {
+    const endTime = Date.now();
+    console.log(`Route /admin/questions executed in ${endTime - startTime} ms`);
+  }
 });
 
 app.get('/admin/add-question', checkAuth, checkAdmin, (req, res) => {
-  res.send(`
-    <!DOCTYPE html>
-    <html lang="uk">
-      <head>
-        <meta charset="UTF-8">
-        <title>Додати питання</title>
-        <style>
-          body { font-family: Arial, sans-serif; padding: 20px; }
-          label { display: block; margin: 10px 0 5px; }
-          input, select, textarea { padding: 5px; width: 300px; margin-bottom: 10px; }
-          textarea { width: 500px; height: 100px; }
-          button { padding: 10px 20px; margin: 5px; cursor: pointer; border: none; border-radius: 5px; }
-          .nav-btn { background-color: #007bff; color: white; }
-          .submit-btn { background-color: #4CAF50; color: white; }
-          .error { color: red; }
-        </style>
-      </head>
-      <body>
-        <h1>Додати питання</h1>
-        <form method="POST" action="/admin/add-question" onsubmit="return validateForm()">
-          <label for="testNumber">Номер тесту:</label>
-          <select id="testNumber" name="testNumber" required>
-            ${Object.keys(testNames).map(num => `<option value="${num}">${testNames[num].name}</option>`).join('')}
-          </select>
-          <label for="picture">Посилання на фото (опціонально):</label>
-          <input type="text" id="picture" name="picture" placeholder="Введіть URL зображення">
-          <label for="text">Текст питання:</label>
-          <textarea id="text" name="text" required></textarea>
-          <label for="type">Тип питання:</label>
-          <select id="type" name="type" required>
-            <option value="multiple">Multiple Choice</option>
-            <option value="singlechoice">Single Choice</option>
-            <option value="truefalse">True/False</option>
-            <option value="input">Input</option>
-            <option value="ordering">Ordering</option>
-            <option value="matching">Matching</option>
-            <option value="fillblank">Fill in the Blank</option>
-          </select>
-          <label for="options">Варіанти відповідей (через кому):</label>
-          <textarea id="options" name="options" placeholder="Введіть варіанти через кому"></textarea>
-          <label for="correctAnswers">Правильні відповіді (через кому):</label>
-          <textarea id="correctAnswers" name="correctAnswers" required placeholder="Введіть правильні відповіді через кому"></textarea>
-          <label for="points">Бали за питання:</label>
-          <input type="number" id="points" name="points" value="1" min="1" required>
-          <label for="variant">Варіант (опціонально):</label>
-          <input type="text" id="variant" name="variant" placeholder="Наприклад, Variant 1">
-          <button type="submit" class="submit-btn">Додати</button>
-        </form>
-        <div id="error-message" class="error"></div>
-        <button class="nav-btn" onclick="window.location.href='/admin/questions'">Повернутися до списку питань</button>
-        <script>
-          function validateForm() {
-            const text = document.getElementById('text').value;
-            const points = document.getElementById('points').value;
-            const variant = document.getElementById('variant').value;
-            const picture = document.getElementById('picture').value;
-            const errorMessage = document.getElementById('error-message');
-            if (text.length < 5 || text.length > 1000) {
-              errorMessage.textContent = 'Текст питання має бути від 5 до 1000 символів';
-              return false;
+  const startTime = Date.now();
+  try {
+    const html = `
+      <!DOCTYPE html>
+      <html lang="uk">
+        <head>
+          <meta charset="UTF-8">
+          <title>Додати питання</title>
+          <style>
+            body { font-family: Arial, sans-serif; padding: 20px; }
+            label { display: block; margin: 10px 0 5px; }
+            input, select, textarea { padding: 5px; width: 300px; margin-bottom: 10px; }
+            textarea { width: 500px; height: 100px; }
+            button { padding: 10px 20px; margin: 5px; cursor: pointer; border: none; border-radius: 5px; }
+            .nav-btn { background-color: #007bff; color: white; }
+            .submit-btn { background-color: #4CAF50; color: white; }
+            .error { color: red; }
+          </style>
+        </head>
+        <body>
+          <h1>Додати питання</h1>
+          <form method="POST" action="/admin/add-question" onsubmit="return validateForm()">
+            <label for="testNumber">Номер тесту:</label>
+            <select id="testNumber" name="testNumber" required>
+              ${Object.keys(testNames).map(num => `<option value="${num}">${testNames[num].name}</option>`).join('')}
+            </select>
+            <label for="picture">Посилання на фото (опціонально):</label>
+            <input type="text" id="picture" name="picture" placeholder="Введіть URL зображення">
+            <label for="text">Текст питання:</label>
+            <textarea id="text" name="text" required></textarea>
+            <label for="type">Тип питання:</label>
+            <select id="type" name="type" required>
+              <option value="multiple">Multiple Choice</option>
+              <option value="singlechoice">Single Choice</option>
+              <option value="truefalse">True/False</option>
+              <option value="input">Input</option>
+              <option value="ordering">Ordering</option>
+              <option value="matching">Matching</option>
+              <option value="fillblank">Fill in the Blank</option>
+            </select>
+            <label for="options">Варіанти відповідей (через кому):</label>
+            <textarea id="options" name="options" placeholder="Введіть варіанти через кому"></textarea>
+            <label for="correctAnswers">Правильні відповіді (через кому):</label>
+            <textarea id="correctAnswers" name="correctAnswers" required placeholder="Введіть правильні відповіді через кому"></textarea>
+            <label for="points">Бали за питання:</label>
+            <input type="number" id="points" name="points" value="1" min="1" required>
+            <label for="variant">Варіант (опціонально):</label>
+            <input type="text" id="variant" name="variant" placeholder="Наприклад, Variant 1">
+            <button type="submit" class="submit-btn">Додати</button>
+          </form>
+          <div id="error-message" class="error"></div>
+          <button class="nav-btn" onclick="window.location.href='/admin/questions'">Повернутися до списку питань</button>
+          <script>
+            function validateForm() {
+              const text = document.getElementById('text').value;
+              const points = document.getElementById('points').value;
+              const variant = document.getElementById('variant').value;
+              const picture = document.getElementById('picture').value;
+              const errorMessage = document.getElementById('error-message');
+              if (text.length < 5 || text.length > 1000) {
+                errorMessage.textContent = 'Текст питання має бути від 5 до 1000 символів';
+                return false;
+              }
+              if (points < 1 || points > 100) {
+                errorMessage.textContent = 'Бали мають бути числом від 1 до 100';
+                return false;
+              }
+              if (variant && (variant.length < 1 || variant.length > 50)) {
+                errorMessage.textContent = 'Варіант має бути від 1 до 50 символів';
+                return false;
+              }
+              if (picture && !/^https?:\/\/.*\.(jpeg|jpg|png|gif)$/i.test(picture)) {
+                errorMessage.textContent = 'Посилання на фото має бути дійсним URL із розширенням .jpeg, .jpg, .png або .gif';
+                return false;
+              }
+              return true;
             }
-            if (points < 1 || points > 100) {
-              errorMessage.textContent = 'Бали мають бути числом від 1 до 100';
-              return false;
-            }
-            if (variant && (variant.length < 1 || variant.length > 50)) {
-              errorMessage.textContent = 'Варіант має бути від 1 до 50 символів';
-              return false;
-            }
-            if (picture && !/^https?:\/\/.*\.(jpeg|jpg|png|gif)$/i.test(picture)) {
-              errorMessage.textContent = 'Посилання на фото має бути дійсним URL із розширенням .jpeg, .jpg, .png або .gif';
-              return false;
-            }
-            return true;
-          }
-        </script>
-      </body>
-    </html>
-  `);
+          </script>
+        </body>
+      </html>
+    `;
+    res.send(html);
+  } finally {
+    const endTime = Date.now();
+    console.log(`Route /admin/add-question executed in ${endTime - startTime} ms`);
+  }
 });
 
 app.post('/admin/add-question', checkAuth, checkAdmin, async (req, res) => {
+  const startTime = Date.now();
   try {
     const { testNumber, text, type, options, correctAnswers, points, variant, picture } = req.body;
     if (!testNumber || !text || !type || !correctAnswers) {
@@ -2231,98 +2370,109 @@ app.post('/admin/add-question', checkAuth, checkAdmin, async (req, res) => {
   } catch (error) {
     console.error('Error adding question:', error.message, error.stack);
     res.status(500).send('Помилка при додаванні питання');
+  } finally {
+    const endTime = Date.now();
+    console.log(`Route /admin/add-question (POST) executed in ${endTime - startTime} ms`);
   }
 });
 
 app.get('/admin/edit-question', checkAuth, checkAdmin, async (req, res) => {
-  const { id } = req.query;
-  const question = await db.collection('questions').findOne({ _id: new ObjectId(id) });
-  if (!question) {
-    return res.status(404).send('Питання не знайдено');
+  const startTime = Date.now();
+  try {
+    const { id } = req.query;
+    const question = await db.collection('questions').findOne({ _id: new ObjectId(id) });
+    if (!question) {
+      return res.status(404).send('Питання не знайдено');
+    }
+    const html = `
+      <!DOCTYPE html>
+      <html lang="uk">
+        <head>
+          <meta charset="UTF-8">
+          <title>Редагувати питання</title>
+          <style>
+            body { font-family: Arial, sans-serif; padding: 20px; }
+            label { display: block; margin: 10px 0 5px; }
+            input, select, textarea { padding: 5px; width: 300px; margin-bottom: 10px; }
+            textarea { width: 500px; height: 100px; }
+            button { padding: 10px 20px; margin: 5px; cursor: pointer; border: none; border-radius: 5px; }
+            .nav-btn { background-color: #007bff; color: white; }
+            .submit-btn { background-color: #4CAF50; color: white; }
+            .error { color: red; }
+          </style>
+        </head>
+        <body>
+          <h1>Редагувати питання</h1>
+          <form method="POST" action="/admin/edit-question" onsubmit="return validateForm()">
+            <input type="hidden" name="id" value="${id}">
+            <label for="testNumber">Номер тесту:</label>
+            <select id="testNumber" name="testNumber" required>
+              ${Object.keys(testNames).map(num => `<option value="${num}" ${num === question.testNumber ? 'selected' : ''}>${testNames[num].name}</option>`).join('')}
+            </select>
+            <label for="picture">Посилання на фото (опціонально):</label>
+            <input type="text" id="picture" name="picture" value="${question.picture || ''}" placeholder="Введіть URL зображення">
+            <label for="text">Текст питання:</label>
+            <textarea id="text" name="text" required>${question.text}</textarea>
+            <label for="type">Тип питання:</label>
+            <select id="type" name="type" required>
+              <option value="multiple" ${question.type === 'multiple' ? 'selected' : ''}>Multiple Choice</option>
+              <option value="singlechoice" ${question.type === 'singlechoice' ? 'selected' : ''}>Single Choice</option>
+              <option value="truefalse" ${question.type === 'truefalse' ? 'selected' : ''}>True/False</option>
+              <option value="input" ${question.type === 'input' ? 'selected' : ''}>Input</option>
+              <option value="ordering" ${question.type === 'ordering' ? 'selected' : ''}>Ordering</option>
+              <option value="matching" ${question.type === 'matching' ? 'selected' : ''}>Matching</option>
+              <option value="fillblank" ${question.type === 'fillblank' ? 'selected' : ''}>Fill in the Blank</option>
+            </select>
+            <label for="options">Варіанти відповідей (через кому):</label>
+            <textarea id="options" name="options">${question.options.join(', ')}</textarea>
+            <label for="correctAnswers">Правильні відповіді (через кому):</label>
+            <textarea id="correctAnswers" name="correctAnswers" required>${question.correctAnswers.join(', ')}</textarea>
+            <label for="points">Бали за питання:</label>
+            <input type="number" id="points" name="points" value="${question.points}" min="1" required>
+            <label for="variant">Варіант:</label>
+            <input type="text" id="variant" name="variant" value="${question.variant}">
+            <button type="submit" class="submit-btn">Зберегти</button>
+          </form>
+          <div id="error-message" class="error"></div>
+          <button class="nav-btn" onclick="window.location.href='/admin/questions'">Повернутися до списку питань</button>
+          <script>
+            function validateForm() {
+              const text = document.getElementById('text').value;
+              const points = document.getElementById('points').value;
+              const variant = document.getElementById('variant').value;
+              const picture = document.getElementById('picture').value;
+              const errorMessage = document.getElementById('error-message');
+              if (text.length < 5 || text.length > 1000) {
+                errorMessage.textContent = 'Текст питання має бути від 5 до 1000 символів';
+                return false;
+              }
+              if (points < 1 || points > 100) {
+                errorMessage.textContent = 'Бали мають бути числом від 1 до 100';
+                return false;
+              }
+              if (variant && (variant.length < 1 || variant.length > 50)) {
+                errorMessage.textContent = 'Варіант має бути від 1 до 50 символів';
+                return false;
+              }
+              if (picture && !/^https?:\/\/.*\.(jpeg|jpg|png|gif)$/i.test(picture)) {
+                errorMessage.textContent = 'Посилання на фото має бути дійсним URL із розширенням .jpeg, .jpg, .png або .gif';
+                return false;
+              }
+              return true;
+            }
+          </script>
+        </body>
+      </html>
+    `;
+    res.send(html);
+  } finally {
+    const endTime = Date.now();
+    console.log(`Route /admin/edit-question executed in ${endTime - startTime} ms`);
   }
-  res.send(`
-    <!DOCTYPE html>
-    <html lang="uk">
-      <head>
-        <meta charset="UTF-8">
-        <title>Редагувати питання</title>
-        <style>
-          body { font-family: Arial, sans-serif; padding: 20px; }
-          label { display: block; margin: 10px 0 5px; }
-          input, select, textarea { padding: 5px; width: 300px; margin-bottom: 10px; }
-          textarea { width: 500px; height: 100px; }
-          button { padding: 10px 20px; margin: 5px; cursor: pointer; border: none; border-radius: 5px; }
-          .nav-btn { background-color: #007bff; color: white; }
-          .submit-btn { background-color: #4CAF50; color: white; }
-          .error { color: red; }
-        </style>
-      </head>
-      <body>
-        <h1>Редагувати питання</h1>
-        <form method="POST" action="/admin/edit-question" onsubmit="return validateForm()">
-          <input type="hidden" name="id" value="${id}">
-          <label for="testNumber">Номер тесту:</label>
-          <select id="testNumber" name="testNumber" required>
-            ${Object.keys(testNames).map(num => `<option value="${num}" ${num === question.testNumber ? 'selected' : ''}>${testNames[num].name}</option>`).join('')}
-          </select>
-          <label for="picture">Посилання на фото (опціонально):</label>
-          <input type="text" id="picture" name="picture" value="${question.picture || ''}" placeholder="Введіть URL зображення">
-          <label for="text">Текст питання:</label>
-          <textarea id="text" name="text" required>${question.text}</textarea>
-          <label for="type">Тип питання:</label>
-          <select id="type" name="type" required>
-            <option value="multiple" ${question.type === 'multiple' ? 'selected' : ''}>Multiple Choice</option>
-            <option value="singlechoice" ${question.type === 'singlechoice' ? 'selected' : ''}>Single Choice</option>
-            <option value="truefalse" ${question.type === 'truefalse' ? 'selected' : ''}>True/False</option>
-            <option value="input" ${question.type === 'input' ? 'selected' : ''}>Input</option>
-            <option value="ordering" ${question.type === 'ordering' ? 'selected' : ''}>Ordering</option>
-            <option value="matching" ${question.type === 'matching' ? 'selected' : ''}>Matching</option>
-            <option value="fillblank" ${question.type === 'fillblank' ? 'selected' : ''}>Fill in the Blank</option>
-          </select>
-          <label for="options">Варіанти відповідей (через кому):</label>
-          <textarea id="options" name="options">${question.options.join(', ')}</textarea>
-          <label for="correctAnswers">Правильні відповіді (через кому):</label>
-          <textarea id="correctAnswers" name="correctAnswers" required>${question.correctAnswers.join(', ')}</textarea>
-          <label for="points">Бали за питання:</label>
-          <input type="number" id="points" name="points" value="${question.points}" min="1" required>
-          <label for="variant">Варіант:</label>
-          <input type="text" id="variant" name="variant" value="${question.variant}">
-          <button type="submit" class="submit-btn">Зберегти</button>
-        </form>
-        <div id="error-message" class="error"></div>
-        <button class="nav-btn" onclick="window.location.href='/admin/questions'">Повернутися до списку питань</button>
-        <script>
-          function validateForm() {
-            const text = document.getElementById('text').value;
-            const points = document.getElementById('points').value;
-            const variant = document.getElementById('variant').value;
-            const picture = document.getElementById('picture').value;
-            const errorMessage = document.getElementById('error-message');
-            if (text.length < 5 || text.length > 1000) {
-              errorMessage.textContent = 'Текст питання має бути від 5 до 1000 символів';
-              return false;
-            }
-            if (points < 1 || points > 100) {
-              errorMessage.textContent = 'Бали мають бути числом від 1 до 100';
-              return false;
-            }
-            if (variant && (variant.length < 1 || variant.length > 50)) {
-              errorMessage.textContent = 'Варіант має бути від 1 до 50 символів';
-              return false;
-            }
-            if (picture && !/^https?:\/\/.*\.(jpeg|jpg|png|gif)$/i.test(picture)) {
-              errorMessage.textContent = 'Посилання на фото має бути дійсним URL із розширенням .jpeg, .jpg, .png або .gif';
-              return false;
-            }
-            return true;
-          }
-        </script>
-      </body>
-    </html>
-  `);
 });
 
 app.post('/admin/edit-question', checkAuth, checkAdmin, async (req, res) => {
+  const startTime = Date.now();
   try {
     const { id, testNumber, text, type, options, correctAnswers, points, variant, picture } = req.body;
     if (!testNumber || !text || !type || !correctAnswers) {
@@ -2407,10 +2557,14 @@ app.post('/admin/edit-question', checkAuth, checkAdmin, async (req, res) => {
   } catch (error) {
     console.error('Error editing question:', error.message, error.stack);
     res.status(500).send('Помилка при редагуванні питання');
+  } finally {
+    const endTime = Date.now();
+    console.log(`Route /admin/edit-question (POST) executed in ${endTime - startTime} ms`);
   }
 });
 
 app.post('/admin/delete-question', checkAuth, checkAdmin, async (req, res) => {
+  const startTime = Date.now();
   try {
     const { id } = req.body;
     await db.collection('questions').deleteOne({ _id: new ObjectId(id) });
@@ -2418,39 +2572,50 @@ app.post('/admin/delete-question', checkAuth, checkAdmin, async (req, res) => {
   } catch (error) {
     console.error('Error deleting question:', error.message, error.stack);
     res.status(500).json({ success: false, message: 'Помилка при видаленні питання' });
+  } finally {
+    const endTime = Date.now();
+    console.log(`Route /admin/delete-question executed in ${endTime - startTime} ms`);
   }
 });
 
 app.get('/admin/import-users', checkAuth, checkAdmin, (req, res) => {
-  res.send(`
-    <!DOCTYPE html>
-    <html lang="uk">
-      <head>
-        <meta charset="UTF-8">
-        <title>Імпорт користувачів</title>
-        <style>
-          body { font-family: Arial, sans-serif; padding: 20px; }
-          label { display: block; margin: 10px 0 5px; }
-          input { padding: 5px; margin-bottom: 10px; }
-          button { padding: 10px 20px; margin: 5px; cursor: pointer; border: none; border-radius: 5px; }
-          .nav-btn { background-color: #007bff; color: white; }
-          .submit-btn { background-color: #4CAF50; color: white; }
-        </style>
-      </head>
-      <body>
-        <h1>Імпорт користувачів із Excel</h1>
-        <form method="POST" action="/admin/import-users" enctype="multipart/form-data">
-          <label for="file">Виберіть файл users.xlsx:</label>
-          <input type="file" id="file" name="file" accept=".xlsx" required>
-          <button type="submit" class="submit-btn">Завантажити</button>
-        </form>
-        <button class="nav-btn" onclick="window.location.href='/admin'">Повернутися до адмін-панелі</button>
-      </body>
-    </html>
-  `);
+  const startTime = Date.now();
+  try {
+    const html = `
+      <!DOCTYPE html>
+      <html lang="uk">
+        <head>
+          <meta charset="UTF-8">
+          <title>Імпорт користувачів</title>
+          <style>
+            body { font-family: Arial, sans-serif; padding: 20px; }
+            label { display: block; margin: 10px 0 5px; }
+            input { padding: 5px; margin-bottom: 10px; }
+            button { padding: 10px 20px; margin: 5px; cursor: pointer; border: none; border-radius: 5px; }
+            .nav-btn { background-color: #007bff; color: white; }
+            .submit-btn { background-color: #4CAF50; color: white; }
+          </style>
+        </head>
+        <body>
+          <h1>Імпорт користувачів із Excel</h1>
+          <form method="POST" action="/admin/import-users" enctype="multipart/form-data">
+            <label for="file">Виберіть файл users.xlsx:</label>
+            <input type="file" id="file" name="file" accept=".xlsx" required>
+            <button type="submit" class="submit-btn">Завантажити</button>
+          </form>
+          <button class="nav-btn" onclick="window.location.href='/admin'">Повернутися до адмін-панелі</button>
+        </body>
+      </html>
+    `;
+    res.send(html);
+  } finally {
+    const endTime = Date.now();
+    console.log(`Route /admin/import-users executed in ${endTime - startTime} ms`);
+  }
 });
 
 app.post('/admin/import-users', checkAuth, checkAdmin, upload.single('file'), async (req, res) => {
+  const startTime = Date.now();
   try {
     if (!req.file) {
       return res.status(400).send('Файл не завантажено');
@@ -2477,39 +2642,50 @@ app.post('/admin/import-users', checkAuth, checkAdmin, upload.single('file'), as
       fs.unlinkSync(req.file.path);
     }
     res.status(500).send('Помилка при імпорті користувачів');
+  } finally {
+    const endTime = Date.now();
+    console.log(`Route /admin/import-users (POST) executed in ${endTime - startTime} ms`);
   }
 });
 
 app.get('/admin/import-questions', checkAuth, checkAdmin, (req, res) => {
-  res.send(`
-    <!DOCTYPE html>
-    <html lang="uk">
-      <head>
-        <meta charset="UTF-8">
-        <title>Імпорт питань</title>
-        <style>
-          body { font-family: Arial, sans-serif; padding: 20px; }
-          label { display: block; margin: 10px 0 5px; }
-          input { padding: 5px; margin-bottom: 10px; }
-          button { padding: 10px 20px; margin: 5px; cursor: pointer; border: none; border-radius: 5px; }
-          .nav-btn { background-color: #007bff; color: white; }
-          .submit-btn { background-color: #4CAF50; color: white; }
-        </style>
-      </head>
-      <body>
-        <h1>Імпорт питань із Excel</h1>
-        <form method="POST" action="/admin/import-questions" enctype="multipart/form-data">
-          <label for="file">Виберіть файл questions*.xlsx:</label>
-          <input type="file" id="file" name="file" accept=".xlsx" required>
-          <button type="submit" class="submit-btn">Завантажити</button>
-        </form>
-        <button class="nav-btn" onclick="window.location.href='/admin'">Повернутися до адмін-панелі</button>
-      </body>
-    </html>
-  `);
+  const startTime = Date.now();
+  try {
+    const html = `
+      <!DOCTYPE html>
+      <html lang="uk">
+        <head>
+          <meta charset="UTF-8">
+          <title>Імпорт питань</title>
+          <style>
+            body { font-family: Arial, sans-serif; padding: 20px; }
+            label { display: block; margin: 10px 0 5px; }
+            input { padding: 5px; margin-bottom: 10px; }
+            button { padding: 10px 20px; margin: 5px; cursor: pointer; border: none; border-radius: 5px; }
+            .nav-btn { background-color: #007bff; color: white; }
+            .submit-btn { background-color: #4CAF50; color: white; }
+          </style>
+        </head>
+        <body>
+          <h1>Імпорт питань із Excel</h1>
+          <form method="POST" action="/admin/import-questions" enctype="multipart/form-data">
+            <label for="file">Виберіть файл questions*.xlsx:</label>
+            <input type="file" id="file" name="file" accept=".xlsx" required>
+            <button type="submit" class="submit-btn">Завантажити</button>
+          </form>
+          <button class="nav-btn" onclick="window.location.href='/admin'">Повернутися до адмін-панелі</button>
+        </body>
+      </html>
+    `;
+    res.send(html);
+  } finally {
+    const endTime = Date.now();
+    console.log(`Route /admin/import-questions executed in ${endTime - startTime} ms`);
+  }
 });
 
 app.post('/admin/import-questions', checkAuth, checkAdmin, upload.single('file'), async (req, res) => {
+  const startTime = Date.now();
   try {
     if (!req.file) {
       return res.status(400).send('Файл не завантажено');
@@ -2541,190 +2717,200 @@ app.post('/admin/import-questions', checkAuth, checkAdmin, upload.single('file')
       fs.unlinkSync(req.file.path);
     }
     res.status(500).send('Помилка при імпорті питань');
+  } finally {
+    const endTime = Date.now();
+    console.log(`Route /admin/import-questions (POST) executed in ${endTime - startTime} ms`);
   }
 });
 
 app.get('/admin/results', checkAuth, checkAdmin, async (req, res) => {
-  let results = [];
-  let errorMessage = '';
+  const startTime = Date.now();
   try {
-    results = await db.collection('test_results').find({}).sort({ endTime: -1 }).toArray();
-  } catch (fetchError) {
-    console.error('Ошибка при получении данных из MongoDB:', fetchError.message, fetchError.stack);
-    errorMessage = `Ошибка MongoDB: ${fetchError.message}`;
-  }
+    let results = [];
+    let errorMessage = '';
+    try {
+      results = await db.collection('test_results').find({}).sort({ endTime: -1 }).toArray();
+    } catch (fetchError) {
+      console.error('Ошибка при получении данных из MongoDB:', fetchError.message, fetchError.stack);
+      errorMessage = `Ошибка MongoDB: ${fetchError.message}`;
+    }
 
-  let adminHtml = `
-    <!DOCTYPE html>
-    <html lang="uk">
-      <head>
-        <meta charset="UTF-8">
-        <title>Результати всіх користувачів</title>
-        <style>
-          body { font-family: Arial, sans-serif; padding: 20px; }
-          table { border-collapse: collapse; width: 100%; margin-top: 20px; }
-          th, td { border: 1px solid black; padding: 8px; text-align: left; }
-          th { background-color: #f2f2f2; }
-          .error { color: red; }
-          .answers { white-space: pre-wrap; max-width: 300px; overflow-wrap: break-word; line-height: 1.8; }
-          .delete-btn { background-color: #ff4d4d; color: white; padding: 5px 10px; border: none; cursor: pointer; }
-          .delete-all-btn { background-color: #ff4d4d; color: white; padding: 10px 20px; margin: 10px 0; border: none; cursor: pointer; }
-          .nav-btn { padding: 10px 20px; margin: 10px 0; cursor: pointer; background-color: #007bff; color: white; border: none; }
-          .details { white-space: pre-wrap; max-width: 300px; line-height: 1.8; }
-        </style>
-      </head>
-      <body>
-        <h1>Результати всіх користувачів</h1>
-        <button class="nav-btn" onclick="window.location.href='/admin'">Повернутися до адмін-панелі</button>
-  `;
-  if (errorMessage) {
-    adminHtml += `<p class="error">${errorMessage}</p>`;
-  }
-  adminHtml += `
-        <table>
-          <tr>
-            <th>Користувач</th>
-            <th>Тест</th>
-            <th>Варіант</th>
-            <th>Очки</th>
-            <th>Максимум</th>
-            <th>Початок</th>
-            <th>Кінець</th>
-            <th>Тривалість (сек)</th>
-            <th>Підозріла активність (%)</th>
-            <th>Деталі активності</th>
-            <th>Відповіді та бали</th>
-            <th>Дія</th>
-          </tr>
-  `;
-  if (!results || results.length === 0) {
-    adminHtml += '<tr><td colspan="12">Немає результатів</td></tr>';
-  } else {
-    results.forEach((r, index) => {
-      const answersArray = [];
-      if (r.answers) {
-        Object.keys(r.answers).sort((a, b) => parseInt(a) - parseInt(b)).forEach(key => {
-          const idx = parseInt(key);
-          answersArray[idx] = r.answers[key];
-        });
-      }
-      console.log(`User ${r.user} answers array:`, answersArray);
-      const answersDisplay = answersArray.length > 0
-        ? answersArray.map((a, i) => {
-            if (a === undefined || a === null) return null;
-            let userAnswer;
-            if (Array.isArray(a) && a.length > 0 && Array.isArray(a[0])) {
-              userAnswer = a.map(pair => {
-                if (Array.isArray(pair) && pair.length === 2) {
-                  return `${pair[0]} -> ${pair[1]}`;
-                }
-                return 'Невірний формат пари';
-              }).join(', ');
-            } else if (Array.isArray(a)) {
-              userAnswer = a.join(', ');
-            } else {
-              userAnswer = a;
-            }
-            const questionScore = r.scoresPerQuestion[i] || 0;
-            return `Питання ${i + 1}: ${userAnswer ? userAnswer.replace(/\\'/g, "'") : 'Немає відповіді'} (${questionScore} балів)`;
-          }).filter(line => line !== null).join('\n')
-        : 'Немає відповідей';
-      const formatDateTime = (isoString) => {
-        if (!isoString) return 'N/A';
-        const date = new Date(isoString);
-        return `${date.toLocaleTimeString('uk-UA', { hour12: false })} ${date.toLocaleDateString('uk-UA')}`;
-      };
-      const suspiciousActivityPercent = r.suspiciousActivity && r.suspiciousActivity.suspiciousScore
-        ? Math.round(r.suspiciousActivity.suspiciousScore)
-        : 0;
-      const timeAwayPercent = r.suspiciousActivity && r.suspiciousActivity.timeAway
-        ? Math.round((r.suspiciousActivity.timeAway / (r.duration * 1000)) * 100)
-        : 0;
-      const switchCount = r.suspiciousActivity ? r.suspiciousActivity.switchCount || 0 : 0;
-      const avgResponseTime = r.suspiciousActivity && r.suspiciousActivity.responseTimes
-        ? (r.suspiciousActivity.responseTimes.reduce((sum, time) => sum + (time || 0), 0) / r.suspiciousActivity.responseTimes.length / 1000).toFixed(2)
-        : 0;
-      const totalActivityCount = r.suspiciousActivity && r.suspiciousActivity.activityCounts
-        ? r.suspiciousActivity.activityCounts.reduce((sum, count) => sum + (count || 0), 0).toFixed(0)
-        : 0;
-      const activityDetails = `
+    let adminHtml = `
+      <!DOCTYPE html>
+      <html lang="uk">
+        <head>
+          <meta charset="UTF-8">
+          <title>Результати всіх користувачів</title>
+          <style>
+            body { font-family: Arial, sans-serif; padding: 20px; }
+            table { border-collapse: collapse; width: 100%; margin-top: 20px; }
+            th, td { border: 1px solid black; padding: 8px; text-align: left; }
+            th { background-color: #f2f2f2; }
+            .error { color: red; }
+            .answers { white-space: pre-wrap; max-width: 300px; overflow-wrap: break-word; line-height: 1.8; }
+            .delete-btn { background-color: #ff4d4d; color: white; padding: 5px 10px; border: none; cursor: pointer; }
+            .delete-all-btn { background-color: #ff4d4d; color: white; padding: 10px 20px; margin: 10px 0; border: none; cursor: pointer; }
+            .nav-btn { padding: 10px 20px; margin: 10px 0; cursor: pointer; background-color: #007bff; color: white; border: none; }
+            .details { white-space: pre-wrap; max-width: 300px; line-height: 1.8; }
+          </style>
+        </head>
+        <body>
+          <h1>Результати всіх користувачів</h1>
+          <button class="nav-btn" onclick="window.location.href='/admin'">Повернутися до адмін-панелі</button>
+    `;
+    if (errorMessage) {
+      adminHtml += `<p class="error">${errorMessage}</p>`;
+    }
+    adminHtml += `
+          <table>
+            <tr>
+              <th>Користувач</th>
+              <th>Тест</th>
+              <th>Варіант</th>
+              <th>Очки</th>
+              <th>Максимум</th>
+              <th>Початок</th>
+              <th>Кінець</th>
+              <th>Тривалість (сек)</th>
+              <th>Підозріла активність (%)</th>
+              <th>Деталі активності</th>
+              <th>Відповіді та бали</th>
+              <th>Дія</th>
+            </tr>
+    `;
+    if (!results || results.length === 0) {
+      adminHtml += '<tr><td colspan="12">Немає результатів</td></tr>';
+    } else {
+      results.forEach((r, index) => {
+        const answersArray = [];
+        if (r.answers) {
+          Object.keys(r.answers).sort((a, b) => parseInt(a) - parseInt(b)).forEach(key => {
+            const idx = parseInt(key);
+            answersArray[idx] = r.answers[key];
+          });
+        }
+        console.log(`User ${r.user} answers array:`, answersArray);
+        const answersDisplay = answersArray.length > 0
+          ? answersArray.map((a, i) => {
+              if (a === undefined || a === null) return null;
+              let userAnswer;
+              if (Array.isArray(a) && a.length > 0 && Array.isArray(a[0])) {
+                userAnswer = a.map(pair => {
+                  if (Array.isArray(pair) && pair.length === 2) {
+                    return `${pair[0]} -> ${pair[1]}`;
+                  }
+                  return 'Невірний формат пари';
+                }).join(', ');
+              } else if (Array.isArray(a)) {
+                userAnswer = a.join(', ');
+              } else {
+                userAnswer = a;
+              }
+              const questionScore = r.scoresPerQuestion[i] || 0;
+              return `Питання ${i + 1}: ${userAnswer ? userAnswer.replace(/\\'/g, "'") : 'Немає відповіді'} (${questionScore} балів)`;
+            }).filter(line => line !== null).join('\n')
+          : 'Немає відповідей';
+        const formatDateTime = (isoString) => {
+          if (!isoString) return 'N/A';
+          const date = new Date(isoString);
+          return `${date.toLocaleTimeString('uk-UA', { hour12: false })} ${date.toLocaleDateString('uk-UA')}`;
+        };
+        const suspiciousActivityPercent = r.suspiciousActivity && r.suspiciousActivity.suspiciousScore
+          ? Math.round(r.suspiciousActivity.suspiciousScore)
+          : 0;
+        const timeAwayPercent = r.suspiciousActivity && r.suspiciousActivity.timeAway
+          ? Math.round((r.suspiciousActivity.timeAway / (r.duration * 1000)) * 100)
+          : 0;
+        const switchCount = r.suspiciousActivity ? r.suspiciousActivity.switchCount || 0 : 0;
+        const avgResponseTime = r.suspiciousActivity && r.suspiciousActivity.responseTimes
+          ? (r.suspiciousActivity.responseTimes.reduce((sum, time) => sum + (time || 0), 0) / r.suspiciousActivity.responseTimes.length / 1000).toFixed(2)
+          : 0;
+        const totalActivityCount = r.suspiciousActivity && r.suspiciousActivity.activityCounts
+          ? r.suspiciousActivity.activityCounts.reduce((sum, count) => sum + (count || 0), 0).toFixed(0)
+          : 0;
+        const activityDetails = `
 Время вне вкладки: ${timeAwayPercent}%
 Переключения вкладок: ${switchCount}
 Среднее время ответа (сек): ${avgResponseTime}
 Общее количество действий: ${totalActivityCount}
-      `;
-      adminHtml += `
-        <tr>
-          <td>${r.user || 'N/A'}</td>
-          <td>${testNames[r.testNumber]?.name || 'N/A'}</td>
-          <td>${r.variant || 'N/A'}</td>
-          <td>${r.score || '0'}</td>
-          <td>${r.totalPoints || '0'}</td>
-          <td>${formatDateTime(r.startTime)}</td>
-          <td>${formatDateTime(r.endTime)}</td>
-          <td>${r.duration || 'N/A'}</td>
-          <td>${suspiciousActivityPercent}%</td>
-          <td class="details">${activityDetails}</td>
-          <td class="answers">${answersDisplay}</td>
-          <td><button class="delete-btn" onclick="deleteResult('${r._id}')">🗑️ Видалити</button></td>
-        </tr>
-      `;
-    });
-  }
-  adminHtml += `
-        </table>
-        <button class="delete-all-btn" onclick="deleteAllResults()">Видалити всі результати</button>
-        <script>
-          async function deleteResult(id) {
-            if (confirm('Ви впевнені, що хочете видалити цей результат?')) {
-              try {
-                const formData = new URLSearchParams();
-                formData.append('id', id);
-                const response = await fetch('/admin/delete-result', {
-                  method: 'POST',
-                  headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-                  credentials: 'include'
-                });
-                const result = await response.json();
-                if (result.success) {
-                  window.location.reload();
-                } else {
-                  alert('Помилка при видаленні результату: ' + result.message);
+        `;
+        adminHtml += `
+          <tr>
+            <td>${r.user || 'N/A'}</td>
+            <td>${testNames[r.testNumber]?.name || 'N/A'}</td>
+            <td>${r.variant || 'N/A'}</td>
+            <td>${r.score || '0'}</td>
+            <td>${r.totalPoints || '0'}</td>
+            <td>${formatDateTime(r.startTime)}</td>
+            <td>${formatDateTime(r.endTime)}</td>
+            <td>${r.duration || 'N/A'}</td>
+            <td>${suspiciousActivityPercent}%</td>
+            <td class="details">${activityDetails}</td>
+            <td class="answers">${answersDisplay}</td>
+            <td><button class="delete-btn" onclick="deleteResult('${r._id}')">🗑️ Видалити</button></td>
+          </tr>
+        `;
+      });
+    }
+    adminHtml += `
+          </table>
+          <button class="delete-all-btn" onclick="deleteAllResults()">Видалити всі результати</button>
+          <script>
+            async function deleteResult(id) {
+              if (confirm('Ви впевнені, що хочете видалити цей результат?')) {
+                try {
+                  const formData = new URLSearchParams();
+                  formData.append('id', id);
+                  const response = await fetch('/admin/delete-result', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                    credentials: 'include'
+                  });
+                  const result = await response.json();
+                  if (result.success) {
+                    window.location.reload();
+                  } else {
+                    alert('Помилка при видаленні результату: ' + result.message);
+                  }
+                } catch (error) {
+                  alert('Помилка при видаленні результату');
                 }
-              } catch (error) {
-                alert('Помилка при видаленні результату');
               }
             }
-          }
 
-          async function deleteAllResults() {
-            if (confirm('Ви впевнені, що хочете видалити всі результати? Цю дію не можна скасувати!')) {
-              try {
-                const formData = new URLSearchParams();
-                const response = await fetch('/admin/delete-all-results', {
-                  method: 'POST',
-                  headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-                  credentials: 'include'
-                });
-                const result = await response.json();
-                if (result.success) {
-                  window.location.reload();
-                } else {
-                  alert('Помилка при видаленні всіх результатів: ' + result.message);
+            async function deleteAllResults() {
+              if (confirm('Ви впевнені, що хочете видалити всі результати? Цю дію не можна скасувати!')) {
+                try {
+                  const formData = new URLSearchParams();
+                  const response = await fetch('/admin/delete-all-results', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                    credentials: 'include'
+                  });
+                  const result = await response.json();
+                  if (result.success) {
+                    window.location.reload();
+                  } else {
+                    alert('Помилка при видаленні всіх результатів: ' + result.message);
+                  }
+                } catch (error) {
+                  alert('Помилка при видаленні всіх результатів');
                 }
-              } catch (error) {
-                alert('Помилка при видаленні всіх результатів');
               }
             }
-          }
-        </script>
-      </body>
-    </html>
-  `;
-  res.send(adminHtml.trim());
+          </script>
+        </body>
+      </html>
+    `;
+    res.send(adminHtml.trim());
+  } finally {
+    const endTime = Date.now();
+    console.log(`Route /admin/results executed in ${endTime - startTime} ms`);
+  }
 });
 
 app.post('/admin/delete-all-results', checkAuth, checkAdmin, async (req, res) => {
+  const startTime = Date.now();
   try {
     if (!db) {
       throw new Error('MongoDB connection not established');
@@ -2735,10 +2921,14 @@ app.post('/admin/delete-all-results', checkAuth, checkAdmin, async (req, res) =>
   } catch (error) {
     console.error('Ошибка при удалении всех результатов:', error.message, error.stack);
     res.status(500).json({ success: false, message: 'Помилка при видаленні всіх результатів' });
+  } finally {
+    const endTime = Date.now();
+    console.log(`Route /admin/delete-all-results executed in ${endTime - startTime} ms`);
   }
 });
 
 app.post('/admin/delete-result', checkAuth, checkAdmin, async (req, res) => {
+  const startTime = Date.now();
   try {
     const { id } = req.body;
     await db.collection('test_results').deleteOne({ _id: new ObjectId(id) });
@@ -2746,67 +2936,78 @@ app.post('/admin/delete-result', checkAuth, checkAdmin, async (req, res) => {
   } catch (error) {
     console.error('Ошибка при удалении результата:', error.message, error.stack);
     res.status(500).json({ success: false, message: 'Помилка при видаленні результату' });
+  } finally {
+    const endTime = Date.now();
+    console.log(`Route /admin/delete-result executed in ${endTime - startTime} ms`);
   }
 });
 
 app.get('/admin/edit-tests', checkAuth, checkAdmin, (req, res) => {
-  res.send(`
-    <!DOCTYPE html>
-    <html lang="uk">
-      <head>
-        <meta charset="UTF-8">
-        <title>Редагувати назви тестів</title>
-        <style>
-          body { font-size: 24px; margin: 20px; }
-          input[type="text"], input[type="number"] { font-size: 24px; padding: 5px; margin: 5px; }
-          input[type="checkbox"] { width: 20px; height: 20px; margin: 5px; }
-          button { font-size: 24px; padding: 10px 20px; margin: 5px; }
-          .delete-btn { background-color: #ff4d4d; color: white; }
-          .test-row { display: flex; align-items: center; margin-bottom: 10px; flex-wrap: wrap; }
-          label { margin-right: 10px; }
-        </style>
-      </head>
-      <body>
-        <h1>Редагувати назви та налаштування тестів</h1>
-        <form method="POST" action="/admin/edit-tests">
-          ${Object.entries(testNames).map(([num, data]) => `
-            <div class="test-row">
-              <label for="test${num}">Назва Тесту ${num}:</label>
-              <input type="text" id="test${num}" name="test${num}" value="${data.name}" required>
-              <label for="time${num}">Час (сек):</label>
-              <input type="number" id="time${num}" name="time${num}" value="${data.timeLimit}" required min="1">
-              <label for="randomQuestions${num}">Випадковий вибір питань:</label>
-              <input type="checkbox" id="randomQuestions${num}" name="randomQuestions${num}" ${data.randomQuestions ? 'checked' : ''}>
-              <label for="randomAnswers${num}">Випадковий вибір відповідей:</label>
-              <input type="checkbox" id="randomAnswers${num}" name="randomAnswers${num}" ${data.randomAnswers ? 'checked' : ''}>
-              <label for="questionLimit${num}">Кількість питань:</label>
-              <input type="number" id="questionLimit${num}" name="questionLimit${num}" value="${data.questionLimit || ''}" min="1" placeholder="Без обмеження">
-              <button type="button" class="delete-btn" onclick="deleteTest('${num}')">Видалити</button>
-            </div>
-          `).join('')}
-          <button type="submit">Зберегти</button>
-        </form>
-        <button onclick="window.location.href='/admin'">Повернутися до адмін-панелі</button>
-        <script>
-          async function deleteTest(testNumber) {
-            if (confirm('Ви впевнені, що хочете видалити Тест ' + testNumber + '?')) {
-              const formData = new URLSearchParams();
-              formData.append('testNumber', testNumber);
-              await fetch('/admin/delete-test', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-                credentials: 'include'
-              });
-              window.location.reload();
+  const startTime = Date.now();
+  try {
+    const html = `
+      <!DOCTYPE html>
+      <html lang="uk">
+        <head>
+          <meta charset="UTF-8">
+          <title>Редагувати назви тестів</title>
+          <style>
+            body { font-size: 24px; margin: 20px; }
+            input[type="text"], input[type="number"] { font-size: 24px; padding: 5px; margin: 5px; }
+            input[type="checkbox"] { width: 20px; height: 20px; margin: 5px; }
+            button { font-size: 24px; padding: 10px 20px; margin: 5px; }
+            .delete-btn { background-color: #ff4d4d; color: white; }
+            .test-row { display: flex; align-items: center; margin-bottom: 10px; flex-wrap: wrap; }
+            label { margin-right: 10px; }
+          </style>
+        </head>
+        <body>
+          <h1>Редагувати назви та налаштування тестів</h1>
+          <form method="POST" action="/admin/edit-tests">
+            ${Object.entries(testNames).map(([num, data]) => `
+              <div class="test-row">
+                <label for="test${num}">Назва Тесту ${num}:</label>
+                <input type="text" id="test${num}" name="test${num}" value="${data.name}" required>
+                <label for="time${num}">Час (сек):</label>
+                <input type="number" id="time${num}" name="time${num}" value="${data.timeLimit}" required min="1">
+                <label for="randomQuestions${num}">Випадковий вибір питань:</label>
+                <input type="checkbox" id="randomQuestions${num}" name="randomQuestions${num}" ${data.randomQuestions ? 'checked' : ''}>
+                <label for="randomAnswers${num}">Випадковий вибір відповідей:</label>
+                <input type="checkbox" id="randomAnswers${num}" name="randomAnswers${num}" ${data.randomAnswers ? 'checked' : ''}>
+                <label for="questionLimit${num}">Кількість питань:</label>
+                <input type="number" id="questionLimit${num}" name="questionLimit${num}" value="${data.questionLimit || ''}" min="1" placeholder="Без обмеження">
+                <button type="button" class="delete-btn" onclick="deleteTest('${num}')">Видалити</button>
+              </div>
+            `).join('')}
+            <button type="submit">Зберегти</button>
+          </form>
+          <button onclick="window.location.href='/admin'">Повернутися до адмін-панелі</button>
+          <script>
+            async function deleteTest(testNumber) {
+              if (confirm('Ви впевнені, що хочете видалити Тест ' + testNumber + '?')) {
+                const formData = new URLSearchParams();
+                formData.append('testNumber', testNumber);
+                await fetch('/admin/delete-test', {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                  credentials: 'include'
+                });
+                window.location.reload();
+              }
             }
-          }
-        </script>
-      </body>
-    </html>
-  `);
+          </script>
+        </body>
+      </html>
+    `;
+    res.send(html);
+  } finally {
+    const endTime = Date.now();
+    console.log(`Route /admin/edit-tests executed in ${endTime - startTime} ms`);
+  }
 });
 
-app.post('/admin/edit-tests', checkAuth, checkAdmin, (req, res) => {
+app.post('/admin/edit-tests', checkAuth, checkAdmin, async (req, res) => {
+  const startTime = Date.now();
   try {
     Object.keys(testNames).forEach(num => {
       const testName = req.body[`test${num}`];
@@ -2840,10 +3041,14 @@ app.post('/admin/edit-tests', checkAuth, checkAdmin, (req, res) => {
   } catch (error) {
     console.error('Ошибка при редактировании названий тестов:', error.message, error.stack);
     res.status(500).send('Помилка при оновленні назв тестів');
+  } finally {
+    const endTime = Date.now();
+    console.log(`Route /admin/edit-tests (POST) executed in ${endTime - startTime} ms`);
   }
 });
 
 app.post('/admin/delete-test', checkAuth, checkAdmin, async (req, res) => {
+  const startTime = Date.now();
   try {
     const { testNumber } = req.body;
     if (!testNames[testNumber]) {
@@ -2854,43 +3059,54 @@ app.post('/admin/delete-test', checkAuth, checkAdmin, async (req, res) => {
   } catch (error) {
     console.error('Ошибка при удалении теста:', error.message, error.stack);
     res.status(500).json({ success: false, message: 'Помилка при видаленні тесту' });
+  } finally {
+    const endTime = Date.now();
+    console.log(`Route /admin/delete-test executed in ${endTime - startTime} ms`);
   }
 });
 
 app.get('/admin/create-test', checkAuth, checkAdmin, (req, res) => {
-  res.send(`
-    <!DOCTYPE html>
-    <html lang="uk">
-      <head>
-        <meta charset="UTF-8">
-        <title>Створити новий тест</title>
-        <style>
-          body { font-size: 24px; margin: 20px; }
-          input { font-size: 24px; padding: 5px; margin: 5px; }
-          select { font-size: 24px; padding: 5px; margin: 5px; }
-          button { font-size: 24px; padding: 10px 20px; margin: 5px; }
-        </style>
-      </head>
-      <body>
-        <h1>Створити новий тест</h1>
-        <form method="POST" action="/admin/create-test">
-          <div>
-            <label for="testName">Назва нового тесту:</label>
-            <input type="text" id="testName" name="testName" required>
-          </div>
-          <div>
-            <label for="timeLimit">Час (сек):</label>
-            <input type="number" id="timeLimit" name="timeLimit" value="3600" required min="1">
-          </div>
-          <button type="submit">Створити</button>
-        </form>
-        <button onclick="window.location.href='/admin'">Повернутися до адмін-панелі</button>
-      </body>
-    </html>
-  `);
+  const startTime = Date.now();
+  try {
+    const html = `
+      <!DOCTYPE html>
+      <html lang="uk">
+        <head>
+          <meta charset="UTF-8">
+          <title>Створити новий тест</title>
+          <style>
+            body { font-size: 24px; margin: 20px; }
+            input { font-size: 24px; padding: 5px; margin: 5px; }
+            select { font-size: 24px; padding: 5px; margin: 5px; }
+            button { font-size: 24px; padding: 10px 20px; margin: 5px; }
+          </style>
+        </head>
+        <body>
+          <h1>Створити новий тест</h1>
+          <form method="POST" action="/admin/create-test">
+            <div>
+              <label for="testName">Назва нового тесту:</label>
+              <input type="text" id="testName" name="testName" required>
+            </div>
+            <div>
+              <label for="timeLimit">Час (сек):</label>
+              <input type="number" id="timeLimit" name="timeLimit" value="3600" required min="1">
+            </div>
+            <button type="submit">Створити</button>
+          </form>
+          <button onclick="window.location.href='/admin'">Повернутися до адмін-панелі</button>
+        </body>
+      </html>
+    `;
+    res.send(html);
+  } finally {
+    const endTime = Date.now();
+    console.log(`Route /admin/create-test executed in ${endTime - startTime} ms`);
+  }
 });
 
 app.post('/admin/create-test', checkAuth, checkAdmin, async (req, res) => {
+  const startTime = Date.now();
   try {
     const { testName, timeLimit } = req.body;
     const testNumber = String(Object.keys(testNames).length + 1);
@@ -2920,110 +3136,123 @@ app.post('/admin/create-test', checkAuth, checkAdmin, async (req, res) => {
   } catch (error) {
     console.error('Ошибка при создании нового теста:', error.message, error.stack);
     res.status(500).send(`Помилка при створенні тесту: ${error.message}`);
+  } finally {
+    const endTime = Date.now();
+    console.log(`Route /admin/create-test (POST) executed in ${endTime - startTime} ms`);
   }
 });
 
 app.get('/admin/activity-log', checkAuth, checkAdmin, async (req, res) => {
-  let activities = [];
-  let errorMessage = '';
+  const startTime = Date.now();
   try {
-    activities = await db.collection('activity_log').find({}).sort({ timestamp: -1 }).toArray();
-  } catch (fetchError) {
-    console.error('Ошибка при получении данных из MongoDB:', fetchError.message, fetchError.stack);
-    errorMessage = `Ошибка MongoDB: ${fetchError.message}`;
-  }
-  let adminHtml = `
-    <!DOCTYPE html>
-    <html lang="uk">
-      <head>
-        <meta charset="UTF-8">
-        <title>Журнал дій</title>
-        <style>
-          body { font-family: Arial, sans-serif; padding: 20px; }
-          table { border-collapse: collapse; width: 100%; margin-top: 20px; }
-          th, td { border: 1px solid black; padding: 8px; text-align: left; }
-          th { background-color: #f2f2f2; }
-          .error { color: red; }
-          .nav-btn, .clear-btn { padding: 10px 20px; margin: 10px 0; cursor: pointer; border: none; border-radius: 5px; }
-          .clear-btn { background-color: #ff4d4d; color: white; }
-          .nav-btn { background-color: #007bff; color: white; }
-        </style>
-      </head>
-      <body>
-        <h1>Журнал дій</h1>
-        <button class="nav-btn" onclick="window.location.href='/admin'">Повернутися до адмін-панелі</button>
-  `;
-  if (errorMessage) {
-    adminHtml += `<p class="error">${errorMessage}</p>`;
-  }
-  adminHtml += `
-        <table>
+    let activities = [];
+    let errorMessage = '';
+    try {
+      activities = await db.collection('activity_log').find({}).sort({ timestamp: -1 }).toArray();
+    } catch (fetchError) {
+      console.error('Ошибка при получении данных из MongoDB:', fetchError.message, fetchError.stack);
+      errorMessage = `Ошибка MongoDB: ${fetchError.message}`;
+    }
+    let adminHtml = `
+      <!DOCTYPE html>
+      <html lang="uk">
+        <head>
+          <meta charset="UTF-8">
+          <title>Журнал дій</title>
+          <style>
+            body { font-family: Arial, sans-serif; padding: 20px; }
+            table { border-collapse: collapse; width: 100%; margin-top: 20px; }
+            th, td { border: 1px solid black; padding: 8px; text-align: left; }
+            th { background-color: #f2f2f2; }
+            .error { color: red; }
+            .nav-btn, .clear-btn { padding: 10px 20px; margin: 10px 0; cursor: pointer; border: none; border-radius: 5px; }
+            .clear-btn { background-color: #ff4d4d; color: white; }
+            .nav-btn { background-color: #007bff; color: white; }
+          </style>
+        </head>
+        <body>
+          <h1>Журнал дій</h1>
+          <button class="nav-btn" onclick="window.location.href='/admin'">Повернутися до адмін-панелі</button>
+    `;
+    if (errorMessage) {
+      adminHtml += `<p class="error">${errorMessage}</p>`;
+    }
+    adminHtml += `
+          <table>
+            <tr>
+              <th>Дата-Час</th>
+              <th>Користувач</th>
+              <th>IP-адреса</th>
+              <th>Номер сесії</th>
+              <th>Дія</th>
+            </tr>
+    `;
+    if (!activities || activities.length === 0) {
+      adminHtml += '<tr><td colspan="5">Немає записів</td></tr>';
+    } else {
+      activities.forEach(activity => {
+        const timestamp = new Date(activity.timestamp);
+        const formattedDateTime = `${timestamp.toLocaleDateString('uk-UA')} ${timestamp.toLocaleTimeString('uk-UA', { hour12: false })}`;
+        const actionWithInfo = activity.additionalInfo && activity.additionalInfo.percentage
+          ? `${activity.action} (${activity.additionalInfo.percentage}%)`
+          : activity.action;
+        adminHtml += `
           <tr>
-            <th>Дата-Час</th>
-            <th>Користувач</th>
-            <th>IP-адреса</th>
-            <th>Номер сесії</th>
-            <th>Дія</th>
+            <td>${formattedDateTime}</td>
+            <td>${activity.user || 'N/A'}</td>
+            <td>${activity.ipAddress || 'N/A'}</td>
+            <td>${activity.sessionId || 'N/A'}</td>
+            <td>${actionWithInfo}</td>
           </tr>
-  `;
-  if (!activities || activities.length === 0) {
-    adminHtml += '<tr><td colspan="5">Немає записів</td></tr>';
-  } else {
-    activities.forEach(activity => {
-      const timestamp = new Date(activity.timestamp);
-      const formattedDateTime = `${timestamp.toLocaleDateString('uk-UA')} ${timestamp.toLocaleTimeString('uk-UA', { hour12: false })}`;
-      const actionWithInfo = activity.additionalInfo && activity.additionalInfo.percentage
-        ? `${activity.action} (${activity.additionalInfo.percentage}%)`
-        : activity.action;
-      adminHtml += `
-        <tr>
-          <td>${formattedDateTime}</td>
-          <td>${activity.user || 'N/A'}</td>
-          <td>${activity.ipAddress || 'N/A'}</td>
-          <td>${activity.sessionId || 'N/A'}</td>
-          <td>${actionWithInfo}</td>
-        </tr>
-      `;
-    });
-  }
-  adminHtml += `
-        </table>
-        <button class="clear-btn" onclick="clearActivityLog()">Видалити усі записи журналу</button>
-        <script>
-          async function clearActivityLog() {
-            if (confirm('Ви впевнені, що хочете видалити усі записи журналу дій?')) {
-              try {
-                const formData = new URLSearchParams();
-                const response = await fetch('/admin/delete-activity-log', {
-                  method: 'POST',
-                  headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-                  credentials: 'include'
-                });
-                const result = await response.json();
-                if (result.success) {
-                  window.location.reload();
-                } else {
-                  alert('Помилка при видаленні записів журналу: ' + result.message);
+        `;
+      });
+    }
+    adminHtml += `
+          </table>
+          <button class="clear-btn" onclick="clearActivityLog()">Видалити усі записи журналу</button>
+          <script>
+            async function clearActivityLog() {
+              if (confirm('Ви впевнені, що хочете видалити усі записи журналу дій?')) {
+                try {
+                  const formData = new URLSearchParams();
+                  const response = await fetch('/admin/delete-activity-log', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                    credentials: 'include'
+                  });
+                  const result = await response.json();
+                  if (result.success) {
+                    window.location.reload();
+                  } else {
+                    alert('Помилка при видаленні записів журналу: ' + result.message);
+                  }
+                } catch (error) {
+                  alert('Помилка при видаленні записів журналу');
                 }
-              } catch (error) {
-                alert('Помилка при видаленні записів журналу');
               }
             }
-          }
-        </script>
-      </body>
-    </html>
-  `;
-  res.send(adminHtml);
+          </script>
+        </body>
+      </html>
+    `;
+    res.send(adminHtml);
+  } finally {
+    const endTime = Date.now();
+    console.log(`Route /admin/activity-log executed in ${endTime - startTime} ms`);
+  }
 });
 
 app.post('/admin/delete-activity-log', checkAuth, checkAdmin, async (req, res) => {
+  const startTime = Date.now();
   try {
     await db.collection('activity_log').deleteMany({});
     res.json({ success: true });
   } catch (error) {
     console.error('Ошибка при удалении записей журнала действий:', error.message, error.stack);
     res.status(500).json({ success: false, message: 'Помилка при видаленні записів журналу' });
+  } finally {
+    const endTime = Date.now();
+    console.log(`Route /admin/delete-activity-log executed in ${endTime - startTime} ms`);
   }
 });
 
