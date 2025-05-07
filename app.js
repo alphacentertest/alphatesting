@@ -129,9 +129,9 @@ const connectToMongoDB = async (attempt = 1, maxAttempts = 3) => {
 let isInitialized = false;
 let initializationError = null;
 let testNames = {
-  '1': { name: 'Тест 1', timeLimit: 3600, randomQuestions: false, randomAnswers: false, questionLimit: null },
-  '2': { name: 'Тест 2', timeLimit: 3600, randomQuestions: false, randomAnswers: false, questionLimit: null },
-  '3': { name: 'Тест 3', timeLimit: 3600, randomQuestions: false, randomAnswers: false, questionLimit: null }
+  '1': { name: 'Тест 1', timeLimit: 3600, randomQuestions: false, randomAnswers: false, questionLimit: null, attemptLimit: 1 },
+  '2': { name: 'Тест 2', timeLimit: 3600, randomQuestions: false, randomAnswers: false, questionLimit: null, attemptLimit: 1 },
+  '3': { name: 'Тест 3', timeLimit: 3600, randomQuestions: false, randomAnswers: false, questionLimit: null, attemptLimit: 1 }
 };
 
 app.use(express.urlencoded({ extended: true }));
@@ -420,6 +420,8 @@ const initializeServer = async () => {
     await db.collection('questions').createIndex({ testNumber: 1, variant: 1 });
     await db.collection('test_results').createIndex({ user: 1, endTime: -1 });
     await db.collection('activity_log').createIndex({ user: 1, timestamp: -1 });
+    // Добавляем индекс для test_attempts
+    await db.collection('test_attempts').createIndex({ user: 1, testNumber: 1, attemptDate: 1 });
     console.log('MongoDB indexes created successfully');
     await updateUserPasswords();
     await CacheManager.refreshUserCache();
@@ -442,6 +444,44 @@ const initializeServer = async () => {
     process.exit(1);
   }
 })();
+
+const checkTestAttempts = async (user, testNumber) => {
+  try {
+    const now = new Date();
+    // Устанавливаем начало текущего дня (00:00:00)
+    const startOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    const endOfDay = new Date(startOfDay.getTime() + 24 * 60 * 60 * 1000);
+
+    // Получаем лимит попыток для данного теста
+    const attemptLimit = testNames[testNumber]?.attemptLimit || 1;
+
+    // Подсчитываем количество попыток пользователя за день
+    const attempts = await db.collection('test_attempts').countDocuments({
+      user,
+      testNumber,
+      attemptDate: {
+        $gte: startOfDay.toISOString(),
+        $lt: endOfDay.toISOString()
+      }
+    });
+
+    if (attempts >= attemptLimit) {
+      // Если количество попыток достигло или превысило лимит, возвращаем false
+      return false;
+    }
+
+    // Если попытки ещё возможны, записываем новую попытку
+    await db.collection('test_attempts').insertOne({
+      user,
+      testNumber,
+      attemptDate: now.toISOString()
+    });
+    return true;
+  } catch (error) {
+    console.error('Error checking test attempts:', error.message, error.stack);
+    throw error;
+  }
+};
 
 app.get('/test-mongo', async (req, res) => {
   try {
@@ -480,6 +520,8 @@ app.get('/', (req, res) => {
           button:hover { background-color: #45a049; }
           .error { color: red; margin-top: 10px; }
           .checkbox-container { margin-bottom: 10px; }
+          .checkbox-container input[type="checkbox"] { vertical-align: middle; margin: 0 5px 0 0; }
+          .checkbox-container label { display: inline; font-size: 16px; margin: 0; vertical-align: middle; }
           @media (max-width: 600px) {
             h1 { font-size: 28px; }
             label { font-size: 16px; }
@@ -854,6 +896,35 @@ app.get('/test', checkAuth, async (req, res) => {
     if (!testNumber || !testNames[testNumber]) {
       return res.status(400).send('Номер тесту не вказано або тест не знайдено');
     }
+
+    // Проверяем, может ли пользователь начать тест
+    const canAttemptTest = await checkTestAttempts(req.user, testNumber);
+    if (!canAttemptTest) {
+      // Если пользователь уже проходил тест сегодня, показываем контекстное меню
+      return res.send(`
+        <!DOCTYPE html>
+        <html lang="uk">
+          <head>
+            <meta charset="UTF-8">
+            <meta name="viewport" content="width=device-width, initial-scale=1.0">
+            <title>Помилка</title>
+            <style>
+              body { font-family: Arial, sans-serif; text-align: center; padding: 50px; background-color: #f5f5f5; }
+              #modal { position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%); background: white; padding: 20px; border: 2px solid black; z-index: 1000; }
+              button { padding: 10px 20px; margin: 5px; cursor: pointer; border: none; border-radius: 5px; background-color: #4CAF50; color: white; }
+              button:hover { background-color: #45a049; }
+            </style>
+          </head>
+          <body>
+            <div id="modal">
+              <h2>Ви вже проходили сьогодні цей тест</h2>
+              <button onclick="window.location.href='/select-test'">Повернутися до вибору тесту</button>
+            </div>
+          </body>
+        </html>
+      `);
+    }
+
     let questions = await loadQuestions(testNumber);
     const userVariant = req.session.testVariant;
     questions = questions.filter(q => !q.variant || q.variant === '' || q.variant === `Variant ${userVariant}`);
@@ -3216,6 +3287,8 @@ app.get('/admin/edit-tests', checkAuth, checkAdmin, (req, res) => {
                 <input type="checkbox" id="randomAnswers${num}" name="randomAnswers${num}" ${data.randomAnswers ? 'checked' : ''}>
                 <label for="questionLimit${num}">Кількість питань:</label>
                 <input type="number" id="questionLimit${num}" name="questionLimit${num}" value="${data.questionLimit || ''}" min="1" placeholder="Без обмеження">
+                <label for="attemptLimit${num}">Ліміт спроб на день:</label>
+                <input type="number" id="attemptLimit${num}" name="attemptLimit${num}" value="${data.attemptLimit || 1}" min="1" required>
                 <button type="button" class="delete-btn" onclick="deleteTest('${num}')">Видалити</button>
               </div>
             `).join('')}
@@ -3257,6 +3330,7 @@ app.post('/admin/edit-tests', checkAuth, checkAdmin, async (req, res) => {
       const testName = req.body[`test${num}`];
       const timeLimit = req.body[`time${num}`];
       const questionLimit = req.body[`questionLimit${num}`];
+      const attemptLimit = req.body[`attemptLimit${num}`];
 
       if (!testName || testName.length < 1 || testName.length > 100) {
         validationErrors.push(`Назва тесту ${num} має бути від 1 до 100 символів`);
@@ -3266,6 +3340,9 @@ app.post('/admin/edit-tests', checkAuth, checkAdmin, async (req, res) => {
       }
       if (questionLimit && (isNaN(parseInt(questionLimit)) || parseInt(questionLimit) < 1)) {
         validationErrors.push(`Кількість питань для тесту ${num} має бути числом більше 0`);
+      }
+      if (!attemptLimit || isNaN(parseInt(attemptLimit)) || parseInt(attemptLimit) < 1) {
+        validationErrors.push(`Ліміт спроб для тесту ${num} має бути числом більше 0`);
       }
     });
 
@@ -3279,13 +3356,15 @@ app.post('/admin/edit-tests', checkAuth, checkAdmin, async (req, res) => {
       const randomQuestions = req.body[`randomQuestions${num}`] === 'on';
       const randomAnswers = req.body[`randomAnswers${num}`] === 'on';
       const questionLimit = req.body[`questionLimit${num}`] ? parseInt(req.body[`questionLimit${num}`]) : null;
-      if (testName && timeLimit) {
+      const attemptLimit = parseInt(req.body[`attemptLimit${num}`]);
+      if (testName && timeLimit && attemptLimit) {
         testNames[num] = {
           name: testName,
           timeLimit: parseInt(timeLimit) || testNames[num].timeLimit,
           randomQuestions,
           randomAnswers,
-          questionLimit
+          questionLimit,
+          attemptLimit
         };
       }
     });
