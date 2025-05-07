@@ -1536,7 +1536,7 @@ app.get('/result', checkAuth, async (req, res) => {
                   }
                 ],
                 styles: {
-                  header: { fontSize: 14, bold: true, margin: [0, 0, 0, 10], lineHeight: 2 }
+                  header: { fontSize: 14, bold: true, margin: [0, 0, 0,                     10], lineHeight: 2 }
                 }
               };
               pdfMake.createPdf(docDefinition).download('result.pdf');
