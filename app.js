@@ -106,7 +106,6 @@ app.use(session({
   cookie: {
     secure: process.env.NODE_ENV === 'production',
     httpOnly: true,
-    sameSite: 'none',
     maxAge: 24 * 60 * 60 * 1000
   },
   name: 'connect.sid'
@@ -502,6 +501,15 @@ app.post('/login', async (req, res) => {
       });
     });
 
+    // Примусово встановлюємо куку connect.sid
+    res.cookie('connect.sid', `s:${sessionId}.${req.session.cookie.signature}`, {
+      path: '/',
+      httpOnly: true,
+      secure: process.env.NODE_ENV === 'production',
+      maxAge: 24 * 60 * 60 * 1000,
+      expires: new Date(Date.now() + 24 * 60 * 60 * 1000)
+    });
+
     // Дебагінг заголовків відповіді
     const headers = res.getHeaders();
     console.log('Response headers after session setup:', headers);
@@ -532,7 +540,7 @@ const checkAuth = (req, res, next) => {
   console.log(`CheckAuth: Full session object:`, req.session);
   const user = req.session.user;
   console.log(`CheckAuth: user in session: ${user}, session ID: ${req.session.id}`);
-  
+
   // Дебагінг: перевіряємо сесію в MongoDB
   if (req.sessionID) {
     db.collection('sessions').findOne({ _id: req.sessionID }, (err, session) => {
