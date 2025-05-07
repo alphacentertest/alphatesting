@@ -104,7 +104,7 @@ app.use(session({
   resave: false,
   saveUninitialized: false,
   cookie: {
-    secure: process.env.NODE_ENV === 'production', // Для локального тестування дозволяємо insecure
+    secure: process.env.NODE_ENV === 'production',
     httpOnly: true,
     sameSite: 'none',
     maxAge: 24 * 60 * 60 * 1000
@@ -383,7 +383,13 @@ app.get('/', (req, res) => {
               }
 
               // Дебагінг заголовків відповіді
-              console.log('Response headers:', response.headers.get('set-cookie'));
+              const setCookieHeader = response.headers.get('set-cookie');
+              console.log('Response headers (set-cookie):', setCookieHeader);
+              if (setCookieHeader) {
+                console.log('Set-Cookie header found:', setCookieHeader);
+              } else {
+                console.log('No Set-Cookie header in response');
+              }
 
               const result = await response.json();
               console.log('Parsed login response:', result);
@@ -460,6 +466,19 @@ app.post('/login', async (req, res) => {
       return res.status(401).json({ success: false, message: 'Невірний пароль' });
     }
 
+    // Генеруємо новий session ID
+    await new Promise((resolve, reject) => {
+      req.session.regenerate(err => {
+        if (err) {
+          console.error('Error regenerating session:', err);
+          reject(err);
+        } else {
+          console.log('Session regenerated successfully');
+          resolve();
+        }
+      });
+    });
+
     req.session.user = foundUser.username;
     req.session.testVariant = Math.floor(Math.random() * 3) + 1;
     console.log(`Assigned variant ${req.session.testVariant} to user ${foundUser.username}`);
@@ -509,9 +528,24 @@ const checkAuth = (req, res, next) => {
   console.log(`CheckAuth: Cookies received:`, req.cookies);
   console.log(`CheckAuth: Raw cookie header:`, req.headers.cookie);
   console.log(`CheckAuth: Headers received:`, req.headers);
+  console.log(`CheckAuth: Session ID from cookie:`, req.sessionID);
   console.log(`CheckAuth: Full session object:`, req.session);
   const user = req.session.user;
   console.log(`CheckAuth: user in session: ${user}, session ID: ${req.session.id}`);
+  
+  // Дебагінг: перевіряємо сесію в MongoDB
+  if (req.sessionID) {
+    db.collection('sessions').findOne({ _id: req.sessionID }, (err, session) => {
+      if (err) {
+        console.error('Error checking session in MongoDB:', err);
+      } else {
+        console.log('Session found in MongoDB:', session);
+      }
+    });
+  } else {
+    console.log('No session ID in request');
+  }
+
   if (!user) {
     console.log('CheckAuth: No user in session, redirecting to /');
     return res.redirect('/');
