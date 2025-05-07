@@ -13,6 +13,8 @@ const nodemailer = require('nodemailer');
 
 const app = express();
 
+app.set('trust proxy', 1); // Довіряємо проксі Heroku
+
 // Налаштування multer для завантаження файлів
 const upload = multer({ dest: 'uploads/' });
 
@@ -104,8 +106,9 @@ app.use(session({
   resave: false,
   saveUninitialized: false,
   cookie: {
-    secure: process.env.NODE_ENV === 'production',
+    secure: process.env.NODE_ENV === 'production' ? true : false, // На Heroku secure: true, локально secure: false
     httpOnly: true,
+    sameSite: process.env.NODE_ENV === 'production' ? 'none' : 'lax', // На Heroku sameSite: 'none', локально sameSite: 'lax'
     maxAge: 24 * 60 * 60 * 1000
   },
   name: 'connect.sid'
@@ -375,6 +378,8 @@ app.get('/', (req, res) => {
               });
 
               console.log('Response received:', response);
+              console.log('Response status:', response.status);
+              console.log('Response headers:', [...response.headers.entries()]);
 
               // Перевіряємо, чи відповідь успішна
               if (!response.ok) {
@@ -394,17 +399,9 @@ app.get('/', (req, res) => {
               console.log('Parsed login response:', result);
               console.log('Cookies after login:', document.cookie);
 
-              // Додатковий дебагінг: чекаємо 1000мс і перевіряємо куки ще раз
-              setTimeout(() => {
-                console.log('Cookies after 1000ms delay:', document.cookie);
-              }, 1000);
-
               if (result.success) {
                 console.log('Redirecting to:', result.redirect);
-                setTimeout(() => {
-                  console.log('Executing redirect to:', result.redirect);
-                  window.location.href = result.redirect + '?nocache=' + Date.now();
-                }, 1000);
+                window.location.href = result.redirect + '?nocache=' + Date.now();
               } else {
                 console.log('Login failed with message:', result.message);
                 errorMessage.textContent = result.message || 'Помилка входу';
@@ -499,15 +496,6 @@ app.post('/login', async (req, res) => {
           resolve();
         }
       });
-    });
-
-    // Примусово встановлюємо куку connect.sid
-    res.cookie('connect.sid', `s:${sessionId}.${req.session.cookie.signature}`, {
-      path: '/',
-      httpOnly: true,
-      secure: process.env.NODE_ENV === 'production',
-      maxAge: 24 * 60 * 60 * 1000,
-      expires: new Date(Date.now() + 24 * 60 * 60 * 1000)
     });
 
     // Дебагінг заголовків відповіді
