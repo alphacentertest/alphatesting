@@ -108,7 +108,8 @@ app.use(session({
     httpOnly: true,
     sameSite: 'none',
     maxAge: 24 * 60 * 60 * 1000
-  }
+  },
+  name: 'connect.sid' // Явно вказуємо ім'я куки
 }));
 
 const importUsersToMongoDB = async (filePath) => {
@@ -378,6 +379,9 @@ app.get('/', (req, res) => {
                 throw new Error('HTTP error! status: ' + response.status);
               }
 
+              // Дебагінг заголовків відповіді
+              console.log('Response headers:', response.headers.get('set-cookie'));
+
               const result = await response.json();
               console.log('Login response:', result);
               console.log('Cookies after login:', document.cookie);
@@ -468,13 +472,17 @@ app.post('/login', async (req, res) => {
 
     console.log(`Session ID: ${sessionId}`);
 
-    // Асинхронно зберігаємо сесію без очікування
-    req.session.save(err => {
-      if (err) {
-        console.error('Error saving session:', err);
-      } else {
-        console.log('Session saved successfully');
-      }
+    // Синхронно зберігаємо сесію
+    await new Promise((resolve, reject) => {
+      req.session.save(err => {
+        if (err) {
+          console.error('Error saving session:', err);
+          reject(err);
+        } else {
+          console.log('Session saved successfully');
+          resolve();
+        }
+      });
     });
 
     // Дебагінг заголовків відповіді
