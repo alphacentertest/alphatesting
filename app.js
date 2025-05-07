@@ -2914,16 +2914,20 @@ app.post('/admin/import-questions', checkAuth, checkAdmin, upload.single('file')
   const startTime = Date.now();
   try {
     if (!req.file) {
+      console.log('Файл не завантажено: req.file отсутствует');
       return res.status(400).send('Файл не завантажено');
     }
     const filePath = req.file.path;
     const testNumber = req.file.originalname.match(/^questions(\d+)\.xlsx$/)?.[1];
     if (!testNumber) {
+      console.log(`Неверное имя файла: ${req.file.originalname}. Ожидается формат questionsX.xlsx`);
       fs.unlinkSync(filePath);
       return res.status(400).send('Файл повинен мати назву у форматі questionsX.xlsx, де X — номер тесту');
     }
+    console.log(`Загружаем файл ${req.file.originalname} для теста ${testNumber}`);
     const importedCount = await importQuestionsToMongoDB(filePath, testNumber);
     fs.unlinkSync(filePath);
+    console.log(`Успешно импортировано ${importedCount} вопросов для теста ${testNumber}`);
     res.send(`
       <!DOCTYPE html>
       <html lang="uk">
@@ -2942,7 +2946,7 @@ app.post('/admin/import-questions', checkAuth, checkAdmin, upload.single('file')
     if (req.file && fs.existsSync(req.file.path)) {
       fs.unlinkSync(req.file.path);
     }
-    res.status(500).send('Помилка при імпорті питань');
+    res.status(500).send(`Помилка при імпорті питань: ${error.message}`);
   } finally {
     const endTime = Date.now();
     console.log(`Route /admin/import-questions (POST) executed in ${endTime - startTime} ms`);
@@ -3398,9 +3402,21 @@ app.post('/admin/create-test', checkAuth, checkAdmin, [
         <head>
           <meta charset="UTF-8">
           <title>Тест створено</title>
+          <style>
+            body { font-family: Arial, sans-serif; padding: 20px; text-align: center; }
+            button { padding: 10px 20px; margin: 5px; cursor: pointer; border: none; border-radius: 5px; background-color: #4CAF50; color: white; }
+            button:hover { background-color: #45a049; }
+            a { display: inline-block; padding: 10px 20px; margin: 5px; background-color: #007bff; color: white; text-decoration: none; border-radius: 5px; }
+            a:hover { background-color: #0056b3; }
+          </style>
         </head>
         <body>
-          <h1>Новий тест "${testName}" створено</h1>
+          <h1>Новий тест "${testName}" створено (Тест ${testNumber})</h1>
+          <p>Скачайте шаблон для додавання питань:</p>
+          <a href="/download-template?testNumber=${testNumber}" download="questions${testNumber}.xlsx">Скачати questions${testNumber}.xlsx</a>
+          <p>Після заповнення шаблону завантажте його:</p>
+          <button onclick="window.location.href='/admin/import-questions'">Завантажити питання</button>
+          <br>
           <button onclick="window.location.href='/admin'">Повернутися до адмін-панелі</button>
         </body>
       </html>
@@ -3411,6 +3427,81 @@ app.post('/admin/create-test', checkAuth, checkAdmin, [
   } finally {
     const endTime = Date.now();
     console.log(`Route /admin/create-test (POST) executed in ${endTime - startTime} ms`);
+  }
+});
+
+app.get('/download-template', checkAuth, checkAdmin, async (req, res) => {
+  const startTime = Date.now();
+  try {
+    const testNumber = req.query.testNumber;
+    if (!testNumber || !testNames[testNumber]) {
+      return res.status(400).send('Номер тесту не вказано або тест не існує');
+    }
+
+    // Создаём новый Excel-файл с помощью ExcelJS
+    const workbook = new ExcelJS.Workbook();
+    const sheet = workbook.addWorksheet('Questions');
+
+    // Добавляем заголовки
+    sheet.columns = [
+      { header: 'Picture', key: 'picture', width: 15 },
+      { header: 'Question Text', key: 'text', width: 30 },
+      { header: 'Option 1', key: 'option1', width: 15 },
+      { header: 'Option 2', key: 'option2', width: 15 },
+      { header: 'Option 3', key: 'option3', width: 15 },
+      { header: 'Option 4', key: 'option4', width: 15 },
+      { header: 'Option 5', key: 'option5', width: 15 },
+      { header: 'Option 6', key: 'option6', width: 15 },
+      { header: 'Option 7', key: 'option7', width: 15 },
+      { header: 'Option 8', key: 'option8', width: 15 },
+      { header: 'Option 9', key: 'option9', width: 15 },
+      { header: 'Option 10', key: 'option10', width: 15 },
+      { header: 'Option 11', key: 'option11', width: 15 },
+      { header: 'Option 12', key: 'option12', width: 15 },
+      { header: 'Correct Answer 1', key: 'correct1', width: 15 },
+      { header: 'Correct Answer 2', key: 'correct2', width: 15 },
+      { header: 'Correct Answer 3', key: 'correct3', width: 15 },
+      { header: 'Correct Answer 4', key: 'correct4', width: 15 },
+      { header: 'Correct Answer 5', key: 'correct5', width: 15 },
+      { header: 'Correct Answer 6', key: 'correct6', width: 15 },
+      { header: 'Correct Answer 7', key: 'correct7', width: 15 },
+      { header: 'Correct Answer 8', key: 'correct8', width: 15 },
+      { header: 'Correct Answer 9', key: 'correct9', width: 15 },
+      { header: 'Correct Answer 10', key: 'correct10', width: 15 },
+      { header: 'Correct Answer 11', key: 'correct11', width: 15 },
+      { header: 'Correct Answer 12', key: 'correct12', width: 15 },
+      { header: 'Type', key: 'type', width: 15 },
+      { header: 'Points', key: 'points', width: 10 },
+      { header: 'Variant', key: 'variant', width: 15 }
+    ];
+
+    // Пример заполнения первой строки
+    sheet.addRow({
+      picture: 'Picture 1',
+      text: 'Пример вопроса',
+      option1: 'Вариант 1',
+      option2: 'Вариант 2',
+      option3: 'Вариант 3',
+      option4: 'Вариант 4',
+      correct1: 'Вариант 1',
+      type: 'multiple',
+      points: 1,
+      variant: 'Variant 1'
+    });
+
+    // Устанавливаем заголовки ответа
+    res.setHeader('Content-Disposition', `attachment; filename=questions${testNumber}.xlsx`);
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+
+    // Отправляем файл
+    await workbook.xlsx.write(res);
+    res.end();
+  } catch (error) {
+    console.error('Error generating template:', error.message, error.stack);
+    res.status(500).send('Помилка при генерації шаблону');
+  } finally {
+    const endTime = Date.now();
+    console.log(`Route /download-template executed in ${endTime - startTime} ms`);
   }
 });
 
