@@ -358,6 +358,7 @@ app.get('/api/test', (req, res) => {
   res.json({ success: true, message: 'Express server is working on /api/test' });
 });
 
+// Исправленный маршрут для страницы входа с двумя полями: логин и пароль
 app.get('/', (req, res) => {
   console.log('Serving index.html');
   res.send(`
@@ -366,7 +367,7 @@ app.get('/', (req, res) => {
       <head>
         <meta charset="UTF-8">
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>Тестування</title>
+        <title>Авторизація</title>
         <style>
           body { font-family: Arial, sans-serif; text-align: center; padding: 50px; background-color: #f5f5f5; margin: 0; }
           h1 { font-size: 36px; margin-bottom: 20px; }
@@ -382,7 +383,7 @@ app.get('/', (req, res) => {
         </style>
       </head>
       <body>
-        <h1>Вхід</h1>
+        <h1>Авторизація</h1>
         <form id="login-form" method="POST" action="/login">
           <input type="text" id="username" name="username" placeholder="Логін" required><br>
           <input type="password" id="password" name="password" placeholder="Пароль" required><br>
@@ -480,10 +481,13 @@ const logActivity = async (user, action, sessionId, ipAddress, additionalInfo = 
   }
 };
 
+// Исправленный маршрут /login для обработки двух полей
 app.post('/login', async (req, res) => {
   const startTime = Date.now();
   try {
     const { username, password } = req.body;
+    console.log('Received login data:', { username, password });
+
     if (!username || !password) {
       console.log('Username or password not provided');
       return res.status(400).json({ success: false, message: 'Логін або пароль не вказано' });
