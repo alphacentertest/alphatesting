@@ -25,7 +25,7 @@ const transporter = nodemailer.createTransport({
   service: 'gmail',
   auth: {
     user: 'alphacentertest@gmail.com',
-    pass: 'your-app-specific-password' // Замініть на пароль додатка Gmail
+    pass: ':bnnz<fnmrsdobysxtcnmysrjve' // Замініть на пароль додатка Gmail
   }
 });
 
@@ -59,13 +59,11 @@ const config = {
   }
 };
 
-// Підключення до MongoDB з автоматическим переподключением
+// Підключення до MongoDB
 const MONGODB_URI = process.env.MONGODB_URI || 'mongodb+srv://romanhaleckij7:DNMaH9w2X4gel3Xc@cluster0.r93r1p8.mongodb.net/alpha?retryWrites=true&w=majority';
 const client = new MongoClient(MONGODB_URI, {
   connectTimeoutMS: 5000,
-  serverSelectionTimeoutMS: 5000,
-  reconnectTries: Number.MAX_VALUE,
-  reconnectInterval: 1000
+  serverSelectionTimeoutMS: 5000
 });
 let db;
 
@@ -90,6 +88,7 @@ const CacheManager = {
       const startTime = Date.now();
       if (testNumber) {
         questionsCache[testNumber] = await db.collection('questions').find({ testNumber: testNumber.toString() }).toArray();
+        const endTime = Date.now();
         console.log(`Refreshed questions cache for test ${testNumber} with ${questionsCache[testNumber].length} questions in ${endTime - startTime} ms`);
       } else {
         // Обновляем кэш для всех тестов
@@ -1590,6 +1589,7 @@ app.get('/result', checkAuth, async (req, res) => {
       return res.status(500).send('Помилка при збереженні результату');
     }
 
+    const endDateTime = new Date(endTime);
     const formattedTime = endDateTime.toLocaleTimeString('uk-UA', { hour12: false });
     const formattedDate = endDateTime.toLocaleDateString('uk-UA');
     const imagePath = path.join(__dirname, 'public', 'images', 'A.png');
@@ -3069,7 +3069,7 @@ app.get('/admin/results', checkAuth, checkAdmin, async (req, res) => {
             <td>${r.totalPoints || '0'}</td>
             <td>${formatDateTime(r.startTime)}</td>
             <td>${formatDateTime(r.endTime)}</td>
-                       <td>${r.duration || 'N/A'}</td>
+            <td>${r.duration || 'N/A'}</td>
             <td>${suspiciousActivityPercent}%</td>
             <td class="details">${activityDetails}</td>
             <td class="answers">${answersDisplay}</td>
