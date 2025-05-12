@@ -3,19 +3,18 @@ const express = require('express');
 const cookieParser = require('cookie-parser');
 const path = require('path');
 const ExcelJS = require('exceljs');
-const session = require('express-session');
-const MongoStore = require('connect-mongo');
 const { MongoClient, ObjectId } = require('mongodb');
 const bcrypt = require('bcrypt');
 const fs = require('fs');
 const multer = require('multer');
 const nodemailer = require('nodemailer');
 const { body, validationResult } = require('express-validator');
-const crypto = require('crypto');
+const csurf = require('csurf');
+const jwt = require('jsonwebtoken');
 
 const app = express();
 
-app.set('trust proxy', 1); // Довіряємо проксі Heroku
+app.set('trust proxy', 1);
 
 // Налаштування multer для завантаження файлів
 const upload = multer({ dest: 'uploads/' });
@@ -25,7 +24,7 @@ const transporter = nodemailer.createTransport({
   service: 'gmail',
   auth: {
     user: 'alphacentertest@gmail.com',
-    pass: ':bnnz<fnmrsdobysxtcnmysrjve' // Замініть на пароль додатка Gmail
+    pass: ':bnnz<fnmrsdobysxtcnmysrjve'
   }
 });
 
@@ -54,8 +53,8 @@ const sendSuspiciousActivityEmail = async (user, activityDetails) => {
 // Конфигурация параметров подозрительной активности
 const config = {
   suspiciousActivity: {
-    timeAwayThreshold: 50, // Процент времени вне вкладки
-    switchCountThreshold: 5 // Количество переключений вкладок
+    timeAwayThreshold: 50,
+    switchCountThreshold: 5
   }
 };
 
@@ -91,7 +90,6 @@ const CacheManager = {
         const endTime = Date.now();
         console.log(`Refreshed questions cache for test ${testNumber} with ${questionsCache[testNumber].length} questions in ${endTime - startTime} ms`);
       } else {
-        // Обновляем кэш для всех тестов
         const allTests = Object.keys(testNames);
         for (const testNum of allTests) {
           questionsCache[testNum] = await db.collection('questions').find({ testNumber: testNum.toString() }).toArray();
@@ -147,84 +145,23 @@ app.use((req, res, next) => {
   next();
 });
 
-// Використовуємо MongoStore для сесій
-app.use(session({
-  store: MongoStore.create({
-    mongoUrl: MONGODB_URI,
-    collectionName: 'sessions',
-    ttl: 24 * 60 * 60,
-    autoRemove: 'interval',
-    autoRemoveInterval: 10
-  }),
-  secret: process.env.SESSION_SECRET || 'a1b2c3d4e5f6g7h8i9j0k1l2m3n4o5p6q7r8s9t0',
-  resave: false,
-  saveUninitialized: false,
-  cookie: {
-    secure: process.env.NODE_ENV === 'production' ? true : false,
-    httpOnly: true,
-    sameSite: process.env.NODE_ENV === 'production' ? 'none' : 'lax',
-    maxAge: 24 * 60 * 60 * 1000
-  },
-  name: 'connect.sid'
-}));
-
-// Хранилище для отслеживания попыток входа (временное, без базы данных)
-const loginAttempts = {};
-
-// Ограничение количества попыток входа (30 в день)
-const MAX_LOGIN_ATTEMPTS = 30;
-const ONE_DAY_MS = 24 * 60 * 60 * 1000;
-
-const checkLoginAttempts = async (ipAddress) => {
-  const now = Date.now();
-  if (!loginAttempts[ipAddress]) {
-    loginAttempts[ipAddress] = { count: 0, lastAttempt: now };
-  }
-
-  const { count, lastAttempt } = loginAttempts[ipAddress];
-  if (now - lastAttempt > ONE_DAY_MS) {
-    // Сбрасываем счетчик, если прошло больше дня
-    loginAttempts[ipAddress] = { count: 0, lastAttempt: now };
-  }
-
-  if (loginAttempts[ipAddress].count >= MAX_LOGIN_ATTEMPTS) {
-    throw new Error('Перевищено ліміт спроб входу (30 на день). Спробуйте знову завтра.');
-  }
-
-  loginAttempts[ipAddress].count += 1;
-  loginAttempts[ipAddress].lastAttempt = now;
-};
-
-// Middleware для защиты от CSRF (без csurf)
-app.use((req, res, next) => {
-  if (req.method === 'GET') {
-    // Генерируем CSRF-токен для GET-запросов
-    const token = crypto.randomBytes(32).toString('hex');
-    req.session.csrfToken = token;
-    res.locals.csrfToken = token;
-    next();
-  } else if (req.method === 'POST') {
-    // Пропускаем проверку CSRF для multipart/form-data
-    if (req.headers['content-type'] && req.headers['content-type'].startsWith('multipart/form-data')) {
-      next();
-    } else {
-      // Проверяем CSRF-токен для остальных POST-запросов
-      const submittedToken = req.body._csrf || req.headers['x-csrf-token'];
-      if (!submittedToken || submittedToken !== req.session.csrfToken) {
-        return res.status(403).json({ success: false, message: 'Недійсний CSRF-токен' });
-      }
-      next();
-    }
-  } else {
-    next();
-  }
-});
+// Настройка CSRF с использованием csurf
+app.use(csurf({ cookie: true }));
 
 // Middleware для обработки ошибок MongoDB
 app.use((err, req, res, next) => {
   if (err.name === 'MongoNetworkError' || err.name === 'MongoServerError') {
     console.error('MongoDB error:', err.message, err.stack);
     res.status(503).json({ success: false, message: 'Помилка з’єднання з базою даних. Спробуйте пізніше.' });
+  } else {
+    next(err);
+  }
+});
+
+// Middleware для обработки ошибок CSRF
+app.use((err, req, res, next) => {
+  if (err.code === 'EBADCSRFTOKEN') {
+    res.status(403).json({ success: false, message: 'Недійсний CSRF-токен' });
   } else {
     next(err);
   }
@@ -253,8 +190,7 @@ const importUsersToMongoDB = async (filePath) => {
       throw new Error('Не знайдено користувачів у файлі');
     }
     await db.collection('users').deleteMany({});
-    await db.collection('sessions').deleteMany({});
-    console.log('Cleared all sessions after user import');
+    console.log('Cleared all users before import');
     await db.collection('users').insertMany(users);
     console.log(`Imported ${users.length} users to MongoDB with hashed passwords`);
     await CacheManager.refreshUserCache();
@@ -276,58 +212,62 @@ const importQuestionsToMongoDB = async (filePath, testNumber) => {
     const questions = [];
     sheet.eachRow({ includeEmpty: false }, (row, rowNumber) => {
       if (rowNumber > 1) {
-        const rowValues = row.values.slice(1);
-        let questionText = rowValues[1];
-        if (typeof questionText === 'object' && questionText !== null) {
-          questionText = questionText.text || questionText.value || '[Невірний текст питання]';
+        try {
+          const rowValues = row.values.slice(1);
+          let questionText = rowValues[1];
+          if (typeof questionText === 'object' && questionText !== null) {
+            questionText = questionText.text || questionText.value || '[Невірний текст питання]';
+          }
+          questionText = String(questionText || '').trim();
+          if (questionText === '') throw new Error('Текст питання відсутній');
+          const picture = String(rowValues[0] || '').trim();
+          let options = rowValues.slice(2, 14).filter(Boolean).map(val => String(val).trim());
+          const correctAnswers = rowValues.slice(14, 26).filter(Boolean).map(val => String(val).trim());
+          const type = String(rowValues[26] || 'multiple').toLowerCase();
+          const points = Number(rowValues[27]) || 1;
+          const variant = String(rowValues[28] || '').trim();
+
+          if (type === 'truefalse') {
+            options = ["Правда", "Неправда"];
+          }
+
+          let questionData = {
+            testNumber,
+            picture: picture.match(/^Picture (\d+)/i) ? `/images/Picture ${picture.match(/^Picture (\d+)/i)[1]}.png` : null,
+            text: questionText,
+            options,
+            correctAnswers,
+            type,
+            points,
+            variant
+          };
+
+          if (type === 'matching') {
+            questionData.pairs = options.map((opt, idx) => ({
+              left: opt || '',
+              right: correctAnswers[idx] || ''
+            })).filter(pair => pair.left && pair.right);
+            if (questionData.pairs.length === 0) throw new Error('Для типу Matching потрібні пари відповідей');
+            questionData.correctPairs = questionData.pairs.map(pair => [pair.left, pair.right]);
+          }
+
+          if (type === 'fillblank') {
+            questionText = questionText.replace(/\s*___\s*/g, '___');
+            const blankCount = (questionText.match(/___/g) || []).length;
+            if (blankCount === 0 || blankCount !== correctAnswers.length) throw new Error('Кількість пропусків у тексті питання не відповідає кількості правильних відповідей');
+            questionData.text = questionText;
+            questionData.blankCount = blankCount;
+          }
+
+          if (type === 'singlechoice') {
+            if (correctAnswers.length !== 1 || options.length < 2) throw new Error('Для типу Single Choice потрібна одна правильна відповідь і мінімум 2 варіанти');
+            questionData.correctAnswer = correctAnswers[0];
+          }
+
+          questions.push(questionData);
+        } catch (error) {
+          throw new Error(`Помилка в рядку ${rowNumber}: ${error.message}`);
         }
-        questionText = String(questionText || '').trim();
-        if (questionText === '') return;
-        const picture = String(rowValues[0] || '').trim();
-        let options = rowValues.slice(2, 14).filter(Boolean).map(val => String(val).trim());
-        const correctAnswers = rowValues.slice(14, 26).filter(Boolean).map(val => String(val).trim());
-        const type = String(rowValues[26] || 'multiple').toLowerCase();
-        const points = Number(rowValues[27]) || 1;
-        const variant = String(rowValues[28] || '').trim();
-
-        if (type === 'truefalse') {
-          options = ["Правда", "Неправда"];
-        }
-
-        let questionData = {
-          testNumber,
-          picture: picture.match(/^Picture (\d+)/i) ? `/images/Picture ${picture.match(/^Picture (\d+)/i)[1]}.png` : null,
-          text: questionText,
-          options,
-          correctAnswers,
-          type,
-          points,
-          variant
-        };
-
-        if (type === 'matching') {
-          questionData.pairs = options.map((opt, idx) => ({
-            left: opt || '',
-            right: correctAnswers[idx] || ''
-          })).filter(pair => pair.left && pair.right);
-          if (questionData.pairs.length === 0) return;
-          questionData.correctPairs = questionData.pairs.map(pair => [pair.left, pair.right]);
-        }
-
-        if (type === 'fillblank') {
-          questionText = questionText.replace(/\s*___\s*/g, '___');
-          const blankCount = (questionText.match(/___/g) || []).length;
-          if (blankCount === 0 || blankCount !== correctAnswers.length) return;
-          questionData.text = questionText;
-          questionData.blankCount = blankCount;
-        }
-
-        if (type === 'singlechoice') {
-          if (correctAnswers.length !== 1 || options.length < 2) return;
-          questionData.correctAnswer = correctAnswers[0];
-        }
-
-        questions.push(questionData);
       }
     });
     if (questions.length === 0) {
@@ -360,7 +300,6 @@ const loadUsersToCache = async () => {
 const loadQuestions = async (testNumber) => {
   try {
     const startTime = Date.now();
-    // Проверяем кэш
     if (questionsCache[testNumber]) {
       const endTime = Date.now();
       console.log(`Loaded ${questionsCache[testNumber].length} questions for test ${testNumber} from cache in ${endTime - startTime} ms`);
@@ -372,7 +311,7 @@ const loadQuestions = async (testNumber) => {
     if (questions.length === 0) {
       throw new Error(`No questions found in MongoDB for test ${testNumber}`);
     }
-    questionsCache[testNumber] = questions; // Сохраняем в кэш
+    questionsCache[testNumber] = questions;
     console.log(`Loaded ${questions.length} questions for test ${testNumber} from MongoDB in ${endTime - startTime} ms`);
     return questions;
   } catch (error) {
@@ -418,10 +357,10 @@ const initializeServer = async () => {
     await connectToMongoDB();
     await db.collection('users').createIndex({ username: 1 }, { unique: true });
     await db.collection('questions').createIndex({ testNumber: 1, variant: 1 });
-    await db.collection('test_results').createIndex({ user: 1, endTime: -1 });
+    await db.collection('test_results').createIndex({ user: 1, testNumber: 1, endTime: -1 });
     await db.collection('activity_log').createIndex({ user: 1, timestamp: -1 });
-    // Добавляем индекс для test_attempts
     await db.collection('test_attempts').createIndex({ user: 1, testNumber: 1, attemptDate: 1 });
+    await db.collection('login_attempts').createIndex({ ipAddress: 1, lastAttempt: 1 });
     console.log('MongoDB indexes created successfully');
     await updateUserPasswords();
     await CacheManager.refreshUserCache();
@@ -445,41 +384,55 @@ const initializeServer = async () => {
   }
 })();
 
-const checkTestAttempts = async (user, testNumber) => {
+// Хранилище для отслеживания попыток входа (в MongoDB)
+const MAX_LOGIN_ATTEMPTS = 30;
+const ONE_DAY_MS = 24 * 60 * 60 * 1000;
+
+const checkLoginAttempts = async (ipAddress) => {
+  const now = Date.now();
+  const startOfDay = new Date(now).setHours(0, 0, 0, 0);
+  const endOfDay = startOfDay + ONE_DAY_MS;
+
+  const attempts = await db.collection('login_attempts').findOne({
+    ipAddress,
+    lastAttempt: { $gte: startOfDay, $lt: endOfDay }
+  });
+
+  if (!attempts) {
+    await db.collection('login_attempts').insertOne({
+      ipAddress,
+      count: 0,
+      lastAttempt: now
+    });
+  } else if (attempts.count >= MAX_LOGIN_ATTEMPTS) {
+    throw new Error('Перевищено ліміт спроб входу (30 на день). Спробуйте знову завтра.');
+  }
+
+  await db.collection('login_attempts').updateOne(
+    { ipAddress, lastAttempt: { $gte: startOfDay, $lt: endOfDay } },
+    { $inc: { count: 1 }, $set: { lastAttempt: now } },
+    { upsert: true }
+  );
+};
+
+// Функция для логирования активности
+const logActivity = async (user, action, ipAddress, additionalInfo = {}) => {
   try {
-    const now = new Date();
-    // Устанавливаем начало текущего дня (00:00:00)
-    const startOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-    const endOfDay = new Date(startOfDay.getTime() + 24 * 60 * 60 * 1000);
-
-    // Получаем лимит попыток для данного теста
-    const attemptLimit = testNames[testNumber]?.attemptLimit || 1;
-
-    // Подсчитываем количество попыток пользователя за день
-    const attempts = await db.collection('test_attempts').countDocuments({
+    const startTime = Date.now();
+    const timestamp = new Date();
+    const timeOffset = 3 * 60 * 60 * 1000;
+    const adjustedTimestamp = new Date(timestamp.getTime() + timeOffset);
+    await db.collection('activity_log').insertOne({
       user,
-      testNumber,
-      attemptDate: {
-        $gte: startOfDay.toISOString(),
-        $lt: endOfDay.toISOString()
-      }
+      action,
+      ipAddress,
+      timestamp: adjustedTimestamp.toISOString(),
+      additionalInfo
     });
-
-    if (attempts >= attemptLimit) {
-      // Если количество попыток достигло или превысило лимит, возвращаем false
-      return false;
-    }
-
-    // Если попытки ещё возможны, записываем новую попытку
-    await db.collection('test_attempts').insertOne({
-      user,
-      testNumber,
-      attemptDate: now.toISOString()
-    });
-    return true;
+    const endTime = Date.now();
+    console.log(`Logged activity: ${user} - ${action} at ${adjustedTimestamp}, IP: ${ipAddress} in ${endTime - startTime} ms`);
   } catch (error) {
-    console.error('Error checking test attempts:', error.message, error.stack);
-    throw error;
+    console.error('Error logging activity:', error.message, error.stack);
   }
 };
 
@@ -501,7 +454,6 @@ app.get('/api/test', (req, res) => {
   res.json({ success: true, message: 'Express server is working on /api/test' });
 });
 
-// Исправленный маршрут для страницы входа с двумя полями и надписями
 app.get('/', (req, res) => {
   console.log('Serving index.html');
   res.send(`
@@ -532,7 +484,7 @@ app.get('/', (req, res) => {
       <body>
         <h1>Авторизація</h1>
         <form id="login-form" method="POST" action="/login">
-          <input type="hidden" name="_csrf" value="${res.locals.csrfToken}">
+          <input type="hidden" name="_csrf" value="${req.csrfToken()}">
           <label for="username">Користувач:</label>
           <input type="text" id="username" name="username" placeholder="Логін" required><br>
           <label for="password">Пароль:</label>
@@ -545,8 +497,6 @@ app.get('/', (req, res) => {
         </form>
         <div id="error-message" class="error"></div>
         <script>
-          console.log('Cookies before login:', document.cookie);
-
           document.getElementById('login-form').addEventListener('submit', async (e) => {
             e.preventDefault();
             const username = document.getElementById('username').value;
@@ -559,39 +509,21 @@ app.get('/', (req, res) => {
             formData.append('_csrf', document.querySelector('input[name="_csrf"]').value);
 
             try {
-              console.log('Sending login request...');
               const response = await fetch('/login', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-                credentials: 'include',
                 body: formData
               });
-
-              console.log('Response received:', response);
-              console.log('Response status:', response.status);
-              console.log('Response headers:', [...response.headers.entries()]);
 
               if (!response.ok) {
                 throw new Error('HTTP error! status: ' + response.status);
               }
 
-              const setCookieHeader = response.headers.get('set-cookie');
-              console.log('Response headers (set-cookie):', setCookieHeader);
-              if (setCookieHeader) {
-                console.log('Set-Cookie header found:', setCookieHeader);
-              } else {
-                console.log('No Set-Cookie header in response');
-              }
-
               const result = await response.json();
-              console.log('Parsed login response:', result);
-              console.log('Cookies after login:', document.cookie);
-
               if (result.success) {
-                console.log('Redirecting to:', result.redirect);
+                localStorage.setItem('token', result.token);
                 window.location.href = result.redirect + '?nocache=' + Date.now();
               } else {
-                console.log('Login failed with message:', result.message);
                 errorMessage.textContent = result.message || 'Помилка входу';
               }
             } catch (error) {
@@ -611,28 +543,6 @@ app.get('/', (req, res) => {
   `);
 });
 
-const logActivity = async (user, action, sessionId, ipAddress, additionalInfo = {}) => {
-  try {
-    const startTime = Date.now();
-    const timestamp = new Date();
-    const timeOffset = 3 * 60 * 60 * 1000;
-    const adjustedTimestamp = new Date(timestamp.getTime() + timeOffset);
-    await db.collection('activity_log').insertOne({
-      user,
-      action,
-      sessionId,
-      ipAddress,
-      timestamp: adjustedTimestamp.toISOString(),
-      additionalInfo
-    });
-    const endTime = Date.now();
-    console.log(`Logged activity: ${user} - ${action} at ${adjustedTimestamp}, IP: ${ipAddress}, Session: ${sessionId} in ${endTime - startTime} ms`);
-  } catch (error) {
-    console.error('Error logging activity:', error.message, error.stack);
-  }
-};
-
-// Исправленный маршрут /login с валидацией и ограничением попыток
 app.post('/login', [
   body('username')
     .isLength({ min: 3, max: 50 }).withMessage('Логін має бути від 3 до 50 символів')
@@ -642,11 +552,9 @@ app.post('/login', [
 ], async (req, res) => {
   const startTime = Date.now();
   try {
-    // Проверка ограничения попыток входа
     const ipAddress = req.headers['x-forwarded-for'] || req.socket.remoteAddress;
     await checkLoginAttempts(ipAddress);
 
-    // Валидация данных
     const errors = validationResult(req);
     if (!errors.isEmpty()) {
       return res.status(400).json({ success: false, message: errors.array()[0].msg });
@@ -660,62 +568,35 @@ app.post('/login', [
       return res.status(400).json({ success: false, message: 'Логін або пароль не вказано' });
     }
 
-    // Ищем пользователя в кэше
     const foundUser = userCache.find(user => user.username === username);
     if (!foundUser) {
       console.log('User not found:', username);
       return res.status(401).json({ success: false, message: 'Невірний логін або пароль' });
     }
 
-    // Проверяем пароль
     const passwordMatch = await bcrypt.compare(password, foundUser.password);
     if (!passwordMatch) {
       console.log('Invalid password for user:', username);
       return res.status(401).json({ success: false, message: 'Невірний логін або пароль' });
     }
 
-    // Сбрасываем счетчик попыток при успешном входе
-    loginAttempts[ipAddress] = { count: 0, lastAttempt: Date.now() };
+    await db.collection('login_attempts').updateOne(
+      { ipAddress, lastAttempt: { $gte: new Date(startOfDay), $lt: new Date(endOfDay) } },
+      { $set: { count: 0, lastAttempt: Date.now() } }
+    );
 
-    // Генерируем новый session ID
-    await new Promise((resolve, reject) => {
-      req.session.regenerate(err => {
-        if (err) {
-          console.error('Error regenerating session:', err);
-          reject(err);
-        } else {
-          console.log('Session regenerated successfully');
-          resolve();
-        }
-      });
-    });
+    const token = jwt.sign(
+      { username: foundUser.username },
+      process.env.JWT_SECRET || 'your-secret-key',
+      { expiresIn: '24h' }
+    );
 
-    req.session.user = foundUser.username;
-    req.session.testVariant = Math.floor(Math.random() * 3) + 1;
-    console.log(`Assigned variant ${req.session.testVariant} to user ${foundUser.username}`);
-    console.log(`Session after login:`, req.session);
-    await logActivity(foundUser.username, 'увійшов на сайт', req.session.id, ipAddress);
-
-    console.log(`Session ID: ${req.session.id}`);
-
-    // Явно помечаем сессию как измененную
-    req.session.modified = true;
-
-    // Дебагинг заголовков ответа
-    const headers = res.getHeaders();
-    console.log('Response headers after session setup:', headers);
-    if (headers['set-cookie']) {
-      console.log('Set-Cookie details:', headers['set-cookie']);
-    } else {
-      console.log('No Set-Cookie header found');
-    }
+    await logActivity(foundUser.username, 'увійшов на сайт', ipAddress);
 
     if (foundUser.username === 'admin') {
-      console.log('Sending response: redirect to /admin');
-      res.json({ success: true, redirect: '/admin' });
+      res.json({ success: true, token, redirect: '/admin' });
     } else {
-      console.log('Sending response: redirect to /select-test');
-      res.json({ success: true, redirect: '/select-test' });
+      res.json({ success: true, token, redirect: '/select-test' });
     }
   } catch (error) {
     console.error('Ошибка в /login:', error.message, error.stack);
@@ -726,39 +607,25 @@ app.post('/login', [
   }
 });
 
+// Middleware для проверки JWT
 const checkAuth = (req, res, next) => {
-  console.log(`CheckAuth: Cookies received:`, req.cookies);
-  console.log(`CheckAuth: Raw cookie header:`, req.headers.cookie);
-  console.log(`CheckAuth: Headers received:`, req.headers);
-  console.log(`CheckAuth: Session ID from cookie:`, req.sessionID);
-  console.log(`CheckAuth: Full session object:`, req.session);
-  const user = req.session.user;
-  console.log(`CheckAuth: user in session: ${user}, session ID: ${req.session.id}`);
-
-  if (req.sessionID) {
-    db.collection('sessions').findOne({ _id: req.sessionID }, (err, session) => {
-      if (err) {
-        console.error('Error checking session in MongoDB:', err);
-      } else {
-        console.log('Session found in MongoDB:', session);
-      }
-    });
-  } else {
-    console.log('No session ID in request');
-  }
-
-  if (!user) {
-    console.log('CheckAuth: No user in session, redirecting to /');
+  const token = req.headers['authorization']?.split(' ')[1] || req.cookies.token;
+  if (!token) {
     return res.redirect('/');
   }
-  req.user = user;
-  console.log(`CheckAuth: User authenticated: ${req.user}`);
-  next();
+
+  try {
+    const decoded = jwt.verify(token, process.env.JWT_SECRET || 'your-secret-key');
+    req.user = decoded.username;
+    next();
+  } catch (error) {
+    console.error('JWT verification failed:', error.message, error.stack);
+    res.redirect('/');
+  }
 };
 
 const checkAdmin = (req, res, next) => {
-  const user = req.session.user;
-  if (user !== 'admin') {
+  if (req.user !== 'admin') {
     return res.status(403).send('Доступно тільки для адміністратора (403 Forbidden)');
   }
   next();
@@ -767,9 +634,7 @@ const checkAdmin = (req, res, next) => {
 app.get('/select-test', checkAuth, (req, res) => {
   const startTime = Date.now();
   try {
-    console.log(`Serving /select-test for user: ${req.user}`);
     if (req.user === 'admin') {
-      console.log('User is admin, redirecting to /admin');
       return res.redirect('/admin');
     }
     const html = `
@@ -804,13 +669,16 @@ app.get('/select-test', checkAuth, (req, res) => {
           <script>
             async function logout() {
               const formData = new URLSearchParams();
-              formData.append('_csrf', '${res.locals.csrfToken}');
+              formData.append('_csrf', '${req.csrfToken()}');
               await fetch('/logout', {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-                credentials: 'include',
+                headers: { 
+                  'Content-Type': 'application/x-www-form-urlencoded',
+                  'Authorization': 'Bearer ' + localStorage.getItem('token')
+                },
                 body: formData
               });
+              localStorage.removeItem('token');
               window.location.href = '/';
             }
           </script>
@@ -824,22 +692,12 @@ app.get('/select-test', checkAuth, (req, res) => {
   }
 });
 
-app.post('/logout', (req, res) => {
+app.post('/logout', checkAuth, (req, res) => {
   const startTime = Date.now();
   try {
-    const user = req.session.user;
-    const sessionId = req.session.id;
     const ipAddress = req.headers['x-forwarded-for'] || req.socket.remoteAddress;
-    if (user) {
-      logActivity(user, 'покинув сайт', sessionId, ipAddress);
-    }
-    req.session.destroy(err => {
-      if (err) {
-        console.error('Error destroying session:', err);
-        return res.status(500).json({ success: false, message: 'Помилка при виході' });
-      }
-      res.json({ success: true });
-    });
+    logActivity(req.user, 'покинув сайт', ipAddress);
+    res.json({ success: true });
   } finally {
     const endTime = Date.now();
     console.log(`Route /logout executed in ${endTime - startTime} ms`);
@@ -888,6 +746,41 @@ const saveResult = async (user, testNumber, score, totalPoints, startTime, endTi
   }
 };
 
+const checkTestAttempts = async (user, testNumber) => {
+  try {
+    const now = new Date();
+    const startOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    const endOfDay = new Date(startOfDay.getTime() + 24 * 60 * 60 * 1000);
+
+    const attemptLimit = testNames[testNumber]?.attemptLimit || 1;
+
+    const attempts = await db.collection('test_attempts').countDocuments({
+      user,
+      testNumber,
+      attemptDate: {
+        $gte: startOfDay.toISOString(),
+        $lt: endOfDay.toISOString()
+      }
+    });
+
+    console.log(`User ${user} has ${attemptLimit - attempts} attempts left for test ${testNumber} today`);
+
+    if (attempts >= attemptLimit) {
+      return false;
+    }
+
+    await db.collection('test_attempts').insertOne({
+      user,
+      testNumber,
+      attemptDate: now.toISOString()
+    });
+    return true;
+  } catch (error) {
+    console.error('Error checking test attempts:', error.message, error.stack);
+    throw error;
+  }
+};
+
 app.get('/test', checkAuth, async (req, res) => {
   const startTime = Date.now();
   try {
@@ -897,10 +790,8 @@ app.get('/test', checkAuth, async (req, res) => {
       return res.status(400).send('Номер тесту не вказано або тест не знайдено');
     }
 
-    // Проверяем, может ли пользователь начать тест
     const canAttemptTest = await checkTestAttempts(req.user, testNumber);
     if (!canAttemptTest) {
-      // Если пользователь уже проходил тест сегодня, показываем контекстное меню
       return res.send(`
         <!DOCTYPE html>
         <html lang="uk">
@@ -909,13 +800,16 @@ app.get('/test', checkAuth, async (req, res) => {
             <meta name="viewport" content="width=device-width, initial-scale=1.0">
             <title>Помилка</title>
             <style>
-              body { font-family: Arial, sans-serif; text-align: center; padding: 50px; background-color: #f5f5f5; }
-              #modal { position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%); background: white; padding: 20px; border: 2px solid black; z-index: 1000; }
-              button { padding: 10px 20px; margin: 5px; cursor: pointer; border: none; border-radius: 5px; background-color: #4CAF50; color: white; }
+              body { font-family: Arial, sans-serif; text-align: center; padding: 50px; background-color: #f5f5f5; margin: 0; }
+              #modal { position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%); background: white; padding: 20px; border: 2px solid black; z-index: 1000; box-shadow: 0 0 10px rgba(0,0,0,0.3); border-radius: 10px; }
+              button { padding: 10px 20px; margin: 5px; cursor: pointer; border: none; border-radius: 5px; background-color: #4CAF50; color: white; transition: background-color 0.3s; }
               button:hover { background-color: #45a049; }
+              .overlay { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.5); z-index: 999; }
+              h2 { margin-bottom: 20px; font-size: 24px; color: #333; }
             </style>
           </head>
           <body>
+            <div class="overlay"></div>
             <div id="modal">
               <h2>Ви вже проходили сьогодні цей тест</h2>
               <button onclick="window.location.href='/select-test'">Повернутися до вибору тесту</button>
@@ -926,7 +820,7 @@ app.get('/test', checkAuth, async (req, res) => {
     }
 
     let questions = await loadQuestions(testNumber);
-    const userVariant = req.session.testVariant;
+    const userVariant = Math.floor(Math.random() * 3) + 1;
     questions = questions.filter(q => !q.variant || q.variant === '' || q.variant === `Variant ${userVariant}`);
     const questionLimit = testNames[testNumber].questionLimit;
     if (questionLimit && questions.length > questionLimit) {
@@ -957,8 +851,7 @@ app.get('/test', checkAuth, async (req, res) => {
       variant: userVariant
     });
     const ipAddress = req.headers['x-forwarded-for'] || req.socket.remoteAddress;
-    const sessionId = req.session.id;
-    await logActivity(req.user, `розпочав тест ${testNames[testNumber].name}`, sessionId, ipAddress);
+    await logActivity(req.user, `розпочав тест ${testNames[testNumber].name}`, ipAddress);
     res.redirect(`/test/question?index=0`);
   } catch (error) {
     console.error('Ошибка в /test:', error.message, error.stack);
@@ -1205,7 +1098,6 @@ app.get('/test/question', checkAuth, (req, res) => {
             <button onclick="hideConfirm()">Ні</button>
           </div>
           <script>
-            console.log('Starting test question script...');
             const startTime = ${startTime};
             const timeLimit = ${timeLimit};
             const timerElement = document.getElementById('timer');
@@ -1223,14 +1115,12 @@ app.get('/test/question', checkAuth, (req, res) => {
 
             function updateTimer() {
               try {
-                console.log('Updating timer...');
                 const elapsedTime = Math.floor((Date.now() - startTime) / 1000);
                 const remainingTime = Math.max(0, Math.floor(timeLimit / 1000) - elapsedTime);
                 const minutes = Math.floor(remainingTime / 60).toString().padStart(2, '0');
                 const seconds = (remainingTime % 60).toString().padStart(2, '0');
                 timerElement.textContent = 'Залишилось часу: ' + minutes + ' мм ' + seconds + ' с';
                 if (remainingTime <= 0) {
-                  console.log('Time is up, redirecting to /result');
                   window.location.href = '/result';
                 } else {
                   requestAnimationFrame(updateTimer);
@@ -1242,13 +1132,11 @@ app.get('/test/question', checkAuth, (req, res) => {
             requestAnimationFrame(updateTimer);
 
             window.addEventListener('blur', () => {
-              console.log('Window blurred');
               lastBlurTime = Date.now();
               switchCount++;
             });
 
             window.addEventListener('focus', () => {
-              console.log('Window focused');
               if (lastBlurTime) {
                 timeAway += Date.now() - lastBlurTime;
               }
@@ -1277,7 +1165,6 @@ app.get('/test/question', checkAuth, (req, res) => {
 
             document.querySelectorAll('.option-box:not(.draggable)').forEach(box => {
               box.addEventListener('click', () => {
-                console.log('Option box clicked:', box.getAttribute('data-value'));
                 const questionType = '${q.type}';
                 const option = box.getAttribute('data-value');
                 if (questionType === 'truefalse' || questionType === 'multiple' || questionType === 'singlechoice') {
@@ -1299,7 +1186,6 @@ app.get('/test/question', checkAuth, (req, res) => {
 
             async function saveAndNext(index) {
               try {
-                console.log('Saving answer and moving to next question:', index);
                 let answers = selectedOptions;
                 if (document.querySelector('input[name="q' + index + '"]')) {
                   answers = document.getElementById('q' + index + '_input').value;
@@ -1314,7 +1200,6 @@ app.get('/test/question', checkAuth, (req, res) => {
                     answers.push(input ? input.value.trim() : '');
                   }
                 }
-                console.log('Saving answer for question ' + index + ':', answers);
                 const responseTime = Date.now() - questionStartTime;
 
                 const formData = new URLSearchParams();
@@ -1324,18 +1209,19 @@ app.get('/test/question', checkAuth, (req, res) => {
                 formData.append('switchCount', switchCount);
                 formData.append('responseTime', responseTime);
                 formData.append('activityCount', activityCount);
-                formData.append('_csrf', '${res.locals.csrfToken}');
+                formData.append('_csrf', '${req.csrfToken()}');
 
                 const response = await fetch('/answer', {
                   method: 'POST',
-                  headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-                  credentials: 'include',
+                  headers: { 
+                    'Content-Type': 'application/x-www-form-urlencoded',
+                    'Authorization': 'Bearer ' + localStorage.getItem('token')
+                  },
                   body: formData
                 });
 
                 const result = await response.json();
                 if (result.success) {
-                  console.log('Answer saved, redirecting to next question');
                   window.location.href = '/test/question?index=' + (index + 1);
                 } else {
                   console.error('Error saving answer:', result.error);
@@ -1346,18 +1232,15 @@ app.get('/test/question', checkAuth, (req, res) => {
             }
 
             function showConfirm(index) {
-              console.log('Showing confirmation modal for index:', index);
               document.getElementById('confirm-modal').style.display = 'block';
             }
 
             function hideConfirm() {
-              console.log('Hiding confirmation modal');
               document.getElementById('confirm-modal').style.display = 'none';
             }
 
             async function finishTest(index) {
               try {
-                console.log('Finishing test for index:', index);
                 let answers = selectedOptions;
                 if (document.querySelector('input[name="q' + index + '"]')) {
                   answers = document.getElementById('q' + index + '_input').value;
@@ -1372,7 +1255,6 @@ app.get('/test/question', checkAuth, (req, res) => {
                     answers.push(input ? input.value.trim() : '');
                   }
                 }
-                console.log('Finishing test, answer for question ' + index + ':', answers);
                 const responseTime = Date.now() - questionStartTime;
 
                 const formData = new URLSearchParams();
@@ -1382,18 +1264,19 @@ app.get('/test/question', checkAuth, (req, res) => {
                 formData.append('switchCount', switchCount);
                 formData.append('responseTime', responseTime);
                 formData.append('activityCount', activityCount);
-                formData.append('_csrf', '${res.locals.csrfToken}');
+                formData.append('_csrf', '${req.csrfToken()}');
 
                 const response = await fetch('/answer', {
                   method: 'POST',
-                  headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-                  credentials: 'include',
+                  headers: { 
+                    'Content-Type': 'application/x-www-form-urlencoded',
+                    'Authorization': 'Bearer ' + localStorage.getItem('token')
+                  },
                   body: formData
                 });
 
                 const result = await response.json();
                 if (result.success) {
-                  console.log('Test finished, redirecting to /result');
                   window.location.href = '/result';
                 } else {
                   console.error('Error finishing test:', result.error);
@@ -1405,14 +1288,12 @@ app.get('/test/question', checkAuth, (req, res) => {
 
             const sortable = document.getElementById('sortable-options');
             if (sortable) {
-              console.log('Initializing Sortable for ordering question');
               new Sortable(sortable, { animation: 150 });
             }
 
             const leftColumn = document.getElementById('left-column');
             const rightColumn = document.getElementById('right-column');
             if (leftColumn && rightColumn && '${q.type}' === 'matching') {
-              console.log('Initializing Sortable for matching question');
               new Sortable(leftColumn, {
                 group: 'matching',
                 animation: 150,
@@ -1448,7 +1329,6 @@ app.get('/test/question', checkAuth, (req, res) => {
                     matchingPairs.push([leftValue, rightValue]);
                   }
                 });
-                console.log('Updated matching pairs:', matchingPairs);
               }
 
               function resetMatchingPairs() {
@@ -1458,12 +1338,10 @@ app.get('/test/question', checkAuth, (req, res) => {
                   const rightValue = item.dataset.value || '';
                   item.innerHTML = rightValue;
                 });
-                console.log('Matching pairs reset');
               }
 
               const droppableItems = document.querySelectorAll('.droppable');
               if (droppableItems.length > 0) {
-                console.log('Adding dragover and drop listeners to', droppableItems.length, 'droppable items');
                 droppableItems.forEach(item => {
                   item.addEventListener('dragover', (e) => e.preventDefault());
                   item.addEventListener('drop', (e) => {
@@ -1472,7 +1350,6 @@ app.get('/test/question', checkAuth, (req, res) => {
                     if (draggable && draggable.classList.contains('draggable')) {
                       const leftValue = draggable.dataset.value || '';
                       const rightValue = item.dataset.value || '';
-                      console.log('Dropped:', { leftValue, rightValue });
                       if (leftValue && rightValue) {
                         item.innerHTML = rightValue + ' <span class="matched"> (Зіставлено: ' + leftValue + ')</span>';
                         const leftColumn = document.getElementById('left-column');
@@ -1486,17 +1363,12 @@ app.get('/test/question', checkAuth, (req, res) => {
                           leftColumn.appendChild(draggable);
                         }
                         updateMatchingPairs();
-                      } else {
-                        console.warn('Missing leftValue or rightValue:', { leftValue, rightValue });
                       }
                     }
                   });
                 });
-              } else {
-                console.warn('No droppable items found for matching question');
               }
             }
-            console.log('Test question script initialized successfully');
           </script>
         </body>
       </html>
@@ -1514,11 +1386,7 @@ app.post('/answer', checkAuth, express.urlencoded({ extended: true }), async (re
     if (req.user === 'admin') return res.redirect('/admin');
     const { index, answer, timeAway, switchCount, responseTime, activityCount } = req.body;
 
-    console.log('Received /answer data:', req.body);
-
-    // Проверка входных данных
     if (!index || !answer) {
-      console.log('Missing required fields in /answer:', { index, answer });
       return res.status(400).json({ success: false, error: 'Необхідно надати index та answer' });
     }
 
@@ -1543,7 +1411,6 @@ app.post('/answer', checkAuth, express.urlencoded({ extended: true }), async (re
       return res.status(400).json({ success: false, error: 'Тест не розпочато' });
     }
 
-    console.log(`Saving answer for question ${index}:`, parsedAnswer);
     userTest.answers[index] = parsedAnswer;
     userTest.suspiciousActivity = userTest.suspiciousActivity || { timeAway: 0, switchCount: 0, responseTimes: [], activityCounts: [] };
     userTest.suspiciousActivity.timeAway = (userTest.suspiciousActivity.timeAway || 0) + (parseInt(timeAway) || 0);
@@ -1656,8 +1523,7 @@ app.get('/result', checkAuth, async (req, res) => {
     }
 
     const ipAddress = req.headers['x-forwarded-for'] || req.socket.remoteAddress;
-    const sessionId = req.session.id;
-    await logActivity(req.user, `завершив тест ${testNames[testNumber].name} з результатом ${Math.round(percentage)}%`, sessionId, ipAddress, { percentage: Math.round(percentage) });
+    await logActivity(req.user, `завершив тест ${testNames[testNumber].name} з результатом ${Math.round(percentage)}%`, ipAddress, { percentage: Math.round(percentage) });
 
     try {
       await saveResult(req.user, testNumber, score, totalPoints, startTime, endTime, totalClicks, correctClicks, totalQuestions, percentage, suspiciousActivity, answers, scoresPerQuestion, variant);
@@ -1678,7 +1544,7 @@ app.get('/result', checkAuth, async (req, res) => {
     }
 
     const resultHtml = `
-      <!DOCTYPE html>
+            <!DOCTYPE html>
       <html lang="uk">
         <head>
           <meta charset="UTF-8">
@@ -2014,13 +1880,16 @@ app.get('/admin', checkAuth, checkAdmin, (req, res) => {
           <script>
             async function logout() {
               const formData = new URLSearchParams();
-              formData.append('_csrf', '${res.locals.csrfToken}');
+              formData.append('_csrf', '${req.csrfToken()}');
               await fetch('/logout', {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-                credentials: 'include',
+                headers: { 
+                  'Content-Type': 'application/x-www-form-urlencoded',
+                  'Authorization': 'Bearer ' + localStorage.getItem('token')
+                },
                 body: formData
               });
+              localStorage.removeItem('token');
               window.location.href = '/';
             }
           </script>
@@ -2103,11 +1972,13 @@ app.get('/admin/users', checkAuth, checkAdmin, async (req, res) => {
                 try {
                   const formData = new URLSearchParams();
                   formData.append('username', username);
-                  formData.append('_csrf', '${res.locals.csrfToken}');
+                  formData.append('_csrf', '${req.csrfToken()}');
                   const response = await fetch('/admin/delete-user', {
                     method: 'POST',
-                    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-                    credentials: 'include',
+                    headers: { 
+                      'Content-Type': 'application/x-www-form-urlencoded',
+                      'Authorization': 'Bearer ' + localStorage.getItem('token')
+                    },
                     body: formData
                   });
                   const result = await response.json();
@@ -2154,7 +2025,7 @@ app.get('/admin/add-user', checkAuth, checkAdmin, (req, res) => {
         <body>
           <h1>Додати користувача</h1>
           <form method="POST" action="/admin/add-user" onsubmit="return validateForm()">
-            <input type="hidden" name="_csrf" value="${res.locals.csrfToken}">
+            <input type="hidden" name="_csrf" value="${req.csrfToken()}">
             <label for="username">Користувач:</label>
             <input type="text" id="username" name="username" required>
             <label for="password">Пароль:</label>
@@ -2266,7 +2137,7 @@ app.get('/admin/edit-user', checkAuth, checkAdmin, async (req, res) => {
         <body>
           <h1>Редагувати користувача: ${username}</h1>
           <form method="POST" action="/admin/edit-user" onsubmit="return validateForm()">
-            <input type="hidden" name="_csrf" value="${res.locals.csrfToken}">
+            <input type="hidden" name="_csrf" value="${req.csrfToken()}">
             <input type="hidden" name="oldUsername" value="${username}">
             <label for="username">Нове ім'я користувача:</label>
             <input type="text" id="username" name="username" value="${username}" required>
@@ -2450,11 +2321,13 @@ app.get('/admin/questions', checkAuth, checkAdmin, async (req, res) => {
                 try {
                   const formData = new URLSearchParams();
                   formData.append('id', id);
-                  formData.append('_csrf', '${res.locals.csrfToken}');
+                  formData.append('_csrf', '${req.csrfToken()}');
                   const response = await fetch('/admin/delete-question', {
                     method: 'POST',
-                    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-                    credentials: 'include',
+                    headers: { 
+                      'Content-Type': 'application/x-www-form-urlencoded',
+                      'Authorization': 'Bearer ' + localStorage.getItem('token')
+                    },
                     body: formData
                   });
                   const result = await response.json();
@@ -2502,7 +2375,7 @@ app.get('/admin/add-question', checkAuth, checkAdmin, (req, res) => {
         <body>
           <h1>Додати питання</h1>
           <form method="POST" action="/admin/add-question" onsubmit="return validateForm()">
-            <input type="hidden" name="_csrf" value="${res.locals.csrfToken}">
+            <input type="hidden" name="_csrf" value="${req.csrfToken()}">
             <label for="testNumber">Номер тесту:</label>
             <select id="testNumber" name="testNumber" required>
               ${Object.keys(testNames).map(num => `<option value="${num}">${testNames[num].name}</option>`).join('')}
@@ -2688,7 +2561,7 @@ app.get('/admin/edit-question', checkAuth, checkAdmin, async (req, res) => {
         <body>
           <h1>Редагувати питання</h1>
           <form method="POST" action="/admin/edit-question" onsubmit="return validateForm()">
-            <input type="hidden" name="_csrf" value="${res.locals.csrfToken}">
+            <input type="hidden" name="_csrf" value="${req.csrfToken()}">
             <input type="hidden" name="id" value="${id}">
             <label for="testNumber">Номер тесту:</label>
             <select id="testNumber" name="testNumber" required>
@@ -2823,17 +2696,14 @@ app.post('/admin/edit-question', checkAuth, checkAdmin, [
       questionData.correctAnswer = questionData.correctAnswers[0];
     }
 
-    // Находим старый номер теста для вопроса
     const oldQuestion = await db.collection('questions').findOne({ _id: new ObjectId(id) });
     const oldTestNumber = oldQuestion.testNumber;
 
-    // Обновляем вопрос в базе
     await db.collection('questions').updateOne(
       { _id: new ObjectId(id) },
       { $set: questionData }
     );
 
-    // Обновляем кэш
     await CacheManager.refreshQuestionsCache(oldTestNumber);
     if (testNumber !== oldTestNumber) {
       await CacheManager.refreshQuestionsCache(testNumber);
@@ -2899,7 +2769,7 @@ app.get('/admin/import-users', checkAuth, checkAdmin, (req, res) => {
         <body>
           <h1>Імпорт користувачів із Excel</h1>
           <form method="POST" action="/admin/import-users" enctype="multipart/form-data">
-            <input type="hidden" name="_csrf" value="${res.locals.csrfToken}">
+            <input type="hidden" name="_csrf" value="${req.csrfToken()}">
             <label for="file">Виберіть файл users.xlsx:</label>
             <input type="file" id="file" name="file" accept=".xlsx" required>
             <button type="submit" class="submit-btn">Завантажити</button>
@@ -2970,7 +2840,7 @@ app.get('/admin/import-questions', checkAuth, checkAdmin, (req, res) => {
         <body>
           <h1>Імпорт питань із Excel</h1>
           <form method="POST" action="/admin/import-questions" enctype="multipart/form-data">
-            <input type="hidden" name="_csrf" value="${res.locals.csrfToken}">
+            <input type="hidden" name="_csrf" value="${req.csrfToken()}">
             <label for="file">Виберіть файл questions*.xlsx:</label>
             <input type="file" id="file" name="file" accept=".xlsx" required>
             <button type="submit" class="submit-btn">Завантажити</button>
@@ -3032,10 +2902,24 @@ app.post('/admin/import-questions', checkAuth, checkAdmin, upload.single('file')
 app.get('/admin/results', checkAuth, checkAdmin, async (req, res) => {
   const startTime = Date.now();
   try {
+    const page = parseInt(req.query.page) || 1;
+    const limit = 10;
+    const skip = (page - 1) * limit;
+
     let results = [];
     let errorMessage = '';
+    let totalResults = 0;
+    let totalPages = 0;
+
     try {
-      results = await db.collection('test_results').find({}).sort({ endTime: -1 }).toArray();
+      totalResults = await db.collection('test_results').countDocuments();
+      totalPages = Math.ceil(totalResults / limit);
+      results = await db.collection('test_results')
+        .find({})
+        .sort({ endTime: -1 })
+        .skip(skip)
+        .limit(limit)
+        .toArray();
     } catch (fetchError) {
       console.error('Ошибка при получении данных из MongoDB:', fetchError.message, fetchError.stack);
       errorMessage = `Ошибка MongoDB: ${fetchError.message}`;
@@ -3058,6 +2942,9 @@ app.get('/admin/results', checkAuth, checkAdmin, async (req, res) => {
             .delete-all-btn { background-color: #ff4d4d; color: white; padding: 10px 20px; margin: 10px 0; border: none; cursor: pointer; }
             .nav-btn { padding: 10px 20px; margin: 10px 0; cursor: pointer; background-color: #007bff; color: white; border: none; }
             .details { white-space: pre-wrap; max-width: 300px; line-height: 1.8; }
+            .pagination { margin-top: 20px; }
+            .pagination a { margin: 0 5px; padding: 5px 10px; background-color: #007bff; color: white; text-decoration: none; border-radius: 5px; }
+            .pagination a:hover { background-color: #0056b3; }
           </style>
         </head>
         <body>
@@ -3148,7 +3035,7 @@ app.get('/admin/results', checkAuth, checkAdmin, async (req, res) => {
             <td>${r.score || '0'}</td>
             <td>${r.totalPoints || '0'}</td>
             <td>${formatDateTime(r.startTime)}</td>
-            <td>${formatDateTime(r.endTime)}</td>
+                        <td>${formatDateTime(r.endTime)}</td>
             <td>${r.duration || 'N/A'}</td>
             <td>${suspiciousActivityPercent}%</td>
             <td class="details">${activityDetails}</td>
@@ -3161,17 +3048,24 @@ app.get('/admin/results', checkAuth, checkAdmin, async (req, res) => {
     adminHtml += `
           </table>
           <button class="delete-all-btn" onclick="deleteAllResults()">Видалити всі результати</button>
+          <div class="pagination">
+            ${page > 1 ? `<a href="/admin/results?page=${page - 1}">Попередня</a>` : ''}
+            <span>Сторінка ${page} з ${totalPages}</span>
+            ${page < totalPages ? `<a href="/admin/results?page=${page + 1}">Наступна</a>` : ''}
+          </div>
           <script>
             async function deleteResult(id) {
               if (confirm('Ви впевнені, що хочете видалити цей результат?')) {
                 try {
                   const formData = new URLSearchParams();
                   formData.append('id', id);
-                  formData.append('_csrf', '${res.locals.csrfToken}');
+                  formData.append('_csrf', '${req.csrfToken()}');
                   const response = await fetch('/admin/delete-result', {
                     method: 'POST',
-                    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-                    credentials: 'include',
+                    headers: { 
+                      'Content-Type': 'application/x-www-form-urlencoded',
+                      'Authorization': 'Bearer ' + localStorage.getItem('token')
+                    },
                     body: formData
                   });
                   const result = await response.json();
@@ -3190,11 +3084,13 @@ app.get('/admin/results', checkAuth, checkAdmin, async (req, res) => {
               if (confirm('Ви впевнені, що хочете видалити всі результати? Цю дію не можна скасувати!')) {
                 try {
                   const formData = new URLSearchParams();
-                  formData.append('_csrf', '${res.locals.csrfToken}');
+                  formData.append('_csrf', '${req.csrfToken()}');
                   const response = await fetch('/admin/delete-all-results', {
                     method: 'POST',
-                    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-                    credentials: 'include',
+                    headers: { 
+                      'Content-Type': 'application/x-www-form-urlencoded',
+                      'Authorization': 'Bearer ' + localStorage.getItem('token')
+                    },
                     body: formData
                   });
                   const result = await response.json();
@@ -3274,7 +3170,7 @@ app.get('/admin/edit-tests', checkAuth, checkAdmin, (req, res) => {
         <body>
           <h1>Редагувати назви та налаштування тестів</h1>
           <form method="POST" action="/admin/edit-tests">
-            <input type="hidden" name="_csrf" value="${res.locals.csrfToken}">
+            <input type="hidden" name="_csrf" value="${req.csrfToken()}">
             ${Object.entries(testNames).map(([num, data]) => `
               <div class="test-row">
                 <label for="test${num}">Назва Тесту ${num}:</label>
@@ -3300,11 +3196,13 @@ app.get('/admin/edit-tests', checkAuth, checkAdmin, (req, res) => {
               if (confirm('Ви впевнені, що хочете видалити Тест ' + testNumber + '?')) {
                 const formData = new URLSearchParams();
                 formData.append('testNumber', testNumber);
-                formData.append('_csrf', '${res.locals.csrfToken}');
+                formData.append('_csrf', '${req.csrfToken()}');
                 await fetch('/admin/delete-test', {
                   method: 'POST',
-                  headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-                  credentials: 'include',
+                  headers: { 
+                    'Content-Type': 'application/x-www-form-urlencoded',
+                    'Authorization': 'Bearer ' + localStorage.getItem('token')
+                  },
                   body: formData
                 });
                 window.location.reload();
@@ -3324,7 +3222,6 @@ app.get('/admin/edit-tests', checkAuth, checkAdmin, (req, res) => {
 app.post('/admin/edit-tests', checkAuth, checkAdmin, async (req, res) => {
   const startTime = Date.now();
   try {
-    // Валидация данных для каждого теста
     const validationErrors = [];
     Object.keys(testNames).forEach(num => {
       const testName = req.body[`test${num}`];
@@ -3398,7 +3295,6 @@ app.post('/admin/delete-test', checkAuth, checkAdmin, async (req, res) => {
       return res.status(404).json({ success: false, message: 'Тест не знайдено' });
     }
     delete testNames[testNumber];
-    // Удаляем вопросы из кэша и базы данных
     await db.collection('questions').deleteMany({ testNumber });
     if (questionsCache[testNumber]) {
       delete questionsCache[testNumber];
@@ -3433,7 +3329,7 @@ app.get('/admin/create-test', checkAuth, checkAdmin, (req, res) => {
         <body>
           <h1>Створити новий тест</h1>
           <form method="POST" action="/admin/create-test">
-            <input type="hidden" name="_csrf" value="${res.locals.csrfToken}">
+            <input type="hidden" name="_csrf" value="${req.csrfToken()}">
             <div>
               <label for="testName">Назва нового тесту:</label>
               <input type="text" id="testName" name="testName" required>
@@ -3478,7 +3374,8 @@ app.post('/admin/create-test', checkAuth, checkAdmin, [
       timeLimit: parseInt(timeLimit) || 3600,
       randomQuestions: false,
       randomAnswers: false,
-      questionLimit: null
+      questionLimit: null,
+      attemptLimit: 1
     };
     res.send(`
       <!DOCTYPE html>
@@ -3522,11 +3419,9 @@ app.get('/download-template', checkAuth, checkAdmin, async (req, res) => {
       return res.status(400).send('Номер тесту не вказано або тест не існує');
     }
 
-    // Создаём новый Excel-файл с помощью ExcelJS
     const workbook = new ExcelJS.Workbook();
     const sheet = workbook.addWorksheet('Questions');
 
-    // Добавляем заголовки
     sheet.columns = [
       { header: 'Picture', key: 'picture', width: 15 },
       { header: 'Question Text', key: 'text', width: 30 },
@@ -3559,7 +3454,6 @@ app.get('/download-template', checkAuth, checkAdmin, async (req, res) => {
       { header: 'Variant', key: 'variant', width: 15 }
     ];
 
-    // Пример заполнения первой строки
     sheet.addRow({
       picture: 'Picture 1',
       text: 'Пример вопроса',
@@ -3573,11 +3467,9 @@ app.get('/download-template', checkAuth, checkAdmin, async (req, res) => {
       variant: 'Variant 1'
     });
 
-    // Устанавливаем заголовки ответа
     res.setHeader('Content-Disposition', `attachment; filename=questions${testNumber}.xlsx`);
     res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
 
-    // Отправляем файл
     await workbook.xlsx.write(res);
     res.end();
   } catch (error) {
@@ -3592,10 +3484,24 @@ app.get('/download-template', checkAuth, checkAdmin, async (req, res) => {
 app.get('/admin/activity-log', checkAuth, checkAdmin, async (req, res) => {
   const startTime = Date.now();
   try {
+    const page = parseInt(req.query.page) || 1;
+    const limit = 10;
+    const skip = (page - 1) * limit;
+
     let activities = [];
     let errorMessage = '';
+    let totalActivities = 0;
+    let totalPages = 0;
+
     try {
-      activities = await db.collection('activity_log').find({}).sort({ timestamp: -1 }).toArray();
+      totalActivities = await db.collection('activity_log').countDocuments();
+      totalPages = Math.ceil(totalActivities / limit);
+      activities = await db.collection('activity_log')
+        .find({})
+        .sort({ timestamp: -1 })
+        .skip(skip)
+        .limit(limit)
+        .toArray();
     } catch (fetchError) {
       console.error('Ошибка при получении данных из MongoDB:', fetchError.message, fetchError.stack);
       errorMessage = `Ошибка MongoDB: ${fetchError.message}`;
@@ -3615,6 +3521,9 @@ app.get('/admin/activity-log', checkAuth, checkAdmin, async (req, res) => {
             .nav-btn, .clear-btn { padding: 10px 20px; margin: 10px 0; cursor: pointer; border: none; border-radius: 5px; }
             .clear-btn { background-color: #ff4d4d; color: white; }
             .nav-btn { background-color: #007bff; color: white; }
+            .pagination { margin-top: 20px; }
+            .pagination a { margin: 0 5px; padding: 5px 10px; background-color: #007bff; color: white; text-decoration: none; border-radius: 5px; }
+            .pagination a:hover { background-color: #0056b3; }
           </style>
         </head>
         <body>
@@ -3630,12 +3539,11 @@ app.get('/admin/activity-log', checkAuth, checkAdmin, async (req, res) => {
               <th>Дата-Час</th>
               <th>Користувач</th>
               <th>IP-адреса</th>
-              <th>Номер сесії</th>
               <th>Дія</th>
             </tr>
     `;
     if (!activities || activities.length === 0) {
-      adminHtml += '<tr><td colspan="5">Немає записів</td></tr>';
+      adminHtml += '<tr><td colspan="4">Немає записів</td></tr>';
     } else {
       activities.forEach(activity => {
         const timestamp = new Date(activity.timestamp);
@@ -3648,7 +3556,6 @@ app.get('/admin/activity-log', checkAuth, checkAdmin, async (req, res) => {
             <td>${formattedDateTime}</td>
             <td>${activity.user || 'N/A'}</td>
             <td>${activity.ipAddress || 'N/A'}</td>
-            <td>${activity.sessionId || 'N/A'}</td>
             <td>${actionWithInfo}</td>
           </tr>
         `;
@@ -3657,16 +3564,23 @@ app.get('/admin/activity-log', checkAuth, checkAdmin, async (req, res) => {
     adminHtml += `
           </table>
           <button class="clear-btn" onclick="clearActivityLog()">Видалити усі записи журналу</button>
+          <div class="pagination">
+            ${page > 1 ? `<a href="/admin/activity-log?page=${page - 1}">Попередня</a>` : ''}
+            <span>Сторінка ${page} з ${totalPages}</span>
+            ${page < totalPages ? `<a href="/admin/activity-log?page=${page + 1}">Наступна</a>` : ''}
+          </div>
           <script>
             async function clearActivityLog() {
               if (confirm('Ви впевнені, що хочете видалити усі записи журналу дій?')) {
                 try {
                   const formData = new URLSearchParams();
-                  formData.append('_csrf', '${res.locals.csrfToken}');
+                  formData.append('_csrf', '${req.csrfToken()}');
                   const response = await fetch('/admin/delete-activity-log', {
                     method: 'POST',
-                    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-                    credentials: 'include',
+                    headers: { 
+                      'Content-Type': 'application/x-www-form-urlencoded',
+                      'Authorization': 'Bearer ' + localStorage.getItem('token')
+                    },
                     body: formData
                   });
                   const result = await response.json();
