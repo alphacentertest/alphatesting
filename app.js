@@ -11,28 +11,43 @@ const nodemailer = require('nodemailer');
 const { body, validationResult } = require('express-validator');
 const csurf = require('csurf');
 const jwt = require('jsonwebtoken');
+const winston = require('winston');
 
 const app = express();
 
 app.set('trust proxy', 1);
 
-// Налаштування multer для завантаження файлів
+// Логирование с использованием winston
+const logger = winston.createLogger({
+  level: 'info',
+  format: winston.format.combine(
+    winston.format.timestamp(),
+    winston.format.json()
+  ),
+  transports: [
+    new winston.transports.File({ filename: 'error.log', level: 'error' }),
+    new winston.transports.File({ filename: 'combined.log' }),
+    new winston.transports.Console()
+  ]
+});
+
+// Настройка multer для загрузки файлов
 const upload = multer({ dest: 'uploads/' });
 
-// Налаштування nodemailer для відправки email
+// Настройка nodemailer для отправки email
 const transporter = nodemailer.createTransport({
   service: 'gmail',
   auth: {
-    user: 'alphacentertest@gmail.com',
-    pass: ':bnnz<fnmrsdobysxtcnmysrjve'
+    user: process.env.EMAIL_USER || 'alphacentertest@gmail.com',
+    pass: process.env.EMAIL_PASS || ':bnnz<fnmrsdobysxtcnmysrjve'
   }
 });
 
 const sendSuspiciousActivityEmail = async (user, activityDetails) => {
   try {
     const mailOptions = {
-      from: 'alphacentertest@gmail.com',
-      to: 'alphacentertest@gmail.com',
+      from: process.env.EMAIL_USER || 'alphacentertest@gmail.com',
+      to: process.env.EMAIL_USER || 'alphacentertest@gmail.com',
       subject: 'Підозріла активність у системі тестування',
       text: `
         Користувач: ${user}
@@ -44,9 +59,9 @@ const sendSuspiciousActivityEmail = async (user, activityDetails) => {
       `
     };
     await transporter.sendMail(mailOptions);
-    console.log(`Email про підозрілу активність відправлено для користувача ${user}`);
+    logger.info(`Email про підозрілу активність відправлено для користувача ${user}`);
   } catch (error) {
-    console.error('Error sending suspicious activity email:', error.message, error.stack);
+    logger.error('Error sending suspicious activity email', { message: error.message, stack: error.stack });
   }
 };
 
@@ -58,7 +73,7 @@ const config = {
   }
 };
 
-// Підключення до MongoDB
+// Подключение к MongoDB
 const MONGODB_URI = process.env.MONGODB_URI || 'mongodb+srv://romanhaleckij7:DNMaH9w2X4gel3Xc@cluster0.r93r1p8.mongodb.net/alpha?retryWrites=true&w=majority';
 const client = new MongoClient(MONGODB_URI, {
   connectTimeoutMS: 5000,
@@ -70,16 +85,16 @@ let db;
 let userCache = [];
 const questionsCache = {};
 
-// Централизованная функция управления кэшем
+// Централизованная функция управления кэшем с событиями
 const CacheManager = {
   async refreshUserCache() {
     try {
       const startTime = Date.now();
       userCache = await db.collection('users').find({}).toArray();
       const endTime = Date.now();
-      console.log(`Refreshed user cache with ${userCache.length} users in ${endTime - startTime} ms`);
+      logger.info(`Refreshed user cache with ${userCache.length} users in ${endTime - startTime} ms`);
     } catch (error) {
-      console.error('Error refreshing user cache:', error.message, error.stack);
+      logger.error('Error refreshing user cache', { message: error.message, stack: error.stack });
     }
   },
   async refreshQuestionsCache(testNumber) {
@@ -88,35 +103,42 @@ const CacheManager = {
       if (testNumber) {
         questionsCache[testNumber] = await db.collection('questions').find({ testNumber: testNumber.toString() }).toArray();
         const endTime = Date.now();
-        console.log(`Refreshed questions cache for test ${testNumber} with ${questionsCache[testNumber].length} questions in ${endTime - startTime} ms`);
+        logger.info(`Refreshed questions cache for test ${testNumber} with ${questionsCache[testNumber].length} questions in ${endTime - startTime} ms`);
       } else {
         const allTests = Object.keys(testNames);
         for (const testNum of allTests) {
           questionsCache[testNum] = await db.collection('questions').find({ testNumber: testNum.toString() }).toArray();
-          console.log(`Refreshed questions cache for test ${testNum} with ${questionsCache[testNum].length} questions`);
+          logger.info(`Refreshed questions cache for test ${testNum} with ${questionsCache[testNum].length} questions`);
         }
         const endTime = Date.now();
-        console.log(`Refreshed questions cache for all tests in ${endTime - startTime} ms`);
+        logger.info(`Refreshed questions cache for all tests in ${endTime - startTime} ms`);
       }
     } catch (error) {
-      console.error(`Error refreshing questions cache for test ${testNumber || 'all'}:`, error.message, error.stack);
+      logger.error(`Error refreshing questions cache for test ${testNumber || 'all'}`, { message: error.message, stack: error.stack });
+    }
+  },
+  async invalidateCache(type, testNumber) {
+    if (type === 'users') {
+      await this.refreshUserCache();
+    } else if (type === 'questions') {
+      await this.refreshQuestionsCache(testNumber);
     }
   }
 };
 
 const connectToMongoDB = async (attempt = 1, maxAttempts = 3) => {
   try {
-    console.log(`Attempting to connect to MongoDB (Attempt ${attempt} of ${maxAttempts}) with URI:`, MONGODB_URI);
+    logger.info(`Attempting to connect to MongoDB (Attempt ${attempt} of ${maxAttempts}) with URI: ${MONGODB_URI}`);
     const startTime = Date.now();
     await client.connect();
     const endTime = Date.now();
-    console.log('Connected to MongoDB successfully in', endTime - startTime, 'ms');
+    logger.info(`Connected to MongoDB successfully in ${endTime - startTime} ms`);
     db = client.db('alpha');
-    console.log('Database initialized:', db.databaseName);
+    logger.info('Database initialized', { databaseName: db.databaseName });
   } catch (error) {
-    console.error('Failed to connect to MongoDB:', error.message, error.stack);
+    logger.error('Failed to connect to MongoDB', { message: error.message, stack: error.stack });
     if (attempt < maxAttempts) {
-      console.log(`Retrying MongoDB connection in 5 seconds...`);
+      logger.info('Retrying MongoDB connection in 5 seconds...');
       await new Promise(resolve => setTimeout(resolve, 5000));
       return connectToMongoDB(attempt + 1, maxAttempts);
     }
@@ -126,10 +148,51 @@ const connectToMongoDB = async (attempt = 1, maxAttempts = 3) => {
 
 let isInitialized = false;
 let initializationError = null;
-let testNames = {
-  '1': { name: 'Тест 1', timeLimit: 3600, randomQuestions: false, randomAnswers: false, questionLimit: null, attemptLimit: 1 },
-  '2': { name: 'Тест 2', timeLimit: 3600, randomQuestions: false, randomAnswers: false, questionLimit: null, attemptLimit: 1 },
-  '3': { name: 'Тест 3', timeLimit: 3600, randomQuestions: false, randomAnswers: false, questionLimit: null, attemptLimit: 1 }
+let testNames = {};
+
+const loadTestsFromMongoDB = async () => {
+  try {
+    const tests = await db.collection('tests').find({}).toArray();
+    testNames = tests.reduce((acc, test) => {
+      acc[test.testNumber] = {
+        name: test.name,
+        timeLimit: test.timeLimit,
+        randomQuestions: test.randomQuestions,
+        randomAnswers: test.randomAnswers,
+        questionLimit: test.questionLimit,
+        attemptLimit: test.attemptLimit
+      };
+      return acc;
+    }, {});
+    logger.info('Loaded tests from MongoDB', { count: Object.keys(testNames).length });
+  } catch (error) {
+    logger.error('Error loading tests from MongoDB', { message: error.message, stack: error.stack });
+    throw error;
+  }
+};
+
+const saveTestToMongoDB = async (testNumber, testData) => {
+  try {
+    await db.collection('tests').updateOne(
+      { testNumber },
+      { $set: { testNumber, ...testData } },
+      { upsert: true }
+    );
+    logger.info('Saved test to MongoDB', { testNumber });
+  } catch (error) {
+    logger.error('Error saving test to MongoDB', { testNumber, message: error.message, stack: error.stack });
+    throw error;
+  }
+};
+
+const deleteTestFromMongoDB = async (testNumber) => {
+  try {
+    await db.collection('tests').deleteOne({ testNumber });
+    logger.info('Deleted test from MongoDB', { testNumber });
+  } catch (error) {
+    logger.error('Error deleting test from MongoDB', { testNumber, message: error.message, stack: error.stack });
+    throw error;
+  }
 };
 
 app.use(express.urlencoded({ extended: true }));
@@ -151,7 +214,7 @@ app.use(csurf({ cookie: true }));
 // Middleware для обработки ошибок MongoDB
 app.use((err, req, res, next) => {
   if (err.name === 'MongoNetworkError' || err.name === 'MongoServerError') {
-    console.error('MongoDB error:', err.message, err.stack);
+    logger.error('MongoDB error', { message: err.message, stack: err.stack });
     res.status(503).json({ success: false, message: 'Помилка з’єднання з базою даних. Спробуйте пізніше.' });
   } else {
     next(err);
@@ -190,13 +253,13 @@ const importUsersToMongoDB = async (filePath) => {
       throw new Error('Не знайдено користувачів у файлі');
     }
     await db.collection('users').deleteMany({});
-    console.log('Cleared all users before import');
+    logger.info('Cleared all users before import');
     await db.collection('users').insertMany(users);
-    console.log(`Imported ${users.length} users to MongoDB with hashed passwords`);
-    await CacheManager.refreshUserCache();
+    logger.info(`Imported ${users.length} users to MongoDB with hashed passwords`);
+    await CacheManager.invalidateCache('users');
     return users.length;
   } catch (error) {
-    console.error('Error importing users to MongoDB:', error.message, error.stack);
+    logger.error('Error importing users to MongoDB', { message: error.message, stack: error.stack });
     throw error;
   }
 };
@@ -275,16 +338,16 @@ const importQuestionsToMongoDB = async (filePath, testNumber) => {
     }
     await db.collection('questions').deleteMany({ testNumber });
     await db.collection('questions').insertMany(questions);
-    console.log(`Imported ${questions.length} questions for test ${testNumber} to MongoDB`);
-    await CacheManager.refreshQuestionsCache(testNumber);
+    logger.info(`Imported ${questions.length} questions for test ${testNumber} to MongoDB`);
+    await CacheManager.invalidateCache('questions', testNumber);
     return questions.length;
   } catch (error) {
-    console.error('Error importing questions to MongoDB:', error.message, error.stack);
+    logger.error('Error importing questions to MongoDB', { message: error.message, stack: error.stack });
     throw error;
   }
 };
 
-// Функція для випадкового перемішування масиву (Fisher-Yates)
+// Функция для случайного перемешивания массива (Fisher-Yates)
 const shuffleArray = (array) => {
   for (let i = array.length - 1; i > 0; i--) {
     const j = Math.floor(Math.random() * (i + 1));
@@ -302,7 +365,7 @@ const loadQuestions = async (testNumber) => {
     const startTime = Date.now();
     if (questionsCache[testNumber]) {
       const endTime = Date.now();
-      console.log(`Loaded ${questionsCache[testNumber].length} questions for test ${testNumber} from cache in ${endTime - startTime} ms`);
+      logger.info(`Loaded ${questionsCache[testNumber].length} questions for test ${testNumber} from cache in ${endTime - startTime} ms`);
       return questionsCache[testNumber];
     }
 
@@ -312,10 +375,10 @@ const loadQuestions = async (testNumber) => {
       throw new Error(`No questions found in MongoDB for test ${testNumber}`);
     }
     questionsCache[testNumber] = questions;
-    console.log(`Loaded ${questions.length} questions for test ${testNumber} from MongoDB in ${endTime - startTime} ms`);
+    logger.info(`Loaded ${questions.length} questions for test ${testNumber} from MongoDB in ${endTime - startTime} ms`);
     return questions;
   } catch (error) {
-    console.error(`Ошибка в loadQuestions (test ${testNumber}):`, error.message, error.stack);
+    logger.error(`Ошибка в loadQuestions (test ${testNumber})`, { message: error.message, stack: error.stack });
     throw error;
   }
 };
@@ -323,10 +386,10 @@ const loadQuestions = async (testNumber) => {
 const ensureInitialized = (req, res, next) => {
   if (!isInitialized) {
     if (initializationError) {
-      console.error('Server not initialized due to error:', initializationError.message, initializationError.stack);
+      logger.error('Server not initialized due to error', { message: initializationError.message, stack: initializationError.stack });
       return res.status(500).json({ success: false, message: `Server initialization failed: ${initializationError.message}` });
     }
-    console.warn('Server is still initializing...');
+    logger.warn('Server is still initializing...');
     return res.status(503).json({ success: false, message: 'Server is initializing, please try again later' });
   }
   next();
@@ -346,8 +409,8 @@ const updateUserPasswords = async () => {
     }
   }
   const endTime = Date.now();
-  console.log('User passwords updated with hashes in', endTime - startTime, 'ms');
-  await CacheManager.refreshUserCache();
+  logger.info('User passwords updated with hashes', { duration: `${endTime - startTime} ms` });
+  await CacheManager.invalidateCache('users');
 };
 
 const initializeServer = async () => {
@@ -361,25 +424,45 @@ const initializeServer = async () => {
     await db.collection('activity_log').createIndex({ user: 1, timestamp: -1 });
     await db.collection('test_attempts').createIndex({ user: 1, testNumber: 1, attemptDate: 1 });
     await db.collection('login_attempts').createIndex({ ipAddress: 1, lastAttempt: 1 });
-    console.log('MongoDB indexes created successfully');
+    await db.collection('tests').createIndex({ testNumber: 1 }, { unique: true });
+    logger.info('MongoDB indexes created successfully');
     await updateUserPasswords();
-    await CacheManager.refreshUserCache();
+    await CacheManager.refreshUserCache(); // Убираем дублирующий вызов
+    await loadTestsFromMongoDB();
     await CacheManager.refreshQuestionsCache();
     isInitialized = true;
     initializationError = null;
   } catch (error) {
-    console.error('Failed to initialize server:', error.message, error.stack);
+    logger.error('Failed to initialize server', { message: error.message, stack: error.stack });
     initializationError = error;
     throw error;
   }
 };
 
+// Очистка старых записей журнала активности (старше 30 дней)
+const cleanupActivityLog = async () => {
+  try {
+    const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+    const result = await db.collection('activity_log').deleteMany({
+      timestamp: { $lt: thirtyDaysAgo.toISOString() }
+    });
+    logger.info('Cleaned up old activity logs', { deletedCount: result.deletedCount });
+  } catch (error) {
+    logger.error('Error cleaning up activity logs', { message: error.message, stack: error.stack });
+  }
+};
+
+// Запуск задачи очистки раз в день
+setInterval(cleanupActivityLog, 24 * 60 * 60 * 1000);
+
 (async () => {
   try {
     await initializeServer();
     app.use(ensureInitialized);
+    // Выполняем первую очистку при старте
+    await cleanupActivityLog();
   } catch (error) {
-    console.error('Failed to start server due to initialization error:', error.message, error.stack);
+    logger.error('Failed to start server due to initialization error', { message: error.message, stack: error.stack });
     process.exit(1);
   }
 })();
@@ -388,7 +471,6 @@ const initializeServer = async () => {
 const MAX_LOGIN_ATTEMPTS = 30;
 const ONE_DAY_MS = 24 * 60 * 60 * 1000;
 
-// Функция для проверки и сброса попыток входа
 const checkLoginAttempts = async (ipAddress, reset = false) => {
   const now = Date.now();
   const startOfDay = new Date(now).setHours(0, 0, 0, 0);
@@ -400,7 +482,6 @@ const checkLoginAttempts = async (ipAddress, reset = false) => {
   });
 
   if (reset) {
-    // Сбрасываем попытки
     await db.collection('login_attempts').updateOne(
       { ipAddress, lastAttempt: { $gte: startOfDay, $lt: endOfDay } },
       { $set: { count: 0, lastAttempt: now } },
@@ -426,8 +507,8 @@ const checkLoginAttempts = async (ipAddress, reset = false) => {
   );
 };
 
-// Функция для логирования активности
-const logActivity = async (user, action, ipAddress, additionalInfo = {}) => {
+// Функция для логирования активности с поддержкой транзакций
+const logActivity = async (user, action, ipAddress, additionalInfo = {}, session = null) => {
   try {
     const startTime = Date.now();
     const timestamp = new Date();
@@ -439,11 +520,12 @@ const logActivity = async (user, action, ipAddress, additionalInfo = {}) => {
       ipAddress,
       timestamp: adjustedTimestamp.toISOString(),
       additionalInfo
-    });
+    }, { session });
     const endTime = Date.now();
-    console.log(`Logged activity: ${user} - ${action} at ${adjustedTimestamp}, IP: ${ipAddress} in ${endTime - startTime} ms`);
+    logger.info(`Logged activity: ${user} - ${action} at ${adjustedTimestamp}, IP: ${ipAddress}`, { duration: `${endTime - startTime} ms` });
   } catch (error) {
-    console.error('Error logging activity:', error.message, error.stack);
+    logger.error('Error logging activity', { message: error.message, stack: error.stack });
+    throw error;
   }
 };
 
@@ -455,18 +537,18 @@ app.get('/test-mongo', async (req, res) => {
     await db.collection('users').findOne();
     res.json({ success: true, message: 'MongoDB connection successful' });
   } catch (error) {
-    console.error('MongoDB test failed:', error.message, error.stack);
+    logger.error('MongoDB test failed', { message: error.message, stack: error.stack });
     res.status(500).json({ success: false, message: 'MongoDB connection failed', error: error.message });
   }
 });
 
 app.get('/api/test', (req, res) => {
-  console.log('Handling /api/test request...');
+  logger.info('Handling /api/test request');
   res.json({ success: true, message: 'Express server is working on /api/test' });
 });
 
 app.get('/', (req, res) => {
-  console.log('Serving index.html');
+  logger.info('Serving index.html');
   res.send(`
     <!DOCTYPE html>
     <html lang="uk">
@@ -538,7 +620,7 @@ app.get('/', (req, res) => {
               }
             } catch (error) {
               console.error('Error during login:', error);
-              errorMessage.textContent = 'Помилка сервера: ' + error.message;
+              errorMessage.textContent = 'Не вдалося підключитися до сервера. Перевірте ваше з’єднання з Інтернетом.';
             }
           });
 
@@ -571,22 +653,22 @@ app.post('/login', [
     }
 
     const { username, password } = req.body;
-    console.log('Received login data:', { username, password });
+    logger.info('Received login data', { username });
 
     if (!username || !password) {
-      console.log('Username or password not provided');
+      logger.warn('Username or password not provided');
       return res.status(400).json({ success: false, message: 'Логін або пароль не вказано' });
     }
 
     const foundUser = userCache.find(user => user.username === username);
     if (!foundUser) {
-      console.log('User not found:', username);
+      logger.warn('User not found', { username });
       return res.status(401).json({ success: false, message: 'Невірний логін або пароль' });
     }
 
     const passwordMatch = await bcrypt.compare(password, foundUser.password);
     if (!passwordMatch) {
-      console.log('Invalid password for user:', username);
+      logger.warn('Invalid password for user', { username });
       return res.status(401).json({ success: false, message: 'Невірний логін або пароль' });
     }
 
@@ -598,12 +680,11 @@ app.post('/login', [
       { expiresIn: '24h' }
     );
 
-    // Устанавливаем токен в куки
     res.cookie('token', token, {
       httpOnly: true,
       secure: process.env.NODE_ENV === 'production' ? true : false,
       sameSite: process.env.NODE_ENV === 'production' ? 'none' : 'lax',
-      maxAge: 24 * 60 * 60 * 1000 // 24 часа
+      maxAge: 24 * 60 * 60 * 1000
     });
 
     await logActivity(foundUser.username, 'увійшов на сайт', ipAddress);
@@ -614,11 +695,11 @@ app.post('/login', [
       res.json({ success: true, redirect: '/select-test' });
     }
   } catch (error) {
-    console.error('Ошибка в /login:', error.message, error.stack);
+    logger.error('Ошибка в /login', { message: error.message, stack: error.stack });
     res.status(error.message.includes('Перевищено ліміт') ? 429 : 500).json({ success: false, message: error.message || 'Помилка сервера' });
   } finally {
     const endTime = Date.now();
-    console.log(`Route /login executed in ${endTime - startTime} ms`);
+    logger.info('Route /login executed', { duration: `${endTime - startTime} ms` });
   }
 });
 
@@ -634,7 +715,7 @@ const checkAuth = (req, res, next) => {
     req.user = decoded.username;
     next();
   } catch (error) {
-    console.error('JWT verification failed:', error.message, error.stack);
+    logger.error('JWT verification failed', { message: error.message, stack: error.stack });
     res.redirect('/');
   }
 };
@@ -685,12 +766,20 @@ app.get('/select-test', checkAuth, (req, res) => {
             async function logout() {
               const formData = new URLSearchParams();
               formData.append('_csrf', '${req.csrfToken()}');
-              await fetch('/logout', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-                body: formData
-              });
-              window.location.href = '/';
+              try {
+                const response = await fetch('/logout', {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                  body: formData
+                });
+                if (!response.ok) {
+                  throw new Error('HTTP error! status: ' + response.status);
+                }
+                window.location.href = '/';
+              } catch (error) {
+                console.error('Error during logout:', error);
+                alert('Не вдалося вийти. Перевірте ваше з’єднання з Інтернетом.');
+              }
             }
           </script>
         </body>
@@ -699,7 +788,7 @@ app.get('/select-test', checkAuth, (req, res) => {
     res.send(html);
   } finally {
     const endTime = Date.now();
-    console.log(`Route /select-test executed in ${endTime - startTime} ms`);
+    logger.info('Route /select-test executed', { duration: `${endTime - startTime} ms` });
   }
 });
 
@@ -708,52 +797,57 @@ app.post('/logout', checkAuth, (req, res) => {
   try {
     const ipAddress = req.headers['x-forwarded-for'] || req.socket.remoteAddress;
     logActivity(req.user, 'покинув сайт', ipAddress);
+    res.clearCookie('token');
     res.json({ success: true });
   } finally {
     const endTime = Date.now();
-    console.log(`Route /logout executed in ${endTime - startTime} ms`);
+    logger.info('Route /logout executed', { duration: `${endTime - startTime} ms` });
   }
 });
 
 const userTests = new Map();
 
-const saveResult = async (user, testNumber, score, totalPoints, startTime, endTime, totalClicks, correctClicks, totalQuestions, percentage, suspiciousActivity, answers, scoresPerQuestion, variant) => {
+const saveResult = async (user, testNumber, score, totalPoints, startTime, endTime, totalClicks, correctClicks, totalQuestions, percentage, suspiciousActivity, answers, scoresPerQuestion, variant, ipAddress) => {
   const startTimeLog = Date.now();
+  const session = client.startSession();
   try {
-    const duration = Math.round((endTime - startTime) / 1000);
-    const timeOffset = 3 * 60 * 60 * 1000;
-    const adjustedStartTime = new Date(startTime + timeOffset);
-    const adjustedEndTime = new Date(endTime + timeOffset);
+    await session.withTransaction(async () => {
+      const duration = Math.round((endTime - startTime) / 1000);
+      const timeOffset = 3 * 60 * 60 * 1000;
+      const adjustedStartTime = new Date(startTime + timeOffset);
+      const adjustedEndTime = new Date(endTime + timeOffset);
 
-    const result = {
-      user,
-      testNumber,
-      score,
-      totalPoints,
-      totalClicks,
-      correctClicks,
-      totalQuestions,
-      percentage,
-      startTime: adjustedStartTime.toISOString(),
-      endTime: adjustedEndTime.toISOString(),
-      duration,
-      answers: Object.fromEntries(Object.entries(answers).sort((a, b) => parseInt(a[0]) - parseInt(b[0]))),
-      scoresPerQuestion,
-      suspiciousActivity,
-      variant: `Variant ${variant}`
-    };
-    console.log('Saving result to MongoDB with answers:', result.answers);
-    if (!db) {
-      throw new Error('MongoDB connection not established');
-    }
-    const insertResult = await db.collection('test_results').insertOne(result);
-    console.log(`Successfully saved result for ${user} in MongoDB with ID:`, insertResult.insertedId);
+      const result = {
+        user,
+        testNumber,
+        score,
+        totalPoints,
+        totalClicks,
+        correctClicks,
+        totalQuestions,
+        percentage,
+        startTime: adjustedStartTime.toISOString(),
+        endTime: adjustedEndTime.toISOString(),
+        duration,
+        answers: Object.fromEntries(Object.entries(answers).sort((a, b) => parseInt(a[0]) - parseInt(b[0]))),
+        scoresPerQuestion,
+        suspiciousActivity,
+        variant: `Variant ${variant}`
+      };
+      logger.info('Saving result to MongoDB with answers', { answers: result.answers });
+      if (!db) {
+        throw new Error('MongoDB connection not established');
+      }
+      await db.collection('test_results').insertOne(result, { session });
+      await logActivity(user, `завершив тест ${testNames[testNumber].name} з результатом ${Math.round(percentage)}%`, ipAddress, { percentage: Math.round(percentage) }, session);
+    });
   } catch (error) {
-    console.error('Ошибка сохранения в MongoDB:', error.message, error.stack);
+    logger.error('Ошибка сохранения результата и лога активности', { message: error.message, stack: error.stack });
     throw error;
   } finally {
+    await session.endSession();
     const endTimeLog = Date.now();
-    console.log(`saveResult executed in ${endTimeLog - startTimeLog} ms`);
+    logger.info('saveResult executed', { duration: `${endTimeLog - startTimeLog} ms` });
   }
 };
 
@@ -774,7 +868,7 @@ const checkTestAttempts = async (user, testNumber) => {
       }
     });
 
-    console.log(`User ${user} has ${attemptLimit - attempts} attempts left for test ${testNumber} today`);
+    logger.info(`User ${user} has ${attemptLimit - attempts} attempts left for test ${testNumber} today`);
 
     if (attempts >= attemptLimit) {
       return false;
@@ -787,7 +881,7 @@ const checkTestAttempts = async (user, testNumber) => {
     });
     return true;
   } catch (error) {
-    console.error('Error checking test attempts:', error.message, error.stack);
+    logger.error('Error checking test attempts', { message: error.message, stack: error.stack });
     throw error;
   }
 };
@@ -865,11 +959,11 @@ app.get('/test', checkAuth, async (req, res) => {
     await logActivity(req.user, `розпочав тест ${testNames[testNumber].name}`, ipAddress);
     res.redirect(`/test/question?index=0`);
   } catch (error) {
-    console.error('Ошибка в /test:', error.message, error.stack);
+    logger.error('Ошибка в /test', { message: error.message, stack: error.stack });
     res.status(500).send('Помилка при завантаженні тесту: ' + error.message);
   } finally {
     const endTime = Date.now();
-    console.log(`Route /test executed in ${endTime - startTime} ms`);
+    logger.info('Route /test executed', { duration: `${endTime - startTime} ms` });
   }
 });
 
@@ -1016,7 +1110,7 @@ app.get('/test/question', checkAuth, (req, res) => {
               <h2 id="question-text">${index + 1}. `;
     if (q.type === 'fillblank') {
       const userAnswers = Array.isArray(answers[index]) ? answers[index] : [];
-      console.log(`Fillblank question parts for index ${index}:`, q.text.split('___'));
+      logger.info(`Fillblank question parts for index ${index}`, { parts: q.text.split('___') });
       const parts = q.text.split('___');
       let inputHtml = '';
       parts.forEach((part, i) => {
@@ -1224,21 +1318,24 @@ app.get('/test/question', checkAuth, (req, res) => {
 
                 const response = await fetch('/answer', {
                   method: 'POST',
-                  headers: { 
-                    'Content-Type': 'application/x-www-form-urlencoded',
-                    'Authorization': 'Bearer ' + localStorage.getItem('token')
-                  },
+                  headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
                   body: formData
                 });
+
+                if (!response.ok) {
+                  throw new Error('HTTP error! status: ' + response.status);
+                }
 
                 const result = await response.json();
                 if (result.success) {
                   window.location.href = '/test/question?index=' + (index + 1);
                 } else {
                   console.error('Error saving answer:', result.error);
+                  alert('Помилка збереження відповіді');
                 }
               } catch (error) {
                 console.error('Error in saveAndNext:', error);
+                alert('Не вдалося зберегти відповідь. Перевірте ваше з’єднання з Інтернетом.');
               }
             }
 
@@ -1279,21 +1376,24 @@ app.get('/test/question', checkAuth, (req, res) => {
 
                 const response = await fetch('/answer', {
                   method: 'POST',
-                  headers: { 
-                    'Content-Type': 'application/x-www-form-urlencoded',
-                    'Authorization': 'Bearer ' + localStorage.getItem('token')
-                  },
+                  headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
                   body: formData
                 });
+
+                if (!response.ok) {
+                  throw new Error('HTTP error! status: ' + response.status);
+                }
 
                 const result = await response.json();
                 if (result.success) {
                   window.location.href = '/result';
                 } else {
                   console.error('Error finishing test:', result.error);
+                  alert('Помилка завершення тесту');
                 }
               } catch (error) {
                 console.error('Error in finishTest:', error);
+                alert('Не вдалося завершити тест. Перевірте ваше з’єднання з Інтернетом.');
               }
             }
 
@@ -1387,7 +1487,7 @@ app.get('/test/question', checkAuth, (req, res) => {
     res.send(html);
   } finally {
     const endTime = Date.now();
-    console.log(`Route /test/question executed in ${endTime - startTime} ms`);
+    logger.info('Route /test/question executed', { duration: `${endTime - startTime} ms` });
   }
 });
 
@@ -1413,7 +1513,7 @@ app.post('/answer', checkAuth, express.urlencoded({ extended: true }), async (re
         parsedAnswer = answer;
       }
     } catch (error) {
-      console.error('Ошибка парсинга ответа в /answer:', error.message, error.stack);
+      logger.error('Ошибка парсинга ответа в /answer', { message: error.message, stack: error.stack });
       return res.status(400).json({ success: false, error: 'Невірний формат відповіді' });
     }
 
@@ -1431,11 +1531,11 @@ app.post('/answer', checkAuth, express.urlencoded({ extended: true }), async (re
 
     res.json({ success: true });
   } catch (error) {
-    console.error('Ошибка в /answer:', error.message, error.stack);
+    logger.error('Ошибка в /answer', { message: error.message, stack: error.stack });
     res.status(500).json({ success: false, error: 'Помилка сервера' });
   } finally {
     const endTime = Date.now();
-    console.log(`Route /answer executed in ${endTime - startTime} ms`);
+    logger.info('Route /answer executed', { duration: `${endTime - startTime} ms` });
   }
 });
 
@@ -1487,7 +1587,7 @@ app.get('/result', checkAuth, async (req, res) => {
       } else if (q.type === 'fillblank' && userAnswer && Array.isArray(userAnswer)) {
         const userAnswers = userAnswer.map(val => String(val).trim().toLowerCase().replace(/\s+/g, '').replace(',', '.'));
         const correctAnswers = q.correctAnswers.map(val => String(val).trim().toLowerCase().replace(/\s+/g, '').replace(',', '.'));
-        console.log(`Fillblank question ${index + 1}: userAnswers=${userAnswers}, correctAnswers=${correctAnswers}`);
+        logger.info(`Fillblank question ${index + 1}`, { userAnswers, correctAnswers });
         const isCorrect = userAnswers.length === correctAnswers.length &&
           userAnswers.every((answer, idx) => answer === correctAnswers[idx]);
         if (isCorrect) {
@@ -1496,7 +1596,7 @@ app.get('/result', checkAuth, async (req, res) => {
       } else if (q.type === 'singlechoice' && userAnswer && Array.isArray(userAnswer)) {
         const userAnswers = userAnswer.map(val => String(val).trim().toLowerCase());
         const correctAnswer = String(q.correctAnswer).trim().toLowerCase();
-        console.log(`Single choice question ${index + 1}: userAnswers=${userAnswers}, correctAnswer=${correctAnswer}`);
+        logger.info(`Single choice question ${index + 1}`, { userAnswers, correctAnswer });
         const isCorrect = userAnswers.length === 1 && userAnswers[0] === correctAnswer;
         if (isCorrect) {
           questionScore = q.points;
@@ -1534,13 +1634,7 @@ app.get('/result', checkAuth, async (req, res) => {
     }
 
     const ipAddress = req.headers['x-forwarded-for'] || req.socket.remoteAddress;
-    await logActivity(req.user, `завершив тест ${testNames[testNumber].name} з результатом ${Math.round(percentage)}%`, ipAddress, { percentage: Math.round(percentage) });
-
-    try {
-      await saveResult(req.user, testNumber, score, totalPoints, startTime, endTime, totalClicks, correctClicks, totalQuestions, percentage, suspiciousActivity, answers, scoresPerQuestion, variant);
-    } catch (error) {
-      return res.status(500).send('Помилка при збереженні результату');
-    }
+    await saveResult(req.user, testNumber, score, totalPoints, startTime, endTime, totalClicks, correctClicks, totalQuestions, percentage, suspiciousActivity, answers, scoresPerQuestion, variant, ipAddress);
 
     const endDateTime = new Date(endTime);
     const formattedTime = endDateTime.toLocaleTimeString('uk-UA', { hour12: false });
@@ -1551,11 +1645,11 @@ app.get('/result', checkAuth, async (req, res) => {
       const imageBuffer = fs.readFileSync(imagePath);
       imageBase64 = imageBuffer.toString('base64');
     } catch (error) {
-      console.error('Error reading image A.png:', error.message, error.stack);
+      logger.error('Error reading image A.png', { message: error.message, stack: error.stack });
     }
 
     const resultHtml = `
-            <!DOCTYPE html>
+      <!DOCTYPE html>
       <html lang="uk">
         <head>
           <meta charset="UTF-8">
@@ -1635,7 +1729,7 @@ app.get('/result', checkAuth, async (req, res) => {
     res.send(resultHtml);
   } finally {
     const endTime = Date.now();
-    console.log(`Route /result executed in ${endTime - startTime} ms`);
+    logger.info('Route /result executed', { duration: `${endTime - startTime} ms` });
   }
 });
 
@@ -1701,7 +1795,7 @@ app.get('/results', checkAuth, async (req, res) => {
         } else if (q.type === 'fillblank' && userAnswer && Array.isArray(userAnswer)) {
           const userAnswers = userAnswer.map(val => String(val).trim().toLowerCase().replace(/\s+/g, '').replace(',', '.'));
           const correctAnswers = q.correctAnswers.map(val => String(val).trim().toLowerCase().replace(/\s+/g, '').replace(',', '.'));
-          console.log(`Fillblank question ${index + 1} in /results: userAnswers=${userAnswers}, correctAnswers=${correctAnswers}`);
+          logger.info(`Fillblank question ${index + 1} in /results`, { userAnswers, correctAnswers });
           if (userAnswers.length === correctAnswers.length &&
               userAnswers.every((answer, idx) => answer === correctAnswers[idx])) {
             questionScore = q.points;
@@ -1709,7 +1803,7 @@ app.get('/results', checkAuth, async (req, res) => {
         } else if (q.type === 'singlechoice' && userAnswer && Array.isArray(userAnswer)) {
           const userAnswers = userAnswer.map(val => String(val).trim().toLowerCase());
           const correctAnswer = String(q.correctAnswer).trim().toLowerCase();
-          console.log(`Single choice question ${index + 1} in /results: userAnswers=${userAnswers}, correctAnswer=${correctAnswer}`);
+          logger.info(`Single choice question ${index + 1} in /results`, { userAnswers, correctAnswer });
           const isCorrect = userAnswers.length === 1 && userAnswers[0] === correctAnswer;
           if (isCorrect) {
             questionScore = q.points;
@@ -1732,7 +1826,7 @@ app.get('/results', checkAuth, async (req, res) => {
         const imageBuffer = fs.readFileSync(imagePath);
         imageBase64 = imageBuffer.toString('base64');
       } catch (error) {
-        console.error('Error reading image A.png:', error.message, error.stack);
+        logger.error('Error reading image A.png', { message: error.message, stack: error.stack });
       }
 
       resultsHtml += `
@@ -1849,7 +1943,7 @@ app.get('/results', checkAuth, async (req, res) => {
     res.send(resultsHtml);
   } finally {
     const endTime = Date.now();
-    console.log(`Route /results executed in ${endTime - startTime} ms`);
+    logger.info('Route /results executed', { duration: `${endTime - startTime} ms` });
   }
 });
 
@@ -1892,16 +1986,20 @@ app.get('/admin', checkAuth, checkAdmin, (req, res) => {
             async function logout() {
               const formData = new URLSearchParams();
               formData.append('_csrf', '${req.csrfToken()}');
-              await fetch('/logout', {
-                method: 'POST',
-                headers: { 
-                  'Content-Type': 'application/x-www-form-urlencoded',
-                  'Authorization': 'Bearer ' + localStorage.getItem('token')
-                },
-                body: formData
-              });
-              localStorage.removeItem('token');
-              window.location.href = '/';
+              try {
+                const response = await fetch('/logout', {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                  body: formData
+                });
+                if (!response.ok) {
+                  throw new Error('HTTP error! status: ' + response.status);
+                }
+                window.location.href = '/';
+              } catch (error) {
+                console.error('Error during logout:', error);
+                alert('Не вдалося вийти. Перевірте ваше з’єднання з Інтернетом.');
+              }
             }
           </script>
         </body>
@@ -1910,7 +2008,7 @@ app.get('/admin', checkAuth, checkAdmin, (req, res) => {
     res.send(html);
   } finally {
     const endTime = Date.now();
-    console.log(`Route /admin executed in ${endTime - startTime} ms`);
+    logger.info('Route /admin executed', { duration: `${endTime - startTime} ms` });
   }
 });
 
@@ -1921,9 +2019,9 @@ app.get('/admin/users', checkAuth, checkAdmin, async (req, res) => {
     let errorMessage = '';
     try {
       users = await db.collection('users').find({}).toArray();
-      await CacheManager.refreshUserCache();
+      await CacheManager.invalidateCache('users');
     } catch (error) {
-      console.error('Error fetching users from MongoDB:', error.message, error.stack);
+      logger.error('Error fetching users from MongoDB', { message: error.message, stack: error.stack });
       errorMessage = `Помилка MongoDB: ${error.message}`;
     }
 
@@ -1986,12 +2084,12 @@ app.get('/admin/users', checkAuth, checkAdmin, async (req, res) => {
                   formData.append('_csrf', '${req.csrfToken()}');
                   const response = await fetch('/admin/delete-user', {
                     method: 'POST',
-                    headers: { 
-                      'Content-Type': 'application/x-www-form-urlencoded',
-                      'Authorization': 'Bearer ' + localStorage.getItem('token')
-                    },
+                    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
                     body: formData
                   });
+                  if (!response.ok) {
+                    throw new Error('HTTP error! status: ' + response.status);
+                  }
                   const result = await response.json();
                   if (result.success) {
                     window.location.reload();
@@ -1999,7 +2097,8 @@ app.get('/admin/users', checkAuth, checkAdmin, async (req, res) => {
                     alert('Помилка при видаленні користувача: ' + result.message);
                   }
                 } catch (error) {
-                  alert('Помилка при видаленні користувача');
+                  console.error('Error deleting user:', error);
+                  alert('Не вдалося видалити користувача. Перевірте ваше з’єднання з Інтернетом.');
                 }
               }
             }
@@ -2010,7 +2109,7 @@ app.get('/admin/users', checkAuth, checkAdmin, async (req, res) => {
     res.send(adminHtml);
   } finally {
     const endTime = Date.now();
-    console.log(`Route /admin/users executed in ${endTime - startTime} ms`);
+    logger.info('Route /admin/users executed', { duration: `${endTime - startTime} ms` });
   }
 });
 
@@ -2071,7 +2170,7 @@ app.get('/admin/add-user', checkAuth, checkAdmin, (req, res) => {
     res.send(html);
   } finally {
     const endTime = Date.now();
-    console.log(`Route /admin/add-user executed in ${endTime - startTime} ms`);
+    logger.info('Route /admin/add-user executed', { duration: `${endTime - startTime} ms` });
   }
 });
 
@@ -2098,7 +2197,7 @@ app.post('/admin/add-user', checkAuth, checkAdmin, [
     const hashedPassword = await bcrypt.hash(password, saltRounds);
     const newUser = { username, password: hashedPassword };
     await db.collection('users').insertOne(newUser);
-    await CacheManager.refreshUserCache();
+    await CacheManager.invalidateCache('users');
     res.send(`
       <!DOCTYPE html>
       <html lang="uk">
@@ -2113,11 +2212,11 @@ app.post('/admin/add-user', checkAuth, checkAdmin, [
       </html>
     `);
   } catch (error) {
-    console.error('Error adding user:', error.message, error.stack);
+    logger.error('Error adding user', { message: error.message, stack: error.stack });
     res.status(500).send('Помилка при додаванні користувача');
   } finally {
     const endTime = Date.now();
-    console.log(`Route /admin/add-user (POST) executed in ${endTime - startTime} ms`);
+    logger.info('Route /admin/add-user (POST) executed', { duration: `${endTime - startTime} ms` });
   }
 });
 
@@ -2184,7 +2283,7 @@ app.get('/admin/edit-user', checkAuth, checkAdmin, async (req, res) => {
     res.send(html);
   } finally {
     const endTime = Date.now();
-    console.log(`Route /admin/edit-user executed in ${endTime - startTime} ms`);
+    logger.info('Route /admin/edit-user executed', { duration: `${endTime - startTime} ms` });
   }
 });
 
@@ -2218,7 +2317,7 @@ app.post('/admin/edit-user', checkAuth, checkAdmin, [
       { username: oldUsername },
       { $set: updateData }
     );
-    await CacheManager.refreshUserCache();
+    await CacheManager.invalidateCache('users');
     res.send(`
       <!DOCTYPE html>
       <html lang="uk">
@@ -2233,11 +2332,11 @@ app.post('/admin/edit-user', checkAuth, checkAdmin, [
       </html>
     `);
   } catch (error) {
-    console.error('Error editing user:', error.message, error.stack);
+    logger.error('Error editing user', { message: error.message, stack: error.stack });
     res.status(500).send('Помилка при редагуванні користувача');
   } finally {
     const endTime = Date.now();
-    console.log(`Route /admin/edit-user (POST) executed in ${endTime - startTime} ms`);
+    logger.info('Route /admin/edit-user (POST) executed', { duration: `${endTime - startTime} ms` });
   }
 });
 
@@ -2246,14 +2345,14 @@ app.post('/admin/delete-user', checkAuth, checkAdmin, async (req, res) => {
   try {
     const { username } = req.body;
     await db.collection('users').deleteOne({ username });
-    await CacheManager.refreshUserCache();
+    await CacheManager.invalidateCache('users');
     res.json({ success: true });
   } catch (error) {
-    console.error('Error deleting user:', error.message, error.stack);
+    logger.error('Error deleting user', { message: error.message, stack: error.stack });
     res.status(500).json({ success: false, message: 'Помилка при видаленні користувача' });
   } finally {
     const endTime = Date.now();
-    console.log(`Route /admin/delete-user executed in ${endTime - startTime} ms`);
+    logger.info('Route /admin/delete-user executed', { duration: `${endTime - startTime} ms` });
   }
 });
 
@@ -2264,9 +2363,9 @@ app.get('/admin/questions', checkAuth, checkAdmin, async (req, res) => {
     let errorMessage = '';
     try {
       questions = await db.collection('questions').find({}).sort({ testNumber: 1 }).toArray();
-      await CacheManager.refreshQuestionsCache();
+      await CacheManager.invalidateCache('questions');
     } catch (error) {
-      console.error('Error fetching questions from MongoDB:', error.message, error.stack);
+      logger.error('Error fetching questions from MongoDB', { message: error.message, stack: error.stack });
       errorMessage = `Помилка MongoDB: ${error.message}`;
     }
 
@@ -2335,12 +2434,12 @@ app.get('/admin/questions', checkAuth, checkAdmin, async (req, res) => {
                   formData.append('_csrf', '${req.csrfToken()}');
                   const response = await fetch('/admin/delete-question', {
                     method: 'POST',
-                    headers: { 
-                      'Content-Type': 'application/x-www-form-urlencoded',
-                      'Authorization': 'Bearer ' + localStorage.getItem('token')
-                    },
+                    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
                     body: formData
                   });
+                  if (!response.ok) {
+                    throw new Error('HTTP error! status: ' + response.status);
+                  }
                   const result = await response.json();
                   if (result.success) {
                     window.location.reload();
@@ -2348,7 +2447,8 @@ app.get('/admin/questions', checkAuth, checkAdmin, async (req, res) => {
                     alert('Помилка при видаленні питання: ' + result.message);
                   }
                 } catch (error) {
-                  alert('Помилка при видаленні питання');
+                  console.error('Error deleting question:', error);
+                  alert('Не вдалося видалити питання. Перевірте ваше з’єднання з Інтернетом.');
                 }
               }
             }
@@ -2359,7 +2459,7 @@ app.get('/admin/questions', checkAuth, checkAdmin, async (req, res) => {
     res.send(adminHtml);
   } finally {
     const endTime = Date.now();
-    console.log(`Route /admin/questions executed in ${endTime - startTime} ms`);
+    logger.info('Route /admin/questions executed', { duration: `${endTime - startTime} ms` });
   }
 });
 
@@ -2449,7 +2549,7 @@ app.get('/admin/add-question', checkAuth, checkAdmin, (req, res) => {
     res.send(html);
   } finally {
     const endTime = Date.now();
-    console.log(`Route /admin/add-question executed in ${endTime - startTime} ms`);
+    logger.info('Route /admin/add-question executed', { duration: `${endTime - startTime} ms` });
   }
 });
 
@@ -2521,7 +2621,7 @@ app.post('/admin/add-question', checkAuth, checkAdmin, [
     }
 
     const result = await db.collection('questions').insertOne(questionData);
-    await CacheManager.refreshQuestionsCache(testNumber);
+    await CacheManager.invalidateCache('questions', testNumber);
     res.send(`
       <!DOCTYPE html>
       <html lang="uk">
@@ -2536,11 +2636,11 @@ app.post('/admin/add-question', checkAuth, checkAdmin, [
       </html>
     `);
   } catch (error) {
-    console.error('Error adding question:', error.message, error.stack);
+    logger.error('Error adding question', { message: error.message, stack: error.stack });
     res.status(500).send('Помилка при додаванні питання');
   } finally {
     const endTime = Date.now();
-    console.log(`Route /admin/add-question (POST) executed in ${endTime - startTime} ms`);
+    logger.info('Route /admin/add-question (POST) executed', { duration: `${endTime - startTime} ms` });
   }
 });
 
@@ -2636,7 +2736,7 @@ app.get('/admin/edit-question', checkAuth, checkAdmin, async (req, res) => {
     res.send(html);
   } finally {
     const endTime = Date.now();
-    console.log(`Route /admin/edit-question executed in ${endTime - startTime} ms`);
+    logger.info('Route /admin/edit-question executed', { duration: `${endTime - startTime} ms` });
   }
 });
 
@@ -2715,9 +2815,9 @@ app.post('/admin/edit-question', checkAuth, checkAdmin, [
       { $set: questionData }
     );
 
-    await CacheManager.refreshQuestionsCache(oldTestNumber);
+    await CacheManager.invalidateCache('questions', oldTestNumber);
     if (testNumber !== oldTestNumber) {
-      await CacheManager.refreshQuestionsCache(testNumber);
+      await CacheManager.invalidateCache('questions', testNumber);
     }
 
     res.send(`
@@ -2734,11 +2834,11 @@ app.post('/admin/edit-question', checkAuth, checkAdmin, [
       </html>
     `);
   } catch (error) {
-    console.error('Error editing question:', error.message, error.stack);
+    logger.error('Error editing question', { message: error.message, stack: error.stack });
     res.status(500).send('Помилка при редагуванні питання');
   } finally {
     const endTime = Date.now();
-    console.log(`Route /admin/edit-question (POST) executed in ${endTime - startTime} ms`);
+    logger.info('Route /admin/edit-question (POST) executed', { duration: `${endTime - startTime} ms` });
   }
 });
 
@@ -2748,14 +2848,14 @@ app.post('/admin/delete-question', checkAuth, checkAdmin, async (req, res) => {
     const { id } = req.body;
     const question = await db.collection('questions').findOne({ _id: new ObjectId(id) });
     await db.collection('questions').deleteOne({ _id: new ObjectId(id) });
-    await CacheManager.refreshQuestionsCache(question.testNumber);
+    await CacheManager.invalidateCache('questions', question.testNumber);
     res.json({ success: true });
   } catch (error) {
-    console.error('Error deleting question:', error.message, error.stack);
+    logger.error('Error deleting question', { message: error.message, stack: error.stack });
     res.status(500).json({ success: false, message: 'Помилка при видаленні питання' });
   } finally {
     const endTime = Date.now();
-    console.log(`Route /admin/delete-question executed in ${endTime - startTime} ms`);
+    logger.info('Route /admin/delete-question executed', { duration: `${endTime - startTime} ms` });
   }
 });
 
@@ -2792,7 +2892,7 @@ app.get('/admin/import-users', checkAuth, checkAdmin, (req, res) => {
     res.send(html);
   } finally {
     const endTime = Date.now();
-    console.log(`Route /admin/import-users executed in ${endTime - startTime} ms`);
+    logger.info('Route /admin/import-users executed', { duration: `${endTime - startTime} ms` });
   }
 });
 
@@ -2819,14 +2919,14 @@ app.post('/admin/import-users', checkAuth, checkAdmin, upload.single('file'), as
       </html>
     `);
   } catch (error) {
-    console.error('Error importing users:', error.message, error.stack);
+    logger.error('Error importing users', { message: error.message, stack: error.stack });
     if (req.file && fs.existsSync(req.file.path)) {
       fs.unlinkSync(req.file.path);
     }
     res.status(500).send('Помилка при імпорті користувачів');
   } finally {
     const endTime = Date.now();
-    console.log(`Route /admin/import-users (POST) executed in ${endTime - startTime} ms`);
+    logger.info('Route /admin/import-users (POST) executed', { duration: `${endTime - startTime} ms` });
   }
 });
 
@@ -2863,7 +2963,7 @@ app.get('/admin/import-questions', checkAuth, checkAdmin, (req, res) => {
     res.send(html);
   } finally {
     const endTime = Date.now();
-    console.log(`Route /admin/import-questions executed in ${endTime - startTime} ms`);
+    logger.info('Route /admin/import-questions executed', { duration: `${endTime - startTime} ms` });
   }
 });
 
@@ -2932,7 +3032,7 @@ app.get('/admin/results', checkAuth, checkAdmin, async (req, res) => {
         .limit(limit)
         .toArray();
     } catch (fetchError) {
-      console.error('Ошибка при получении данных из MongoDB:', fetchError.message, fetchError.stack);
+      logger.error('Ошибка при получении данных из MongoDB в /admin/results', { message: fetchError.message, stack: fetchError.stack });
       errorMessage = `Ошибка MongoDB: ${fetchError.message}`;
     }
 
@@ -2993,7 +3093,7 @@ app.get('/admin/results', checkAuth, checkAdmin, async (req, res) => {
             answersArray[idx] = r.answers[key];
           });
         }
-        console.log(`User ${r.user} answers array:`, answersArray);
+        logger.info(`User ${r.user} answers array`, { answersArray });
         const answersDisplay = answersArray.length > 0
           ? answersArray.map((a, i) => {
               if (a === undefined || a === null) return null;
@@ -3046,7 +3146,7 @@ app.get('/admin/results', checkAuth, checkAdmin, async (req, res) => {
             <td>${r.score || '0'}</td>
             <td>${r.totalPoints || '0'}</td>
             <td>${formatDateTime(r.startTime)}</td>
-                        <td>${formatDateTime(r.endTime)}</td>
+            <td>${formatDateTime(r.endTime)}</td>
             <td>${r.duration || 'N/A'}</td>
             <td>${suspiciousActivityPercent}%</td>
             <td class="details">${activityDetails}</td>
@@ -3073,12 +3173,12 @@ app.get('/admin/results', checkAuth, checkAdmin, async (req, res) => {
                   formData.append('_csrf', '${req.csrfToken()}');
                   const response = await fetch('/admin/delete-result', {
                     method: 'POST',
-                    headers: { 
-                      'Content-Type': 'application/x-www-form-urlencoded',
-                      'Authorization': 'Bearer ' + localStorage.getItem('token')
-                    },
+                    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
                     body: formData
                   });
+                  if (!response.ok) {
+                    throw new Error('HTTP error! status: ' + response.status);
+                  }
                   const result = await response.json();
                   if (result.success) {
                     window.location.reload();
@@ -3086,7 +3186,8 @@ app.get('/admin/results', checkAuth, checkAdmin, async (req, res) => {
                     alert('Помилка при видаленні результату: ' + result.message);
                   }
                 } catch (error) {
-                  alert('Помилка при видаленні результату');
+                  console.error('Error deleting result:', error);
+                  alert('Не вдалося видалити результат. Перевірте ваше з’єднання з Інтернетом.');
                 }
               }
             }
@@ -3098,12 +3199,12 @@ app.get('/admin/results', checkAuth, checkAdmin, async (req, res) => {
                   formData.append('_csrf', '${req.csrfToken()}');
                   const response = await fetch('/admin/delete-all-results', {
                     method: 'POST',
-                    headers: { 
-                      'Content-Type': 'application/x-www-form-urlencoded',
-                      'Authorization': 'Bearer ' + localStorage.getItem('token')
-                    },
+                    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
                     body: formData
                   });
+                  if (!response.ok) {
+                    throw new Error('HTTP error! status: ' + response.status);
+                  }
                   const result = await response.json();
                   if (result.success) {
                     window.location.reload();
@@ -3111,7 +3212,8 @@ app.get('/admin/results', checkAuth, checkAdmin, async (req, res) => {
                     alert('Помилка при видаленні всіх результатів: ' + result.message);
                   }
                 } catch (error) {
-                  alert('Помилка при видаленні всіх результатів');
+                  console.error('Error deleting all results:', error);
+                  alert('Не вдалося видалити всі результати. Перевірте ваше з’єднання з Інтернетом.');
                 }
               }
             }
@@ -3122,7 +3224,7 @@ app.get('/admin/results', checkAuth, checkAdmin, async (req, res) => {
     res.send(adminHtml.trim());
   } finally {
     const endTime = Date.now();
-    console.log(`Route /admin/results executed in ${endTime - startTime} ms`);
+    logger.info('Route /admin/results executed', { duration: `${endTime - startTime} ms` });
   }
 });
 
@@ -3133,14 +3235,14 @@ app.post('/admin/delete-all-results', checkAuth, checkAdmin, async (req, res) =>
       throw new Error('MongoDB connection not established');
     }
     const deleteResult = await db.collection('test_results').deleteMany({});
-    console.log(`Deleted ${deleteResult.deletedCount} results from test_results collection`);
+    logger.info(`Deleted ${deleteResult.deletedCount} results from test_results collection`);
     res.json({ success: true, message: `Успішно видалено ${deleteResult.deletedCount} результатів` });
   } catch (error) {
-    console.error('Ошибка при удалении всех результатов:', error.message, error.stack);
+    logger.error('Ошибка при удалении всех результатов', { message: error.message, stack: error.stack });
     res.status(500).json({ success: false, message: 'Помилка при видаленні всіх результатів' });
   } finally {
     const endTime = Date.now();
-    console.log(`Route /admin/delete-all-results executed in ${endTime - startTime} ms`);
+    logger.info('Route /admin/delete-all-results executed', { duration: `${endTime - startTime} ms` });
   }
 });
 
@@ -3151,11 +3253,11 @@ app.post('/admin/delete-result', checkAuth, checkAdmin, async (req, res) => {
     await db.collection('test_results').deleteOne({ _id: new ObjectId(id) });
     res.json({ success: true });
   } catch (error) {
-    console.error('Ошибка при удалении результата:', error.message, error.stack);
+    logger.error('Ошибка при удалении результата', { message: error.message, stack: error.stack });
     res.status(500).json({ success: false, message: 'Помилка при видаленні результату' });
   } finally {
     const endTime = Date.now();
-    console.log(`Route /admin/delete-result executed in ${endTime - startTime} ms`);
+    logger.info('Route /admin/delete-result executed', { duration: `${endTime - startTime} ms` });
   }
 });
 
@@ -3205,18 +3307,23 @@ app.get('/admin/edit-tests', checkAuth, checkAdmin, (req, res) => {
           <script>
             async function deleteTest(testNumber) {
               if (confirm('Ви впевнені, що хочете видалити Тест ' + testNumber + '?')) {
-                const formData = new URLSearchParams();
-                formData.append('testNumber', testNumber);
-                formData.append('_csrf', '${req.csrfToken()}');
-                await fetch('/admin/delete-test', {
-                  method: 'POST',
-                  headers: { 
-                    'Content-Type': 'application/x-www-form-urlencoded',
-                    'Authorization': 'Bearer ' + localStorage.getItem('token')
-                  },
-                  body: formData
-                });
-                window.location.reload();
+                try {
+                  const formData = new URLSearchParams();
+                  formData.append('testNumber', testNumber);
+                  formData.append('_csrf', '${req.csrfToken()}');
+                  const response = await fetch('/admin/delete-test', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                    body: formData
+                  });
+                  if (!response.ok) {
+                    throw new Error('HTTP error! status: ' + response.status);
+                  }
+                  window.location.reload();
+                } catch (error) {
+                  console.error('Error deleting test:', error);
+                  alert('Не вдалося видалити тест. Перевірте ваше з’єднання з Інтернетом.');
+                }
               }
             }
           </script>
@@ -3226,7 +3333,7 @@ app.get('/admin/edit-tests', checkAuth, checkAdmin, (req, res) => {
     res.send(html);
   } finally {
     const endTime = Date.now();
-    console.log(`Route /admin/edit-tests executed in ${endTime - startTime} ms`);
+    logger.info('Route /admin/edit-tests executed', { duration: `${endTime - startTime} ms` });
   }
 });
 
@@ -3258,7 +3365,7 @@ app.post('/admin/edit-tests', checkAuth, checkAdmin, async (req, res) => {
       return res.status(400).send(validationErrors.join('<br>'));
     }
 
-    Object.keys(testNames).forEach(num => {
+    for (const num of Object.keys(testNames)) {
       const testName = req.body[`test${num}`];
       const timeLimit = req.body[`time${num}`];
       const randomQuestions = req.body[`randomQuestions${num}`] === 'on';
@@ -3274,8 +3381,9 @@ app.post('/admin/edit-tests', checkAuth, checkAdmin, async (req, res) => {
           questionLimit,
           attemptLimit
         };
+        await saveTestToMongoDB(num, testNames[num]);
       }
-    });
+    }
     res.send(`
       <!DOCTYPE html>
       <html lang="uk">
@@ -3290,33 +3398,38 @@ app.post('/admin/edit-tests', checkAuth, checkAdmin, async (req, res) => {
       </html>
     `);
   } catch (error) {
-    console.error('Ошибка при редактировании названий тестов:', error.message, error.stack);
+    logger.error('Ошибка при редактировании названий тестов', { message: error.message, stack: error.stack });
     res.status(500).send('Помилка при оновленні назв тестів');
   } finally {
     const endTime = Date.now();
-    console.log(`Route /admin/edit-tests (POST) executed in ${endTime - startTime} ms`);
+    logger.info('Route /admin/edit-tests (POST) executed', { duration: `${endTime - startTime} ms` });
   }
 });
 
 app.post('/admin/delete-test', checkAuth, checkAdmin, async (req, res) => {
   const startTime = Date.now();
+  const session = client.startSession();
   try {
     const { testNumber } = req.body;
     if (!testNames[testNumber]) {
       return res.status(404).json({ success: false, message: 'Тест не знайдено' });
     }
-    delete testNames[testNumber];
-    await db.collection('questions').deleteMany({ testNumber });
-    if (questionsCache[testNumber]) {
-      delete questionsCache[testNumber];
-    }
+    await session.withTransaction(async () => {
+      delete testNames[testNumber];
+      await deleteTestFromMongoDB(testNumber);
+      await db.collection('questions').deleteMany({ testNumber }, { session });
+      if (questionsCache[testNumber]) {
+        delete questionsCache[testNumber];
+      }
+    });
     res.json({ success: true });
   } catch (error) {
-    console.error('Ошибка при удалении теста:', error.message, error.stack);
+    logger.error('Ошибка при удалении теста', { message: error.message, stack: error.stack });
     res.status(500).json({ success: false, message: 'Помилка при видаленні тесту' });
   } finally {
+    await session.endSession();
     const endTime = Date.now();
-    console.log(`Route /admin/delete-test executed in ${endTime - startTime} ms`);
+    logger.info('Route /admin/delete-test executed', { duration: `${endTime - startTime} ms` });
   }
 });
 
@@ -3358,7 +3471,7 @@ app.get('/admin/create-test', checkAuth, checkAdmin, (req, res) => {
     res.send(html);
   } finally {
     const endTime = Date.now();
-    console.log(`Route /admin/create-test executed in ${endTime - startTime} ms`);
+    logger.info('Route /admin/create-test executed', { duration: `${endTime - startTime} ms` });
   }
 });
 
@@ -3388,6 +3501,7 @@ app.post('/admin/create-test', checkAuth, checkAdmin, [
       questionLimit: null,
       attemptLimit: 1
     };
+    await saveTestToMongoDB(testNumber, testNames[testNumber]);
     res.send(`
       <!DOCTYPE html>
       <html lang="uk">
@@ -3414,11 +3528,11 @@ app.post('/admin/create-test', checkAuth, checkAdmin, [
       </html>
     `);
   } catch (error) {
-    console.error('Ошибка при создании нового теста:', error.message, error.stack);
+    logger.error('Ошибка при создании нового теста', { message: error.message, stack: error.stack });
     res.status(500).send(`Помилка при створенні тесту: ${error.message}`);
   } finally {
     const endTime = Date.now();
-    console.log(`Route /admin/create-test (POST) executed in ${endTime - startTime} ms`);
+    logger.info('Route /admin/create-test (POST) executed', { duration: `${endTime - startTime} ms` });
   }
 });
 
@@ -3484,11 +3598,11 @@ app.get('/download-template', checkAuth, checkAdmin, async (req, res) => {
     await workbook.xlsx.write(res);
     res.end();
   } catch (error) {
-    console.error('Error generating template:', error.message, error.stack);
+    logger.error('Error generating template', { message: error.message, stack: error.stack });
     res.status(500).send('Помилка при генерації шаблону');
   } finally {
     const endTime = Date.now();
-    console.log(`Route /download-template executed in ${endTime - startTime} ms`);
+    logger.info('Route /download-template executed', { duration: `${endTime - startTime} ms` });
   }
 });
 
@@ -3514,7 +3628,7 @@ app.get('/admin/activity-log', checkAuth, checkAdmin, async (req, res) => {
         .limit(limit)
         .toArray();
     } catch (fetchError) {
-      console.error('Ошибка при получении данных из MongoDB:', fetchError.message, fetchError.stack);
+      logger.error('Ошибка при получении данных из MongoDB в /admin/activity-log', { message: fetchError.message, stack: fetchError.stack });
       errorMessage = `Ошибка MongoDB: ${fetchError.message}`;
     }
     let adminHtml = `
@@ -3588,12 +3702,12 @@ app.get('/admin/activity-log', checkAuth, checkAdmin, async (req, res) => {
                   formData.append('_csrf', '${req.csrfToken()}');
                   const response = await fetch('/admin/delete-activity-log', {
                     method: 'POST',
-                    headers: { 
-                      'Content-Type': 'application/x-www-form-urlencoded',
-                      'Authorization': 'Bearer ' + localStorage.getItem('token')
-                    },
+                    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
                     body: formData
                   });
+                  if (!response.ok) {
+                    throw new Error('HTTP error! status: ' + response.status);
+                  }
                   const result = await response.json();
                   if (result.success) {
                     window.location.reload();
@@ -3601,7 +3715,8 @@ app.get('/admin/activity-log', checkAuth, checkAdmin, async (req, res) => {
                     alert('Помилка при видаленні записів журналу: ' + result.message);
                   }
                 } catch (error) {
-                  alert('Помилка при видаленні записів журналу');
+                  console.error('Error clearing activity log:', error);
+                  alert('Не вдалося видалити записи журналу. Перевірте ваше з’єднання з Інтернетом.');
                 }
               }
             }
@@ -3612,7 +3727,7 @@ app.get('/admin/activity-log', checkAuth, checkAdmin, async (req, res) => {
     res.send(adminHtml);
   } finally {
     const endTime = Date.now();
-    console.log(`Route /admin/activity-log executed in ${endTime - startTime} ms`);
+    logger.info('Route /admin/activity-log executed', { duration: `${endTime - startTime} ms` });
   }
 });
 
@@ -3622,17 +3737,17 @@ app.post('/admin/delete-activity-log', checkAuth, checkAdmin, async (req, res) =
     await db.collection('activity_log').deleteMany({});
     res.json({ success: true });
   } catch (error) {
-    console.error('Ошибка при удалении записей журнала действий:', error.message, error.stack);
+    logger.error('Ошибка при удалении записей журнала действий', { message: error.message, stack: error.stack });
     res.status(500).json({ success: false, message: 'Помилка при видаленні записів журналу' });
   } finally {
     const endTime = Date.now();
-    console.log(`Route /admin/delete-activity-log executed in ${endTime - startTime} ms`);
+    logger.info('Route /admin/delete-activity-log executed', { duration: `${endTime - startTime} ms` });
   }
 });
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
-  console.log(`Server is running on port ${PORT}`);
+  logger.info('Server is running', { port: PORT });
 });
 
 module.exports = app;
