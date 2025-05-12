@@ -31,8 +31,11 @@ const logger = winston.createLogger({
   ]
 });
 
-// Настройка multer для загрузки файлов
-const upload = multer({ dest: 'uploads/' });
+// Налаштування multer з лімітом розміру файлу (5MB)
+const upload = multer({
+  dest: 'uploads/',
+  limits: { fileSize: 5 * 1024 * 1024 } // 5MB ліміт
+});
 
 // Настройка nodemailer для отправки email
 const transporter = nodemailer.createTransport({
@@ -223,8 +226,14 @@ app.use((err, req, res, next) => {
 });
 
 // Middleware для обработки ошибок CSRF
+app.use(csurf({ cookie: true }));
+
 app.use((err, req, res, next) => {
   if (err.code === 'EBADCSRFTOKEN') {
+    logger.error('CSRF token validation failed', {
+      expectedToken: req.csrfToken(),
+      receivedToken: req.body._csrf || req.headers['x-csrf-token'] || 'not provided'
+    });
     res.status(403).json({ success: false, message: 'Недійсний CSRF-токен' });
   } else {
     next(err);
@@ -267,16 +276,28 @@ const importUsersToMongoDB = async (filePath) => {
 
 const importQuestionsToMongoDB = async (filePath, testNumber) => {
   try {
+    logger.info('Opening workbook', { filePath });
     const workbook = new ExcelJS.Workbook();
     await workbook.xlsx.readFile(filePath);
+    logger.info('Workbook opened successfully');
+
     const sheet = workbook.getWorksheet('Questions');
     if (!sheet) {
       throw new Error('Лист "Questions" не знайдено у файлі');
     }
+    logger.info('Worksheet "Questions" found', { rowCount: sheet.rowCount });
+
+    // Перевірка кількості рядків
+    const MAX_ROWS = 1000; // Максимальна кількість рядків
+    if (sheet.rowCount > MAX_ROWS + 1) { // +1 для заголовка
+      throw new Error(`Занадто багато рядків (${sheet.rowCount - 1} питань). Максимальна кількість питань: ${MAX_ROWS}.`);
+    }
+
     const questions = [];
     sheet.eachRow({ includeEmpty: false }, (row, rowNumber) => {
       if (rowNumber > 1) {
         try {
+          logger.info(`Processing row ${rowNumber}`);
           const rowValues = row.values.slice(1);
           let questionText = rowValues[1];
           if (typeof questionText === 'object' && questionText !== null) {
@@ -329,6 +350,7 @@ const importQuestionsToMongoDB = async (filePath, testNumber) => {
           }
 
           questions.push(questionData);
+          logger.info(`Row ${rowNumber} processed successfully`);
         } catch (error) {
           throw new Error(`Помилка в рядку ${rowNumber}: ${error.message}`);
         }
@@ -337,7 +359,9 @@ const importQuestionsToMongoDB = async (filePath, testNumber) => {
     if (questions.length === 0) {
       throw new Error('Не знайдено питань у файлі');
     }
+    logger.info('Deleting existing questions for test', { testNumber });
     await db.collection('questions').deleteMany({ testNumber });
+    logger.info('Inserting new questions', { count: questions.length });
     await db.collection('questions').insertMany(questions);
     logger.info(`Imported ${questions.length} questions for test ${testNumber} to MongoDB`);
     await CacheManager.invalidateCache('questions', testNumber);
@@ -2982,17 +3006,68 @@ app.get('/admin/import-questions', checkAuth, checkAdmin, (req, res) => {
             button { padding: 10px 20px; margin: 5px; cursor: pointer; border: none; border-radius: 5px; }
             .nav-btn { background-color: #007bff; color: white; }
             .submit-btn { background-color: #4CAF50; color: white; }
+            .submit-btn:disabled { background-color: #cccccc; cursor: not-allowed; }
+            .error { color: red; }
           </style>
         </head>
         <body>
           <h1>Імпорт питань із Excel</h1>
-          <form method="POST" action="/admin/import-questions" enctype="multipart/form-data">
-            <input type="hidden" name="_csrf" value="${req.csrfToken()}">
+          <form id="import-form">
+            <input type="hidden" name="_csrf" id="_csrf" value="${req.csrfToken()}">
             <label for="file">Виберіть файл questions*.xlsx:</label>
             <input type="file" id="file" name="file" accept=".xlsx" required>
-            <button type="submit" class="submit-btn">Завантажити</button>
+            <button type="submit" class="submit-btn" id="submit-btn">Завантажити</button>
           </form>
+          <div id="error-message" class="error"></div>
           <button class="nav-btn" onclick="window.location.href='/admin'">Повернутися до адмін-панелі</button>
+          <script>
+            document.getElementById('import-form').addEventListener('submit', async (e) => {
+              e.preventDefault();
+              const fileInput = document.getElementById('file');
+              const errorMessage = document.getElementById('error-message');
+              const submitBtn = document.getElementById('submit-btn');
+              const csrfToken = document.getElementById('_csrf').value;
+
+              if (!csrfToken) {
+                errorMessage.textContent = 'CSRF-токен відсутній. Оновіть сторінку та спробуйте знову.';
+                return;
+              }
+
+              if (!fileInput.files[0]) {
+                errorMessage.textContent = 'Файл не вибрано.';
+                return;
+              }
+
+              submitBtn.disabled = true;
+              submitBtn.textContent = 'Завантаження...';
+
+              const formData = new FormData();
+              formData.append('file', fileInput.files[0]);
+
+              try {
+                const response = await fetch('/admin/import-questions', {
+                  method: 'POST',
+                  body: formData,
+                  headers: {
+                    'X-CSRF-Token': csrfToken
+                  }
+                });
+
+                const result = await response.json();
+                if (result.success) {
+                  window.location.href = result.redirect || '/admin/questions';
+                } else {
+                  errorMessage.textContent = result.message || 'Помилка при імпорті.';
+                }
+              } catch (error) {
+                console.error('Error during file upload:', error);
+                errorMessage.textContent = 'Не вдалося підключитися до сервера. Перевірте ваше з’єднання з Інтернетом.';
+              } finally {
+                submitBtn.disabled = false;
+                submitBtn.textContent = 'Завантажити';
+              }
+            });
+          </script>
         </body>
       </html>
     `;
@@ -3006,59 +3081,46 @@ app.get('/admin/import-questions', checkAuth, checkAdmin, (req, res) => {
 app.post('/admin/import-questions', checkAuth, checkAdmin, upload.single('file'), async (req, res) => {
   const startTime = Date.now();
   try {
+    logger.info('Received POST request for /admin/import-questions', {
+      body: req.body,
+      headers: { 'x-csrf-token': req.headers['x-csrf-token'] },
+      file: req.file ? { originalname: req.file.originalname, size: req.file.size } : 'no file'
+    });
+
     if (!req.file) {
       logger.warn('Файл не завантажено: req.file отсутствует');
-      return res.status(400).send('Файл не завантажено');
+      return res.status(400).json({ success: false, message: 'Файл не завантажено' });
     }
 
-    // Перевірка розміру файлу (максимум 5MB)
-    const MAX_FILE_SIZE = 5 * 1024 * 1024; // 5MB
-    if (req.file.size > MAX_FILE_SIZE) {
-      logger.warn(`Файл занадто великий: ${req.file.size} байтів, максимум ${MAX_FILE_SIZE} байтів`);
-      fs.unlinkSync(req.file.path);
-      return res.status(400).send('Файл занадто великий. Максимальний розмір — 5MB.');
-    }
+    logger.info('File uploaded successfully', { path: req.file.path, size: req.file.size });
 
-    const filePath = req.file.path;
     const testNumber = req.file.originalname.match(/^questions(\d+)\.xlsx$/)?.[1];
     if (!testNumber) {
       logger.warn(`Неверное имя файла: ${req.file.originalname}. Ожидается формат questionsX.xlsx`);
-      fs.unlinkSync(filePath);
-      return res.status(400).send('Файл повинен мати назву у форматі questionsX.xlsx, де X — номер тесту');
+      fs.unlinkSync(req.file.path);
+      return res.status(400).json({ success: false, message: 'Файл повинен мати назву у форматі questionsX.xlsx, де X — номер тесту' });
     }
 
     logger.info(`Загружаем файл ${req.file.originalname} для теста ${testNumber}`);
 
-    // Таймаут для обробки файлу (20 секунд)
     const timeoutPromise = new Promise((_, reject) => {
       setTimeout(() => reject(new Error('Перевищено час обробки файлу (20 секунд). Спробуйте завантажити менший файл.')), 20000);
     });
 
-    const importPromise = importQuestionsToMongoDB(filePath, testNumber);
-
+    logger.info('Starting questions import from file');
+    const importPromise = importQuestionsToMongoDB(req.file.path, testNumber);
     const importedCount = await Promise.race([importPromise, timeoutPromise]);
+    logger.info('Questions import completed', { importedCount });
 
-    fs.unlinkSync(filePath);
+    fs.unlinkSync(req.file.path);
     logger.info(`Успешно импортировано ${importedCount} вопросов для теста ${testNumber}`);
-    res.send(`
-      <!DOCTYPE html>
-      <html lang="uk">
-        <head>
-          <meta charset="UTF-8">
-          <title>Питання імпортовано</title>
-        </head>
-        <body>
-          <h1>Імпортовано ${importedCount} питань для тесту ${testNumber}</h1>
-          <button onclick="window.location.href='/admin/questions'">Повернутися до списку питань</button>
-        </body>
-      </html>
-    `);
+    res.json({ success: true, message: `Імпортовано ${importedCount} питань для тесту ${testNumber}`, redirect: '/admin/questions' });
   } catch (error) {
     logger.error('Error importing questions', { message: error.message, stack: error.stack });
     if (req.file && fs.existsSync(req.file.path)) {
       fs.unlinkSync(req.file.path);
     }
-    res.status(500).send(`Помилка при імпорті питань: ${error.message}`);
+    res.status(500).json({ success: false, message: `Помилка при імпорті питань: ${error.message}` });
   } finally {
     const endTime = Date.now();
     logger.info('Route /admin/import-questions (POST) executed', { duration: `${endTime - startTime} ms` });
