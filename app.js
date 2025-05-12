@@ -1614,16 +1614,15 @@ app.get('/result', checkAuth, async (req, res) => {
       const userAnswer = answers[index];
       let questionScore = 0;
 
-      // Нормалізація відповідей для порівняння
       const normalizeAnswer = (answer) => {
         if (!answer) return '';
         return String(answer)
           .trim()
           .toLowerCase()
-          .replace(/\s+/g, '') // Видаляємо пробіли
-          .replace(',', '.')    // Замінюємо кому на крапку
-          .replace(/\\'/g, "'") // Замінюємо екрановану лапку на звичайну
-          .replace(/°/g, 'deg'); // Замінюємо символ градуса на "deg" для уніфікації
+          .replace(/\s+/g, '')
+          .replace(',', '.')
+          .replace(/\\'/g, "'")
+          .replace(/°/g, 'deg');
       };
 
       if (q.type === 'multiple' && userAnswer && Array.isArray(userAnswer)) {
@@ -1681,6 +1680,7 @@ app.get('/result', checkAuth, async (req, res) => {
       }
       return questionScore;
     });
+
     score = scoresPerQuestion.reduce((sum, s) => sum + s, 0);
     const endTime = Date.now();
     const percentage = (score / totalPoints) * 100;
@@ -1733,18 +1733,32 @@ app.get('/result', checkAuth, async (req, res) => {
           <title>Результати ${testNames[testNumber].name}</title>
           <style>
             body { font-family: Arial, sans-serif; text-align: center; padding: 20px; background-color: #f5f5f5; }
-            .result-circle { width: 100px; height: 100px; background-color: #ff4d4d; color: white; font-size: 24px; line-height: 100px; border-radius: 50%; margin: 0 auto; }
+            .result-container { margin: 20px auto; width: 150px; height: 150px; position: relative; }
+            .result-circle-bg { stroke: #e0e0e0; stroke-width: 10; fill: none; }
+            .result-circle { stroke: #4CAF50; stroke-width: 10; fill: none; stroke-dasharray: 440; stroke-dashoffset: 440; animation: fillCircle 1.5s ease-in-out forwards; }
+            .result-text { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); font-size: 24px; font-weight: bold; color: #333; }
             .buttons { margin-top: 20px; }
             button { padding: 10px 20px; margin: 5px; cursor: pointer; border: none; border-radius: 5px; font-size: 16px; }
             #exportPDF { background-color: #ffeb3b; }
             #restart { background-color: #ef5350; }
+            @keyframes fillCircle {
+              to {
+                stroke-dashoffset: ${(440 * (100 - percentage)) / 100};
+              }
+            }
           </style>
           <script src="https://cdnjs.cloudflare.com/ajax/libs/pdfmake/0.2.7/pdfmake.min.js"></script>
           <script src="https://cdnjs.cloudflare.com/ajax/libs/pdfmake/0.2.7/vfs_fonts.js"></script>
         </head>
         <body>
           <h1>Результат тесту</h1>
-          <div class="result-circle">${Math.round(percentage)}%</div>
+          <div class="result-container">
+            <svg width="150" height="150">
+              <circle class="result-circle-bg" cx="75" cy="75" r="70" />
+              <circle class="result-circle" cx="75" cy="75" r="70" />
+            </svg>
+            <div class="result-text">${Math.round(percentage)}%</div>
+          </div>
           <p>
             Кількість питань: ${totalQuestions}<br>
             Правильних відповідей: ${correctClicks}<br>
