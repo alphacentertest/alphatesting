@@ -153,6 +153,7 @@ let testNames = {};
 const loadTestsFromMongoDB = async () => {
   try {
     const tests = await db.collection('tests').find({}).toArray();
+    logger.info('Raw tests data from MongoDB', { tests });
     testNames = tests.reduce((acc, test) => {
       acc[test.testNumber] = {
         name: test.name,
@@ -164,7 +165,7 @@ const loadTestsFromMongoDB = async () => {
       };
       return acc;
     }, {});
-    logger.info('Loaded tests from MongoDB', { count: Object.keys(testNames).length });
+    logger.info('Loaded tests from MongoDB', { count: Object.keys(testNames).length, testNames });
   } catch (error) {
     logger.error('Error loading tests from MongoDB', { message: error.message, stack: error.stack });
     throw error;
@@ -426,8 +427,23 @@ const initializeServer = async () => {
     await db.collection('login_attempts').createIndex({ ipAddress: 1, lastAttempt: 1 });
     await db.collection('tests').createIndex({ testNumber: 1 }, { unique: true });
     logger.info('MongoDB indexes created successfully');
+
+    // Миграция тестов, если коллекция пуста
+    const testCount = await db.collection('tests').countDocuments();
+    if (testCount === 0) {
+      const defaultTests = {
+        "1": { name: "Тест 1", timeLimit: 3600, randomQuestions: false, randomAnswers: false, questionLimit: null, attemptLimit: 1 },
+        "2": { name: "Тест 2", timeLimit: 3600, randomQuestions: false, randomAnswers: false, questionLimit: null, attemptLimit: 1 },
+        "3": { name: "Тест 3", timeLimit: 3600, randomQuestions: false, randomAnswers: false, questionLimit: null, attemptLimit: 1 }
+      };
+      for (const [testNumber, testData] of Object.entries(defaultTests)) {
+        await saveTestToMongoDB(testNumber, testData);
+      }
+      logger.info('Migrated default tests to MongoDB', { count: Object.keys(defaultTests).length });
+    }
+
     await updateUserPasswords();
-    await CacheManager.refreshUserCache(); // Убираем дублирующий вызов
+    await CacheManager.refreshUserCache();
     await loadTestsFromMongoDB();
     await CacheManager.refreshQuestionsCache();
     isInitialized = true;
@@ -747,6 +763,7 @@ app.get('/select-test', checkAuth, (req, res) => {
             button { padding: 10px; font-size: 18px; cursor: pointer; width: 200px; border: none; border-radius: 5px; background-color: #4CAF50; color: white; }
             button:hover { background-color: #45a049; }
             #logout { background-color: #ef5350; color: white; position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%); width: 200px; }
+            .no-tests { color: red; font-size: 18px; margin-top: 20px; }
             @media (max-width: 600px) {
               h1 { font-size: 28px; }
               button { font-size: 20px; width: 90%; padding: 15px; }
@@ -757,9 +774,12 @@ app.get('/select-test', checkAuth, (req, res) => {
         <body>
           <h1>Виберіть тест</h1>
           <div class="test-buttons">
-            ${Object.entries(testNames).map(([num, data]) => `
-              <button onclick="window.location.href='/test?test=${num}'">${data.name}</button>
-            `).join('')}
+            ${Object.entries(testNames).length > 0
+              ? Object.entries(testNames).map(([num, data]) => `
+                  <button onclick="window.location.href='/test?test=${num}'">${data.name}</button>
+                `).join('')
+              : '<p class="no-tests">Немає доступних тестів</p>'
+            }
           </div>
           <button id="logout" onclick="logout()">Вийти</button>
           <script>
