@@ -1613,9 +1613,22 @@ app.get('/result', checkAuth, async (req, res) => {
     const scoresPerQuestion = questions.map((q, index) => {
       const userAnswer = answers[index];
       let questionScore = 0;
+
+      // Нормалізація відповідей для порівняння
+      const normalizeAnswer = (answer) => {
+        if (!answer) return '';
+        return String(answer)
+          .trim()
+          .toLowerCase()
+          .replace(/\s+/g, '') // Видаляємо пробіли
+          .replace(',', '.')    // Замінюємо кому на крапку
+          .replace(/\\'/g, "'") // Замінюємо екрановану лапку на звичайну
+          .replace(/°/g, 'deg'); // Замінюємо символ градуса на "deg" для уніфікації
+      };
+
       if (q.type === 'multiple' && userAnswer && Array.isArray(userAnswer)) {
-        const correctAnswers = q.correctAnswers.map(val => String(val).trim().toLowerCase());
-        const userAnswers = userAnswer.map(val => String(val).trim().toLowerCase().replace(/\\'/g, "'"));
+        const correctAnswers = q.correctAnswers.map(val => normalizeAnswer(val));
+        const userAnswers = userAnswer.map(val => normalizeAnswer(val));
         const isCorrect = correctAnswers.length === userAnswers.length &&
           correctAnswers.every(val => userAnswers.includes(val)) &&
           userAnswers.every(val => correctAnswers.includes(val));
@@ -1623,30 +1636,34 @@ app.get('/result', checkAuth, async (req, res) => {
           questionScore = q.points;
         }
       } else if (q.type === 'input' && userAnswer) {
-        const normalizedUserAnswer = String(userAnswer).trim().toLowerCase().replace(/\s+/g, '').replace(',', '.');
-        const normalizedCorrectAnswer = String(q.correctAnswers[0]).trim().toLowerCase().replace(/\s+/g, '').replace(',', '.');
+        const normalizedUserAnswer = normalizeAnswer(userAnswer);
+        const normalizedCorrectAnswer = normalizeAnswer(q.correctAnswers[0]);
+        logger.info(`Comparing input answer for question ${index + 1}`, {
+          userAnswer: normalizedUserAnswer,
+          correctAnswer: normalizedCorrectAnswer
+        });
         const isCorrect = normalizedUserAnswer === normalizedCorrectAnswer;
         if (isCorrect) {
           questionScore = q.points;
         }
       } else if (q.type === 'ordering' && userAnswer && Array.isArray(userAnswer)) {
-        const userAnswers = userAnswer.map(val => String(val).trim().toLowerCase());
-        const correctAnswers = q.correctAnswers.map(val => String(val).trim().toLowerCase());
+        const userAnswers = userAnswer.map(val => normalizeAnswer(val));
+        const correctAnswers = q.correctAnswers.map(val => normalizeAnswer(val));
         const isCorrect = userAnswers.join(',') === correctAnswers.join(',');
         if (isCorrect) {
           questionScore = q.points;
         }
       } else if (q.type === 'matching' && userAnswer && Array.isArray(userAnswer)) {
-        const userPairs = userAnswer.map(pair => [String(pair[0]).trim().toLowerCase(), String(pair[1]).trim().toLowerCase()]);
-        const correctPairs = q.correctPairs.map(pair => [String(pair[0]).trim().toLowerCase(), String(pair[1]).trim().toLowerCase()]);
+        const userPairs = userAnswer.map(pair => [normalizeAnswer(pair[0]), normalizeAnswer(pair[1])]);
+        const correctPairs = q.correctPairs.map(pair => [normalizeAnswer(pair[0]), normalizeAnswer(pair[1])]);
         const isCorrect = userPairs.length === correctPairs.length &&
           userPairs.every(userPair => correctPairs.some(correctPair => userPair[0] === correctPair[0] && userPair[1] === correctPair[1]));
         if (isCorrect) {
           questionScore = q.points;
         }
       } else if (q.type === 'fillblank' && userAnswer && Array.isArray(userAnswer)) {
-        const userAnswers = userAnswer.map(val => String(val).trim().toLowerCase().replace(/\s+/g, '').replace(',', '.'));
-        const correctAnswers = q.correctAnswers.map(val => String(val).trim().toLowerCase().replace(/\s+/g, '').replace(',', '.'));
+        const userAnswers = userAnswer.map(val => normalizeAnswer(val));
+        const correctAnswers = q.correctAnswers.map(val => normalizeAnswer(val));
         logger.info(`Fillblank question ${index + 1}`, { userAnswers, correctAnswers });
         const isCorrect = userAnswers.length === correctAnswers.length &&
           userAnswers.every((answer, idx) => answer === correctAnswers[idx]);
@@ -1654,8 +1671,8 @@ app.get('/result', checkAuth, async (req, res) => {
           questionScore = q.points;
         }
       } else if (q.type === 'singlechoice' && userAnswer && Array.isArray(userAnswer)) {
-        const userAnswers = userAnswer.map(val => String(val).trim().toLowerCase());
-        const correctAnswer = String(q.correctAnswer).trim().toLowerCase();
+        const userAnswers = userAnswer.map(val => normalizeAnswer(val));
+        const correctAnswer = normalizeAnswer(q.correctAnswer);
         logger.info(`Single choice question ${index + 1}`, { userAnswers, correctAnswer });
         const isCorrect = userAnswers.length === 1 && userAnswers[0] === correctAnswer;
         if (isCorrect) {
