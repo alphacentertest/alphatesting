@@ -579,6 +579,7 @@ app.get('/', (req, res) => {
           input[type="text"], input[type="password"] { padding: 10px; font-size: 18px; width: 200px; margin-bottom: 10px; }
           button { padding: 10px 20px; font-size: 18px; cursor: pointer; border: none; border-radius: 5px; background-color: #4CAF50; color: white; }
           button:hover { background-color: #45a049; }
+          button:disabled { background-color: #cccccc; cursor: not-allowed; }
           .error { color: red; margin-top: 10px; }
           .checkbox-container { margin-bottom: 10px; }
           .checkbox-container input[type="checkbox"] { vertical-align: middle; margin: 0 5px 0 0; }
@@ -602,7 +603,7 @@ app.get('/', (req, res) => {
             <input type="checkbox" id="show-password" onclick="togglePassword()">
             <label for="show-password">Показати пароль</label>
           </div>
-          <button type="submit">Увійти</button>
+          <button type="submit" id="login-button">Увійти</button>
         </form>
         <div id="error-message" class="error"></div>
         <script>
@@ -611,6 +612,11 @@ app.get('/', (req, res) => {
             const username = document.getElementById('username').value;
             const password = document.getElementById('password').value;
             const errorMessage = document.getElementById('error-message');
+            const loginButton = document.getElementById('login-button');
+
+            // Показуємо лоадер
+            loginButton.disabled = true;
+            loginButton.textContent = 'Завантаження...';
 
             const formData = new URLSearchParams();
             formData.append('username', username);
@@ -624,19 +630,29 @@ app.get('/', (req, res) => {
                 body: formData
               });
 
-              if (!response.ok) {
-                throw new Error('HTTP error! status: ' + response.status);
-              }
-
               const result = await response.json();
+
               if (result.success) {
                 window.location.href = result.redirect + '?nocache=' + Date.now();
               } else {
-                errorMessage.textContent = result.message || 'Помилка входу';
+                // Деталізована обробка помилок за статус-кодом
+                if (response.status === 429) {
+                  errorMessage.textContent = result.message || 'Перевищено ліміт спроб входу. Спробуйте знову завтра.';
+                } else if (response.status === 400) {
+                  errorMessage.textContent = result.message || 'Некоректні дані. Перевірте логін та пароль.';
+                } else if (response.status === 401) {
+                  errorMessage.textContent = result.message || 'Невірний логін або пароль.';
+                } else {
+                  errorMessage.textContent = result.message || 'Помилка входу.';
+                }
               }
             } catch (error) {
               console.error('Error during login:', error);
               errorMessage.textContent = 'Не вдалося підключитися до сервера. Перевірте ваше з’єднання з Інтернетом.';
+            } finally {
+              // Прибираємо лоадер
+              loginButton.disabled = false;
+              loginButton.textContent = 'Увійти';
             }
           });
 
