@@ -426,69 +426,6 @@ const checkLoginAttempts = async (ipAddress, reset = false) => {
   );
 };
 
-// Маршрут /login
-app.post('/login', [
-  body('username')
-    .isLength({ min: 3, max: 50 }).withMessage('Логін має бути від 3 до 50 символів')
-    .matches(/^[a-zA-Z0-9а-яА-Я]+$/).withMessage('Логін може містити лише літери та цифри'),
-  body('password')
-    .isLength({ min: 6, max: 100 }).withMessage('Пароль має бути від 6 до 100 символів')
-], async (req, res) => {
-  const startTime = Date.now();
-  try {
-    const ipAddress = req.headers['x-forwarded-for'] || req.socket.remoteAddress;
-    await checkLoginAttempts(ipAddress);
-
-    const errors = validationResult(req);
-    if (!errors.isEmpty()) {
-      return res.status(400).json({ success: false, message: errors.array()[0].msg });
-    }
-
-    const { username, password } = req.body;
-    console.log('Received login data:', { username, password });
-
-    if (!username || !password) {
-      console.log('Username or password not provided');
-      return res.status(400).json({ success: false, message: 'Логін або пароль не вказано' });
-    }
-
-    const foundUser = userCache.find(user => user.username === username);
-    if (!foundUser) {
-      console.log('User not found:', username);
-      return res.status(401).json({ success: false, message: 'Невірний логін або пароль' });
-    }
-
-    const passwordMatch = await bcrypt.compare(password, foundUser.password);
-    if (!passwordMatch) {
-      console.log('Invalid password for user:', username);
-      return res.status(401).json({ success: false, message: 'Невірний логін або пароль' });
-    }
-
-    // Сбрасываем попытки входа после успешной авторизации
-    await checkLoginAttempts(ipAddress, true);
-
-    const token = jwt.sign(
-      { username: foundUser.username },
-      process.env.JWT_SECRET || 'your-secret-key',
-      { expiresIn: '24h' }
-    );
-
-    await logActivity(foundUser.username, 'увійшов на сайт', ipAddress);
-
-    if (foundUser.username === 'admin') {
-      res.json({ success: true, token, redirect: '/admin' });
-    } else {
-      res.json({ success: true, token, redirect: '/select-test' });
-    }
-  } catch (error) {
-    console.error('Ошибка в /login:', error.message, error.stack);
-    res.status(error.message.includes('Перевищено ліміт') ? 429 : 500).json({ success: false, message: error.message || 'Помилка сервера' });
-  } finally {
-    const endTime = Date.now();
-    console.log(`Route /login executed in ${endTime - startTime} ms`);
-  }
-});
-
 // Функция для логирования активности
 const logActivity = async (user, action, ipAddress, additionalInfo = {}) => {
   try {
@@ -595,7 +532,6 @@ app.get('/', (req, res) => {
 
               const result = await response.json();
               if (result.success) {
-                localStorage.setItem('token', result.token);
                 window.location.href = result.redirect + '?nocache=' + Date.now();
               } else {
                 errorMessage.textContent = result.message || 'Помилка входу';
@@ -617,7 +553,6 @@ app.get('/', (req, res) => {
   `);
 });
 
-// Маршрут /login
 app.post('/login', [
   body('username')
     .isLength({ min: 3, max: 50 }).withMessage('Логін має бути від 3 до 50 символів')
@@ -655,7 +590,6 @@ app.post('/login', [
       return res.status(401).json({ success: false, message: 'Невірний логін або пароль' });
     }
 
-    // Сбрасываем попытки входа после успешной авторизации
     await checkLoginAttempts(ipAddress, true);
 
     const token = jwt.sign(
@@ -664,12 +598,20 @@ app.post('/login', [
       { expiresIn: '24h' }
     );
 
+    // Устанавливаем токен в куки
+    res.cookie('token', token, {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === 'production' ? true : false,
+      sameSite: process.env.NODE_ENV === 'production' ? 'none' : 'lax',
+      maxAge: 24 * 60 * 60 * 1000 // 24 часа
+    });
+
     await logActivity(foundUser.username, 'увійшов на сайт', ipAddress);
 
     if (foundUser.username === 'admin') {
-      res.json({ success: true, token, redirect: '/admin' });
+      res.json({ success: true, redirect: '/admin' });
     } else {
-      res.json({ success: true, token, redirect: '/select-test' });
+      res.json({ success: true, redirect: '/select-test' });
     }
   } catch (error) {
     console.error('Ошибка в /login:', error.message, error.stack);
@@ -745,13 +687,9 @@ app.get('/select-test', checkAuth, (req, res) => {
               formData.append('_csrf', '${req.csrfToken()}');
               await fetch('/logout', {
                 method: 'POST',
-                headers: { 
-                  'Content-Type': 'application/x-www-form-urlencoded',
-                  'Authorization': 'Bearer ' + localStorage.getItem('token')
-                },
+                headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
                 body: formData
               });
-              localStorage.removeItem('token');
               window.location.href = '/';
             }
           </script>
