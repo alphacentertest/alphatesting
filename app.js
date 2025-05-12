@@ -2541,10 +2541,10 @@ app.get('/admin/add-question', checkAuth, checkAdmin, (req, res) => {
               <option value="matching">Matching</option>
               <option value="fillblank">Fill in the Blank</option>
             </select>
-            <label for="options">Варіанти відповідей (через кому):</label>
-            <textarea id="options" name="options" placeholder="Введіть варіанти через кому"></textarea>
-            <label for="correctAnswers">Правильні відповіді (через кому):</label>
-            <textarea id="correctAnswers" name="correctAnswers" required placeholder="Введіть правильні відповіді через кому"></textarea>
+            <label for="options">Варіанти відповідей (через крапку з комою):</label>
+            <textarea id="options" name="options" placeholder="Введіть варіанти через крапку з комою"></textarea>
+            <label for="correctAnswers">Правильні відповіді (через крапку з комою):</label>
+            <textarea id="correctAnswers" name="correctAnswers" required placeholder="Введіть правильні відповіді через крапку з комою"></textarea>
             <label for="points">Бали за питання:</label>
             <input type="number" id="points" name="points" value="1" min="1" required>
             <label for="variant">Варіант (опціонально):</label>
@@ -2619,8 +2619,8 @@ app.post('/admin/add-question', checkAuth, checkAdmin, [
       picture: picture || '',
       text,
       type: type.toLowerCase(),
-      options: options ? options.split(',').map(opt => opt.trim()).filter(Boolean) : [],
-      correctAnswers: correctAnswers.split(',').map(ans => ans.trim()).filter(Boolean),
+      options: options ? options.split(';').map(opt => opt.trim()).filter(Boolean) : [],
+      correctAnswers: correctAnswers.split(';').map(ans => ans.trim()).filter(Boolean),
       points: Number(points),
       variant: variant || ''
     };
@@ -2728,10 +2728,10 @@ app.get('/admin/edit-question', checkAuth, checkAdmin, async (req, res) => {
               <option value="matching" ${question.type === 'matching' ? 'selected' : ''}>Matching</option>
               <option value="fillblank" ${question.type === 'fillblank' ? 'selected' : ''}>Fill in the Blank</option>
             </select>
-            <label for="options">Варіанти відповідей (через кому):</label>
-            <textarea id="options" name="options">${question.options.join(', ')}</textarea>
-            <label for="correctAnswers">Правильні відповіді (через кому):</label>
-            <textarea id="correctAnswers" name="correctAnswers" required>${question.correctAnswers.join(', ')}</textarea>
+            <label for="options">Варіанти відповідей (через крапку з комою):</label>
+            <textarea id="options" name="options">${question.options.join('; ')}</textarea>
+            <label for="correctAnswers">Правильні відповіді (через крапку з комою):</label>
+            <textarea id="correctAnswers" name="correctAnswers" required>${question.correctAnswers.join('; ')}</textarea>
             <label for="points">Бали за питання:</label>
             <input type="number" id="points" name="points" value="${question.points}" min="1" required>
             <label for="variant">Варіант:</label>
@@ -2806,8 +2806,8 @@ app.post('/admin/edit-question', checkAuth, checkAdmin, [
       picture: picture || '',
       text,
       type: type.toLowerCase(),
-      options: options ? options.split(',').map(opt => opt.trim()).filter(Boolean) : [],
-      correctAnswers: correctAnswers.split(',').map(ans => ans.trim()).filter(Boolean),
+      options: options ? options.split(';').map(opt => opt.trim()).filter(Boolean) : [],
+      correctAnswers: correctAnswers.split(';').map(ans => ans.trim()).filter(Boolean),
       points: Number(points),
       variant: variant || ''
     };
@@ -3007,20 +3007,39 @@ app.post('/admin/import-questions', checkAuth, checkAdmin, upload.single('file')
   const startTime = Date.now();
   try {
     if (!req.file) {
-      console.log('Файл не завантажено: req.file отсутствует');
+      logger.warn('Файл не завантажено: req.file отсутствует');
       return res.status(400).send('Файл не завантажено');
     }
+
+    // Перевірка розміру файлу (максимум 5MB)
+    const MAX_FILE_SIZE = 5 * 1024 * 1024; // 5MB
+    if (req.file.size > MAX_FILE_SIZE) {
+      logger.warn(`Файл занадто великий: ${req.file.size} байтів, максимум ${MAX_FILE_SIZE} байтів`);
+      fs.unlinkSync(req.file.path);
+      return res.status(400).send('Файл занадто великий. Максимальний розмір — 5MB.');
+    }
+
     const filePath = req.file.path;
     const testNumber = req.file.originalname.match(/^questions(\d+)\.xlsx$/)?.[1];
     if (!testNumber) {
-      console.log(`Неверное имя файла: ${req.file.originalname}. Ожидается формат questionsX.xlsx`);
+      logger.warn(`Неверное имя файла: ${req.file.originalname}. Ожидается формат questionsX.xlsx`);
       fs.unlinkSync(filePath);
       return res.status(400).send('Файл повинен мати назву у форматі questionsX.xlsx, де X — номер тесту');
     }
-    console.log(`Загружаем файл ${req.file.originalname} для теста ${testNumber}`);
-    const importedCount = await importQuestionsToMongoDB(filePath, testNumber);
+
+    logger.info(`Загружаем файл ${req.file.originalname} для теста ${testNumber}`);
+
+    // Таймаут для обробки файлу (20 секунд)
+    const timeoutPromise = new Promise((_, reject) => {
+      setTimeout(() => reject(new Error('Перевищено час обробки файлу (20 секунд). Спробуйте завантажити менший файл.')), 20000);
+    });
+
+    const importPromise = importQuestionsToMongoDB(filePath, testNumber);
+
+    const importedCount = await Promise.race([importPromise, timeoutPromise]);
+
     fs.unlinkSync(filePath);
-    console.log(`Успешно импортировано ${importedCount} вопросов для теста ${testNumber}`);
+    logger.info(`Успешно импортировано ${importedCount} вопросов для теста ${testNumber}`);
     res.send(`
       <!DOCTYPE html>
       <html lang="uk">
@@ -3035,14 +3054,14 @@ app.post('/admin/import-questions', checkAuth, checkAdmin, upload.single('file')
       </html>
     `);
   } catch (error) {
-    console.error('Error importing questions:', error.message, error.stack);
+    logger.error('Error importing questions', { message: error.message, stack: error.stack });
     if (req.file && fs.existsSync(req.file.path)) {
       fs.unlinkSync(req.file.path);
     }
     res.status(500).send(`Помилка при імпорті питань: ${error.message}`);
   } finally {
     const endTime = Date.now();
-    console.log(`Route /admin/import-questions (POST) executed in ${endTime - startTime} ms`);
+    logger.info('Route /admin/import-questions (POST) executed', { duration: `${endTime - startTime} ms` });
   }
 });
 
@@ -3617,12 +3636,12 @@ app.get('/download-template', checkAuth, checkAdmin, async (req, res) => {
 
     sheet.addRow({
       picture: 'Picture 1',
-      text: 'Пример вопроса',
-      option1: 'Вариант 1',
-      option2: 'Вариант 2',
-      option3: 'Вариант 3',
-      option4: 'Вариант 4',
-      correct1: 'Вариант 1',
+      text: 'Приклад питання',
+      option1: 'Варіант 1',
+      option2: 'Варіант 2',
+      option3: 'Варіант 3',
+      option4: 'Варіант 4',
+      correct1: 'Варіант 1; Варіант 2',
       type: 'multiple',
       points: 1,
       variant: 'Variant 1'
