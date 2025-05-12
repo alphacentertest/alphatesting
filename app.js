@@ -388,7 +388,8 @@ const initializeServer = async () => {
 const MAX_LOGIN_ATTEMPTS = 30;
 const ONE_DAY_MS = 24 * 60 * 60 * 1000;
 
-const checkLoginAttempts = async (ipAddress) => {
+// Функция для проверки и сброса попыток входа
+const checkLoginAttempts = async (ipAddress, reset = false) => {
   const now = Date.now();
   const startOfDay = new Date(now).setHours(0, 0, 0, 0);
   const endOfDay = startOfDay + ONE_DAY_MS;
@@ -397,6 +398,16 @@ const checkLoginAttempts = async (ipAddress) => {
     ipAddress,
     lastAttempt: { $gte: startOfDay, $lt: endOfDay }
   });
+
+  if (reset) {
+    // Сбрасываем попытки
+    await db.collection('login_attempts').updateOne(
+      { ipAddress, lastAttempt: { $gte: startOfDay, $lt: endOfDay } },
+      { $set: { count: 0, lastAttempt: now } },
+      { upsert: true }
+    );
+    return;
+  }
 
   if (!attempts) {
     await db.collection('login_attempts').insertOne({
@@ -414,6 +425,69 @@ const checkLoginAttempts = async (ipAddress) => {
     { upsert: true }
   );
 };
+
+// Маршрут /login
+app.post('/login', [
+  body('username')
+    .isLength({ min: 3, max: 50 }).withMessage('Логін має бути від 3 до 50 символів')
+    .matches(/^[a-zA-Z0-9а-яА-Я]+$/).withMessage('Логін може містити лише літери та цифри'),
+  body('password')
+    .isLength({ min: 6, max: 100 }).withMessage('Пароль має бути від 6 до 100 символів')
+], async (req, res) => {
+  const startTime = Date.now();
+  try {
+    const ipAddress = req.headers['x-forwarded-for'] || req.socket.remoteAddress;
+    await checkLoginAttempts(ipAddress);
+
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({ success: false, message: errors.array()[0].msg });
+    }
+
+    const { username, password } = req.body;
+    console.log('Received login data:', { username, password });
+
+    if (!username || !password) {
+      console.log('Username or password not provided');
+      return res.status(400).json({ success: false, message: 'Логін або пароль не вказано' });
+    }
+
+    const foundUser = userCache.find(user => user.username === username);
+    if (!foundUser) {
+      console.log('User not found:', username);
+      return res.status(401).json({ success: false, message: 'Невірний логін або пароль' });
+    }
+
+    const passwordMatch = await bcrypt.compare(password, foundUser.password);
+    if (!passwordMatch) {
+      console.log('Invalid password for user:', username);
+      return res.status(401).json({ success: false, message: 'Невірний логін або пароль' });
+    }
+
+    // Сбрасываем попытки входа после успешной авторизации
+    await checkLoginAttempts(ipAddress, true);
+
+    const token = jwt.sign(
+      { username: foundUser.username },
+      process.env.JWT_SECRET || 'your-secret-key',
+      { expiresIn: '24h' }
+    );
+
+    await logActivity(foundUser.username, 'увійшов на сайт', ipAddress);
+
+    if (foundUser.username === 'admin') {
+      res.json({ success: true, token, redirect: '/admin' });
+    } else {
+      res.json({ success: true, token, redirect: '/select-test' });
+    }
+  } catch (error) {
+    console.error('Ошибка в /login:', error.message, error.stack);
+    res.status(error.message.includes('Перевищено ліміт') ? 429 : 500).json({ success: false, message: error.message || 'Помилка сервера' });
+  } finally {
+    const endTime = Date.now();
+    console.log(`Route /login executed in ${endTime - startTime} ms`);
+  }
+});
 
 // Функция для логирования активности
 const logActivity = async (user, action, ipAddress, additionalInfo = {}) => {
@@ -543,6 +617,7 @@ app.get('/', (req, res) => {
   `);
 });
 
+// Маршрут /login
 app.post('/login', [
   body('username')
     .isLength({ min: 3, max: 50 }).withMessage('Логін має бути від 3 до 50 символів')
@@ -580,10 +655,8 @@ app.post('/login', [
       return res.status(401).json({ success: false, message: 'Невірний логін або пароль' });
     }
 
-    await db.collection('login_attempts').updateOne(
-      { ipAddress, lastAttempt: { $gte: new Date(startOfDay), $lt: new Date(endOfDay) } },
-      { $set: { count: 0, lastAttempt: Date.now() } }
-    );
+    // Сбрасываем попытки входа после успешной авторизации
+    await checkLoginAttempts(ipAddress, true);
 
     const token = jwt.sign(
       { username: foundUser.username },
