@@ -84,50 +84,49 @@ const client = new MongoClient(MONGODB_URI, {
 });
 let db;
 
+// Новий клас CacheManager із сортуванням за полем order
+class CacheManager {
+  static cache = {};
+
+  static async getOrFetch(key, testNumber, fetchFn) {
+    const cacheKey = `${key}:${testNumber}`;
+    if (this.cache[cacheKey]) {
+      logger.info(`Cache hit for ${cacheKey}`);
+      return this.cache[cacheKey];
+    }
+
+    logger.info(`Cache miss for ${cacheKey}, fetching from DB`);
+    const startTime = Date.now();
+    const data = await fetchFn();
+    this.cache[cacheKey] = data;
+    logger.info(`Refreshed ${key} cache for test ${testNumber} with ${data.length} items in ${Date.now() - startTime} ms`);
+    return data;
+  }
+
+  static async invalidateCache(key, testNumber) {
+    const cacheKey = `${key}:${testNumber}`;
+    delete this.cache[cacheKey];
+    logger.info(`Invalidated cache for ${cacheKey}`);
+  }
+
+  static async getQuestions(testNumber) {
+    return await this.getOrFetch('questions', testNumber, async () => {
+      const questions = await db.collection('questions').find({ testNumber }).sort({ order: 1 }).toArray();
+      return questions;
+    });
+  }
+
+  static async getAllQuestions() {
+    return await this.getOrFetch('allQuestions', 'all', async () => {
+      const questions = await db.collection('questions').find({}).sort({ order: 1 }).toArray();
+      return questions;
+    });
+  }
+}
+
 // Кэш пользователей и вопросов
 let userCache = [];
 const questionsCache = {};
-
-// Централизованная функция управления кэшем с событиями
-const CacheManager = {
-  async refreshUserCache() {
-    try {
-      const startTime = Date.now();
-      userCache = await db.collection('users').find({}).toArray();
-      const endTime = Date.now();
-      logger.info(`Refreshed user cache with ${userCache.length} users in ${endTime - startTime} ms`);
-    } catch (error) {
-      logger.error('Error refreshing user cache', { message: error.message, stack: error.stack });
-    }
-  },
-  async refreshQuestionsCache(testNumber) {
-    try {
-      const startTime = Date.now();
-      if (testNumber) {
-        questionsCache[testNumber] = await db.collection('questions').find({ testNumber: testNumber.toString() }).toArray();
-        const endTime = Date.now();
-        logger.info(`Refreshed questions cache for test ${testNumber} with ${questionsCache[testNumber].length} questions in ${endTime - startTime} ms`);
-      } else {
-        const allTests = Object.keys(testNames);
-        for (const testNum of allTests) {
-          questionsCache[testNum] = await db.collection('questions').find({ testNumber: testNum.toString() }).toArray();
-          logger.info(`Refreshed questions cache for test ${testNum} with ${questionsCache[testNum].length} questions`);
-        }
-        const endTime = Date.now();
-        logger.info(`Refreshed questions cache for all tests in ${endTime - startTime} ms`);
-      }
-    } catch (error) {
-      logger.error(`Error refreshing questions cache for test ${testNumber || 'all'}`, { message: error.message, stack: error.stack });
-    }
-  },
-  async invalidateCache(type, testNumber) {
-    if (type === 'users') {
-      await this.refreshUserCache();
-    } else if (type === 'questions') {
-      await this.refreshQuestionsCache(testNumber);
-    }
-  }
-};
 
 const connectToMongoDB = async (attempt = 1, maxAttempts = 3) => {
   try {
@@ -226,8 +225,6 @@ app.use((err, req, res, next) => {
 });
 
 // Middleware для обработки ошибок CSRF
-app.use(csurf({ cookie: true }));
-
 app.use((err, req, res, next) => {
   if (err.code === 'EBADCSRFTOKEN') {
     logger.error('CSRF token validation failed', {
@@ -266,7 +263,7 @@ const importUsersToMongoDB = async (filePath) => {
     logger.info('Cleared all users before import');
     await db.collection('users').insertMany(users);
     logger.info(`Imported ${users.length} users to MongoDB with hashed passwords`);
-    await CacheManager.invalidateCache('users');
+    await CacheManager.invalidateCache('users', null);
     return users.length;
   } catch (error) {
     logger.error('Error importing users to MongoDB', { message: error.message, stack: error.stack });
@@ -315,30 +312,31 @@ const importQuestionsToMongoDB = async (filePath, testNumber) => {
             options = ["Правда", "Неправда"];
           }
 
+          // Нормалізація назви зображення для originalPicture
+          const normalizedPicture = picture ? picture.replace(/\.png$/i, '').replace(/^picture/i, 'Picture').replace(/\s+/g, '') : null;
+
           let questionData = {
             testNumber,
             picture: null,
-            originalPicture: picture || null,
+            originalPicture: normalizedPicture, // Зберігаємо нормалізовану назву
             text: questionText,
             options,
             correctAnswers,
             type,
             points,
-            variant
+            variant,
+            order: rowNumber - 1 // Поле order для збереження порядку
           };
 
           if (picture) {
             logger.info(`Processing picture field: ${picture}`, { testNumber, rowNumber });
-            const normalizedPicture = picture.replace(/\.png$/i, '').replace(/^picture/i, 'Picture');
-            logger.info(`Normalized picture name: ${normalizedPicture}`, { testNumber, rowNumber });
-            const pictureMatch = normalizedPicture.match(/^Picture (\d+)(?:\.(png|jpg|jpeg|gif))?$/i);
+            const pictureMatch = normalizedPicture.match(/^Picture(\d+)$/i);
             if (pictureMatch) {
               const pictureNumber = pictureMatch[1];
-              const extension = pictureMatch[2] ? `.${pictureMatch[2].toLowerCase()}` : null;
               const pictureBaseName = `/images/Picture${pictureNumber}`;
               questionData.picture = pictureBaseName;
 
-              const extensions = extension ? [extension] : ['.png', '.jpg', '.jpeg', '.gif'];
+              const extensions = ['.png', '.jpg', '.jpeg', '.gif'];
               let found = false;
               const imageDir = path.join(__dirname, 'public', 'images');
               const filesInDir = fs.existsSync(imageDir) ? fs.readdirSync(imageDir) : [];
@@ -359,7 +357,7 @@ const importQuestionsToMongoDB = async (filePath, testNumber) => {
                 questionData.picture = null;
               }
             } else {
-              logger.warn(`Invalid picture format: ${picture}. Expected format: Picture X or Picture X.png`, { testNumber, rowNumber });
+              logger.warn(`Invalid picture format: ${picture}. Expected format: PictureX or PictureX.png`, { testNumber, rowNumber });
             }
           }
 
@@ -418,7 +416,14 @@ const shuffleArray = (array) => {
 };
 
 const loadUsersToCache = async () => {
-  await CacheManager.refreshUserCache();
+  try {
+    const startTime = Date.now();
+    userCache = await db.collection('users').find({}).toArray();
+    const endTime = Date.now();
+    logger.info(`Refreshed user cache with ${userCache.length} users in ${endTime - startTime} ms`);
+  } catch (error) {
+    logger.error('Error refreshing user cache', { message: error.message, stack: error.stack });
+  }
 };
 
 const loadQuestions = async (testNumber) => {
@@ -430,7 +435,7 @@ const loadQuestions = async (testNumber) => {
       return questionsCache[testNumber];
     }
 
-    const questions = await db.collection('questions').find({ testNumber: testNumber.toString() }).toArray();
+    const questions = await db.collection('questions').find({ testNumber: testNumber.toString() }).sort({ order: 1 }).toArray();
     const endTime = Date.now();
     if (questions.length === 0) {
       throw new Error(`No questions found in MongoDB for test ${testNumber}`);
@@ -471,7 +476,7 @@ const updateUserPasswords = async () => {
   }
   const endTime = Date.now();
   logger.info('User passwords updated with hashes', { duration: `${endTime - startTime} ms` });
-  await CacheManager.invalidateCache('users');
+  await CacheManager.invalidateCache('users', null);
 };
 
 const initializeServer = async () => {
@@ -503,9 +508,9 @@ const initializeServer = async () => {
     }
 
     await updateUserPasswords();
-    await CacheManager.refreshUserCache();
+    await loadUsersToCache();
     await loadTestsFromMongoDB();
-    await CacheManager.refreshQuestionsCache();
+    await CacheManager.invalidateCache('questions', null);
     isInitialized = true;
     initializationError = null;
   } catch (error) {
@@ -2146,7 +2151,7 @@ app.get('/admin/users', checkAuth, checkAdmin, async (req, res) => {
     let errorMessage = '';
     try {
       users = await db.collection('users').find({}).toArray();
-      await CacheManager.invalidateCache('users');
+      await CacheManager.invalidateCache('users', null);
     } catch (error) {
       logger.error('Error fetching users from MongoDB', { message: error.message, stack: error.stack });
       errorMessage = `Помилка MongoDB: ${error.message}`;
@@ -2324,7 +2329,7 @@ app.post('/admin/add-user', checkAuth, checkAdmin, [
     const hashedPassword = await bcrypt.hash(password, saltRounds);
     const newUser = { username, password: hashedPassword };
     await db.collection('users').insertOne(newUser);
-    await CacheManager.invalidateCache('users');
+    await CacheManager.invalidateCache('users', null);
     res.send(`
       <!DOCTYPE html>
       <html lang="uk">
@@ -2444,7 +2449,7 @@ app.post('/admin/edit-user', checkAuth, checkAdmin, [
       { username: oldUsername },
       { $set: updateData }
     );
-    await CacheManager.invalidateCache('users');
+    await CacheManager.invalidateCache('users', null);
     res.send(`
       <!DOCTYPE html>
       <html lang="uk">
@@ -2472,7 +2477,7 @@ app.post('/admin/delete-user', checkAuth, checkAdmin, async (req, res) => {
   try {
     const { username } = req.body;
     await db.collection('users').deleteOne({ username });
-    await CacheManager.invalidateCache('users');
+    await CacheManager.invalidateCache('users', null);
     res.json({ success: true });
   } catch (error) {
     logger.error('Error deleting user', { message: error.message, stack: error.stack });
@@ -2486,11 +2491,25 @@ app.post('/admin/delete-user', checkAuth, checkAdmin, async (req, res) => {
 app.get('/admin/questions', checkAuth, checkAdmin, async (req, res) => {
   const startTime = Date.now();
   try {
+    const page = parseInt(req.query.page) || 1;
+    const limit = 10;
+    const skip = (page - 1) * limit;
+
     let questions = [];
     let errorMessage = '';
+    let totalQuestions = 0;
+    let totalPages = 0;
+
     try {
-      questions = await db.collection('questions').find({}).sort({ testNumber: 1 }).toArray();
-      await CacheManager.invalidateCache('questions');
+      totalQuestions = await db.collection('questions').countDocuments();
+      totalPages = Math.ceil(totalQuestions / limit);
+      questions = await db.collection('questions')
+        .find({})
+        .sort({ order: 1 }) // Сортування за полем order
+        .skip(skip)
+        .limit(limit)
+        .toArray();
+      await CacheManager.invalidateCache('questions', null);
     } catch (error) {
       logger.error('Error fetching questions from MongoDB', { message: error.message, stack: error.stack });
       errorMessage = `Помилка MongoDB: ${error.message}`;
@@ -2512,6 +2531,9 @@ app.get('/admin/questions', checkAuth, checkAdmin, async (req, res) => {
             .action-btn.edit { background-color: #4CAF50; color: white; }
             .action-btn.delete { background-color: #ff4d4d; color: white; }
             .nav-btn { background-color: #007bff; color: white; }
+            .pagination { margin-top: 20px; }
+            .pagination a { margin: 0 5px; padding: 5px 10px; background-color: #007bff; color: white; text-decoration: none; border-radius: 5px; }
+            .pagination a:hover { background-color: #0056b3; }
           </style>
         </head>
         <body>
@@ -2552,6 +2574,11 @@ app.get('/admin/questions', checkAuth, checkAdmin, async (req, res) => {
     }
     adminHtml += `
           </table>
+          <div class="pagination">
+            ${page > 1 ? `<a href="/admin/questions?page=${page - 1}">Попередня</a>` : ''}
+            <span>Сторінка ${page} з ${totalPages}</span>
+            ${page < totalPages ? `<a href="/admin/questions?page=${page + 1}">Наступна</a>` : ''}
+          </div>
           <script>
             async function deleteQuestion(id) {
               if (confirm('Ви впевнені, що хочете видалити це питання?')) {
@@ -2705,16 +2732,29 @@ app.post('/admin/add-question', checkAuth, checkAdmin, [
 
     const { testNumber, text, type, options, correctAnswers, points, variant, picture } = req.body;
 
+    // Нормалізація назви зображення для originalPicture
+    const normalizedPicture = picture ? picture.replace(/\.png$/i, '').replace(/^picture/i, 'Picture').replace(/\s+/g, '') : null;
+
     let questionData = {
       testNumber,
-      picture: picture ? `/images/${picture.trim()}` : null,
+      picture: picture ? `/images/${normalizedPicture}` : null,
+      originalPicture: normalizedPicture, // Зберігаємо нормалізовану назву
       text,
       type: type.toLowerCase(),
       options: options ? options.split(';').map(opt => opt.trim()).filter(Boolean) : [],
       correctAnswers: correctAnswers.split(';').map(ans => ans.trim()).filter(Boolean),
       points: Number(points),
-      variant: variant || ''
+      variant: variant || '',
+      order: await db.collection('questions').countDocuments({ testNumber }) // Порядок на основі кількості існуючих питань
     };
+
+    // Перевірка наявності зображення
+    if (questionData.picture) {
+      const imagePath = path.join(__dirname, 'public', questionData.picture);
+      if (!fs.existsSync(imagePath)) {
+        questionData.picture = null; // Якщо зображення не знайдено, встановлюємо picture в null
+      }
+    }
 
     if (type === 'truefalse') {
       questionData.options = ["Правда", "Неправда"];
@@ -2747,7 +2787,7 @@ app.post('/admin/add-question', checkAuth, checkAdmin, [
       questionData.correctAnswer = questionData.correctAnswers[0];
     }
 
-    const result = await db.collection('questions').insertOne(questionData);
+    await db.collection('questions').insertOne(questionData);
     await CacheManager.invalidateCache('questions', testNumber);
     res.send(`
       <!DOCTYPE html>
@@ -2780,8 +2820,9 @@ app.get('/admin/edit-question', checkAuth, checkAdmin, async (req, res) => {
       return res.status(404).send('Питання не знайдено');
     }
     const pictureName = question.picture ? question.picture.replace('/images/', '') : '';
+    const normalizedOriginalPicture = question.originalPicture ? question.originalPicture.replace(/\.png$/i, '').replace(/^picture/i, 'Picture').replace(/\s+/g, '') : '';
     const warningMessage = question.picture === null && question.originalPicture && question.originalPicture.trim() !== ''
-      ? `Попередження: зображення "${question.originalPicture}" не було знайдено під час імпорту. Перевірте, чи файл зображення є в папці public/images.`
+      ? `Попередження: зображення "${normalizedOriginalPicture}" не було знайдено під час імпорту. Перевірте, чи файл зображення є в папці public/images.`
       : '';
     const html = `
       <!DOCTYPE html>
@@ -2918,9 +2959,13 @@ app.post('/admin/edit-question', checkAuth, checkAdmin, [
 
     const { id, testNumber, text, type, options, correctAnswers, points, variant, picture } = req.body;
 
+    // Нормалізація назви зображення для originalPicture
+    const normalizedPicture = picture ? picture.replace(/\.png$/i, '').replace(/^picture/i, 'Picture').replace(/\s+/g, '') : null;
+
     let questionData = {
       testNumber,
-      picture: picture ? `/images/${picture.trim()}` : null,
+      picture: picture ? `/images/${normalizedPicture}` : null,
+      originalPicture: normalizedPicture, // Зберігаємо нормалізовану назву
       text,
       type: type.toLowerCase(),
       options: options ? options.split(';').map(opt => opt.trim()).filter(Boolean) : [],
@@ -2929,31 +2974,11 @@ app.post('/admin/edit-question', checkAuth, checkAdmin, [
       variant: variant || ''
     };
 
-    app.get('/migrate-questions', checkAuth, checkAdmin, async (req, res) => {
-      try {
-        const questions = await db.collection('questions').find({}).toArray();
-        for (const question of questions) {
-          if (!question.hasOwnProperty('originalPicture')) {
-            // Якщо поле originalPicture відсутнє, додаємо його
-            const originalPicture = question.picture ? question.picture.replace('/images/', '').replace(/\.(png|jpg|jpeg|gif)$/i, '') : null;
-            await db.collection('questions').updateOne(
-              { _id: question._id },
-              { $set: { originalPicture } }
-            );
-          }
-        }
-        res.send('Міграція завершена успішно');
-      } catch (error) {
-        logger.error('Error during questions migration', { message: error.message, stack: error.stack });
-        res.status(500).send('Помилка при міграції');
-      }
-    });
-
     // Перевірка наявності зображення
     if (questionData.picture) {
       const imagePath = path.join(__dirname, 'public', questionData.picture);
       if (!fs.existsSync(imagePath)) {
-        return res.status(400).send('Зображення за вказаним шляхом не знайдено. Перевірте назву файлу.');
+        questionData.picture = null; // Якщо зображення не знайдено, встановлюємо picture в null
       }
     }
 
@@ -2990,6 +3015,9 @@ app.post('/admin/edit-question', checkAuth, checkAdmin, [
 
     const oldQuestion = await db.collection('questions').findOne({ _id: new ObjectId(id) });
     const oldTestNumber = oldQuestion.testNumber;
+
+    // Зберігаємо існуючий order, щоб не змінювати порядок питання
+    questionData.order = oldQuestion.order;
 
     await db.collection('questions').updateOne(
       { _id: new ObjectId(id) },
@@ -3028,8 +3056,22 @@ app.post('/admin/delete-question', checkAuth, checkAdmin, async (req, res) => {
   try {
     const { id } = req.body;
     const question = await db.collection('questions').findOne({ _id: new ObjectId(id) });
+    if (!question) {
+      return res.status(404).json({ success: false, message: 'Питання не знайдено' });
+    }
+    const testNumber = question.testNumber;
+    const deletedOrder = question.order;
+
+    // Видаляємо питання
     await db.collection('questions').deleteOne({ _id: new ObjectId(id) });
-    await CacheManager.invalidateCache('questions', question.testNumber);
+
+    // Оновлюємо order для всіх наступних питань у цьому тесті
+    await db.collection('questions').updateMany(
+      { testNumber, order: { $gt: deletedOrder } },
+      { $inc: { order: -1 } }
+    );
+
+    await CacheManager.invalidateCache('questions', testNumber);
     res.json({ success: true });
   } catch (error) {
     logger.error('Error deleting question', { message: error.message, stack: error.stack });
@@ -3923,7 +3965,7 @@ app.get('/download-template', checkAuth, checkAdmin, async (req, res) => {
     ];
 
     sheet.addRow({
-      picture: 'Picture 1 (наприклад, Picture 1, Picture 2 тощо)',
+      picture: 'Picture1 (наприклад, Picture1, Picture2 тощо)',
       text: 'Приклад питання',
       option1: 'Варіант 1',
       option2: 'Варіант 2',
