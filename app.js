@@ -1132,22 +1132,30 @@ app.get('/test/question', checkAuth, (req, res) => {
             .option-box.dragging { opacity: 0.5; }
             #question-container { background-color: white; padding: 20px; border-radius: 8px; box-shadow: 0 0 10px rgba(0, 0, 0, 0.1); width: calc(100% - 40px); margin: 0 auto 20px auto; box-sizing: border-box; }
             #answers { margin-bottom: 20px; }
-            .matching-container { display: flex; justify-content: space-between; flex-wrap: wrap; }
-            .matching-column { width: 45%; display: flex; flex-direction: column; gap: 5px; }
+            .matching-container { display: flex; justify-content: space-between; flex-wrap: wrap; gap: 10px; }
+            .matching-column { 
+              width: 45%; 
+              display: flex; 
+              flex-direction: column; 
+              gap: 5px; 
+              box-sizing: border-box; 
+            }
             .matching-item { 
               border: 2px solid #ccc; 
               padding: 10px; 
-              margin: 5px 0; 
+              margin: 0; /* Видаляємо margin, щоб не створювати зайвих відступів */
               border-radius: 5px; 
               cursor: move; 
-              font-size: 16px; 
+              font-family: Arial, sans-serif; /* Уніфікуємо шрифт */
+              font-size: 16px; /* Уніфікуємо розмір шрифту */
+              line-height: 1.5; /* Уніфікуємо висоту рядка для однакового вигляду */
               min-height: 40px; /* Фіксована мінімальна висота для всіх полів */
               display: flex; 
               align-items: center; /* Вирівнювання тексту по вертикалі */
-              box-sizing: border-box; /* Включаємо padding і border у розміри */
-              overflow: hidden; /* Приховуємо надлишковий текст */
-              text-overflow: ellipsis; /* Додаємо три крапки для надлишкового тексту */
-              white-space: nowrap; /* Запобігаємо перенесенню тексту */
+              justify-content: flex-start; /* Вирівнювання тексту по горизонталі */
+              box-sizing: border-box; 
+              white-space: normal; /* Дозволяємо тексту переноситися */
+              overflow-wrap: break-word; /* Дозволяємо перенос слів */
             }
             .matching-item.matched { background-color: #90ee90; }
             .blank-input { width: 100px; margin: 0 5px; padding: 5px; border: 1px solid #ccc; border-radius: 4px; display: inline-block; }
@@ -1159,7 +1167,12 @@ app.get('/test/question', checkAuth, (req, res) => {
               .progress-circle { width: 20px; height: 20px; font-size: 10px; }
               .progress-line { width: 5px; }
               .progress-row { justify-content: center; gap: 2px; flex-wrap: wrap; }
-              .option-box, .matching-item { font-size: 18px; padding: 15px; min-height: 50px; /* Збільшена висота для мобільних пристроїв */ }
+              .option-box, .matching-item { 
+                font-size: 18px; 
+                padding: 10px; 
+                min-height: 50px; /* Збільшена висота для мобільних пристроїв */
+                line-height: 1.5; /* Уніфікуємо висоту рядка */
+              }
               button { font-size: 18px; padding: 15px; }
               #timer { font-size: 20px; }
               .question-box h2 { font-size: 20px; }
