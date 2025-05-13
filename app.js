@@ -317,7 +317,8 @@ const importQuestionsToMongoDB = async (filePath, testNumber) => {
 
           let questionData = {
             testNumber,
-            picture: null, // Спочатку встановлюємо null
+            picture: null,
+            originalPicture: picture || null, // Зберігаємо оригінальну назву зображення
             text: questionText,
             options,
             correctAnswers,
@@ -326,21 +327,21 @@ const importQuestionsToMongoDB = async (filePath, testNumber) => {
             variant
           };
 
-          // Обробка зображення
           if (picture) {
-            // Підтримуємо формат "Picture X" або "Picture X.extension"
-            const pictureMatch = picture.match(/^Picture (\d+)(?:\.(png|jpg|jpeg|gif))?$/i);
+            logger.info(`Processing picture field: ${picture}`, { testNumber, rowNumber });
+            const normalizedPicture = picture.replace(/\.png$/i, '').replace(/^picture/i, 'Picture');
+            const pictureMatch = normalizedPicture.match(/^Picture (\d+)(?:\.(png|jpg|jpeg|gif))?$/i);
             if (pictureMatch) {
               const pictureNumber = pictureMatch[1];
               const extension = pictureMatch[2] ? `.${pictureMatch[2].toLowerCase()}` : null;
               const pictureBaseName = `/images/Picture${pictureNumber}`;
               questionData.picture = pictureBaseName;
 
-              // Перевірка доступних розширень
               const extensions = extension ? [extension] : ['.png', '.jpg', '.jpeg', '.gif'];
               let found = false;
               for (const ext of extensions) {
                 const imagePath = path.join(__dirname, 'public', pictureBaseName + ext);
+                logger.info(`Checking image existence: ${imagePath}`);
                 if (fs.existsSync(imagePath)) {
                   questionData.picture = pictureBaseName + ext;
                   found = true;
@@ -2773,8 +2774,8 @@ app.get('/admin/edit-question', checkAuth, checkAdmin, async (req, res) => {
       return res.status(404).send('Питання не знайдено');
     }
     const pictureName = question.picture ? question.picture.replace('/images/', '') : '';
-    const warningMessage = question.picture === null && rowValues[0] && rowValues[0].trim() !== ''
-      ? 'Попередження: зображення не було знайдено під час імпорту. Перевірте, чи файл зображення є в папці public/images.'
+    const warningMessage = question.picture === null && question.originalPicture && question.originalPicture.trim() !== ''
+      ? `Попередження: зображення "${question.originalPicture}" не було знайдено під час імпорту. Перевірте, чи файл зображення є в папці public/images.`
       : '';
     const html = `
       <!DOCTYPE html>
@@ -2877,6 +2878,9 @@ app.get('/admin/edit-question', checkAuth, checkAdmin, async (req, res) => {
       </html>
     `;
     res.send(html);
+  } catch (error) {
+    logger.error('Error in /admin/edit-question', { message: error.message, stack: error.stack });
+    res.status(500).send('Помилка при редагуванні питання');
   } finally {
     const endTime = Date.now();
     logger.info('Route /admin/edit-question executed', { duration: `${endTime - startTime} ms` });
@@ -2918,6 +2922,26 @@ app.post('/admin/edit-question', checkAuth, checkAdmin, [
       points: Number(points),
       variant: variant || ''
     };
+
+    app.get('/migrate-questions', checkAuth, checkAdmin, async (req, res) => {
+      try {
+        const questions = await db.collection('questions').find({}).toArray();
+        for (const question of questions) {
+          if (!question.hasOwnProperty('originalPicture')) {
+            // Якщо поле originalPicture відсутнє, додаємо його
+            const originalPicture = question.picture ? question.picture.replace('/images/', '').replace(/\.(png|jpg|jpeg|gif)$/i, '') : null;
+            await db.collection('questions').updateOne(
+              { _id: question._id },
+              { $set: { originalPicture } }
+            );
+          }
+        }
+        res.send('Міграція завершена успішно');
+      } catch (error) {
+        logger.error('Error during questions migration', { message: error.message, stack: error.stack });
+        res.status(500).send('Помилка при міграції');
+      }
+    });
 
     // Перевірка наявності зображення
     if (questionData.picture) {
