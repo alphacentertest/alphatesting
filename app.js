@@ -3245,11 +3245,11 @@ app.get('/admin/results', checkAuth, checkAdmin, async (req, res) => {
               <th>Користувач</th>
               <th>Тест</th>
               <th>Варіант</th>
-              <th>Очки</th>
+              <th>Очки/%</th>
               <th>Максимум</th>
               <th>Початок</th>
               <th>Кінець</th>
-              <th>Тривалість (сек)</th>
+              <th>Тривалість (хв:сек)</th>
               <th>Підозріла активність (%)</th>
               <th>Деталі активності</th>
               <th>Відповіді та бали</th>
@@ -3312,16 +3312,22 @@ app.get('/admin/results', checkAuth, checkAdmin, async (req, res) => {
 Среднее время ответа (сек): ${avgResponseTime}
 Общее количество действий: ${totalActivityCount}
         `;
+        // Обчислення відсотка правильних відповідей
+        const percentage = r.totalPoints > 0 ? Math.round((r.score / r.totalPoints) * 100) : 0;
+        // Форматування тривалості у хвилини та секунди
+        const durationMinutes = Math.floor(r.duration / 60);
+        const durationSeconds = r.duration % 60;
+        const formattedDuration = `${durationMinutes} хв ${durationSeconds} сек`;
         adminHtml += `
           <tr>
             <td>${r.user || 'N/A'}</td>
             <td>${testNames[r.testNumber]?.name || 'N/A'}</td>
             <td>${r.variant || 'N/A'}</td>
-            <td>${r.score || '0'}</td>
+            <td>${r.score || '0'} / ${percentage}%</td>
             <td>${r.totalPoints || '0'}</td>
             <td>${formatDateTime(r.startTime)}</td>
             <td>${formatDateTime(r.endTime)}</td>
-            <td>${r.duration || 'N/A'}</td>
+            <td>${formattedDuration}</td>
             <td>${suspiciousActivityPercent}%</td>
             <td class="details">${activityDetails}</td>
             <td class="answers">${answersDisplay}</td>
