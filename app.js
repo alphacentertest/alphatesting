@@ -3240,14 +3240,35 @@ app.get('/admin/results', checkAuth, checkAdmin, async (req, res) => {
               height: 100%;
               background: rgba(0,0,0,0.5);
               z-index: 1000;
+              opacity: 0;
+              transition: opacity 0.3s ease-in-out;
+            }
+            #answers-modal.visible {
+              display: block;
+              opacity: 1;
             }
             #answers-modal .modal-content {
               background: white;
-              margin: 15% auto;
+              margin: 5% auto;
               padding: 20px;
               width: 50%;
+              max-height: 70vh;
+              overflow-y: auto;
               border-radius: 5px;
               position: relative;
+              box-shadow: 0 4px 8px rgba(0,0,0,0.2);
+              transform: scale(0.8);
+              transition: transform 0.3s ease-in-out;
+            }
+            #answers-modal.visible .modal-content {
+              transform: scale(1);
+            }
+            #answers-modal .modal-content h2 {
+              margin: 0 0 20px 0;
+              font-size: 18px;
+              color: #333;
+              border-bottom: 1px solid #e0e0e0;
+              padding-bottom: 10px;
             }
             #answers-modal .close-btn {
               position: absolute;
@@ -3263,6 +3284,23 @@ app.get('/admin/results', checkAuth, checkAdmin, async (req, res) => {
             #modal-content {
               white-space: pre-wrap;
               line-height: 1.8;
+              max-height: 60vh;
+              overflow-y: auto;
+              padding-right: 10px;
+            }
+            #modal-content::-webkit-scrollbar {
+              width: 8px;
+            }
+            #modal-content::-webkit-scrollbar-track {
+              background: #f1f1f1;
+              border-radius: 4px;
+            }
+            #modal-content::-webkit-scrollbar-thumb {
+              background: #888;
+              border-radius: 4px;
+            }
+            #modal-content::-webkit-scrollbar-thumb:hover {
+              background: #555;
             }
           </style>
         </head>
@@ -3363,8 +3401,8 @@ app.get('/admin/results', checkAuth, checkAdmin, async (req, res) => {
             <td>${suspiciousActivityPercent}%</td>
             <td class="details">${activityDetails}</td>
             <td>
-              <button class="view-btn" onclick="showAnswersModal('answers-${index}')">Перегляд</button>
-              <input type="hidden" id="answers-${index}" value="${answersDisplay.replace(/"/g, '&quot;').replace(/\n/g, '<br>')}">
+              <button class="view-btn" onclick="showAnswersModal('answers-${index}', '${r.user || 'N/A'}', '${testNames[r.testNumber]?.name || 'N/A'}')">Перегляд</button>
+              <input type="hidden" id="answers-${index}" value="${answersDisplay.replace(/"/g, '"').replace(/\n/g, '<br>')}">
             </td>
             <td><button class="delete-btn" onclick="deleteResult('${r._id}')">🗑️ Видалити</button></td>
           </tr>
@@ -3381,6 +3419,7 @@ app.get('/admin/results', checkAuth, checkAdmin, async (req, res) => {
           </div>
           <div id="answers-modal">
             <div class="modal-content">
+              <h2 id="modal-title"></h2>
               <button class="close-btn" onclick="closeAnswersModal()">Закрити</button>
               <div id="modal-content"></div>
             </div>
@@ -3439,15 +3478,24 @@ app.get('/admin/results', checkAuth, checkAdmin, async (req, res) => {
               }
             }
 
-            function showAnswersModal(id) {
+            function showAnswersModal(id, user, testName) {
               const answers = document.getElementById(id).value;
+              const modal = document.getElementById('answers-modal');
+              document.getElementById('modal-title').textContent = 'Відповіді користувача ' + user + ' (Тест: ' + testName + ')';
               document.getElementById('modal-content').innerHTML = answers;
-              document.getElementById('answers-modal').style.display = 'block';
+              modal.classList.add('visible');
             }
 
             function closeAnswersModal() {
-              document.getElementById('answers-modal').style.display = 'none';
+              const modal = document.getElementById('answers-modal');
+              modal.classList.remove('visible');
             }
+
+            document.getElementById('answers-modal').addEventListener('click', (e) => {
+              if (e.target === document.getElementById('answers-modal')) {
+                closeAnswersModal();
+              }
+            });
           </script>
         </body>
       </html>
