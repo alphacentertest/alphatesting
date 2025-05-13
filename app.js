@@ -2885,6 +2885,14 @@ app.post('/admin/edit-question', checkAuth, checkAdmin, [
       variant: variant || ''
     };
 
+    // Перевірка наявності зображення
+    if (questionData.picture) {
+      const imagePath = path.join(__dirname, 'public', questionData.picture);
+      if (!fs.existsSync(imagePath)) {
+        return res.status(400).send('Зображення за вказаним шляхом не знайдено. Перевірте назву файлу.');
+      }
+    }
+
     if (type === 'truefalse') {
       questionData.options = ["Правда", "Неправда"];
     }
