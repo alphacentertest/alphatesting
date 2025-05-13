@@ -318,7 +318,7 @@ const importQuestionsToMongoDB = async (filePath, testNumber) => {
           let questionData = {
             testNumber,
             picture: null,
-            originalPicture: picture || null, // Зберігаємо оригінальну назву зображення
+            originalPicture: picture || null,
             text: questionText,
             options,
             correctAnswers,
@@ -330,6 +330,7 @@ const importQuestionsToMongoDB = async (filePath, testNumber) => {
           if (picture) {
             logger.info(`Processing picture field: ${picture}`, { testNumber, rowNumber });
             const normalizedPicture = picture.replace(/\.png$/i, '').replace(/^picture/i, 'Picture');
+            logger.info(`Normalized picture name: ${normalizedPicture}`, { testNumber, rowNumber });
             const pictureMatch = normalizedPicture.match(/^Picture (\d+)(?:\.(png|jpg|jpeg|gif))?$/i);
             if (pictureMatch) {
               const pictureNumber = pictureMatch[1];
@@ -344,6 +345,7 @@ const importQuestionsToMongoDB = async (filePath, testNumber) => {
                 logger.info(`Checking image existence: ${imagePath}`);
                 if (fs.existsSync(imagePath)) {
                   questionData.picture = pictureBaseName + ext;
+                  logger.info(`Image found: ${questionData.picture}`, { testNumber, rowNumber });
                   found = true;
                   break;
                 }
@@ -353,7 +355,7 @@ const importQuestionsToMongoDB = async (filePath, testNumber) => {
                 questionData.picture = null;
               }
             } else {
-              logger.warn(`Invalid picture format: ${picture}. Expected format: Picture X`, { testNumber, rowNumber });
+              logger.warn(`Invalid picture format: ${picture}. Expected format: Picture X or Picture X.png`, { testNumber, rowNumber });
             }
           }
 
