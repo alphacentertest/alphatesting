@@ -340,7 +340,6 @@ const importQuestionsToMongoDB = async (filePath, testNumber) => {
 
               const extensions = extension ? [extension] : ['.png', '.jpg', '.jpeg', '.gif'];
               let found = false;
-              // Перевіряємо наявність файлів у папці public/images
               const imageDir = path.join(__dirname, 'public', 'images');
               const filesInDir = fs.existsSync(imageDir) ? fs.readdirSync(imageDir) : [];
               const targetFileNameBase = `Picture${pictureNumber}`;
