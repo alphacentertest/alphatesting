@@ -2773,6 +2773,9 @@ app.get('/admin/edit-question', checkAuth, checkAdmin, async (req, res) => {
       return res.status(404).send('Питання не знайдено');
     }
     const pictureName = question.picture ? question.picture.replace('/images/', '') : '';
+    const warningMessage = question.picture === null && rowValues[0] && rowValues[0].trim() !== ''
+      ? 'Попередження: зображення не було знайдено під час імпорту. Перевірте, чи файл зображення є в папці public/images.'
+      : '';
     const html = `
       <!DOCTYPE html>
       <html lang="uk">
@@ -2788,6 +2791,8 @@ app.get('/admin/edit-question', checkAuth, checkAdmin, async (req, res) => {
             .nav-btn { background-color: #007bff; color: white; }
             .submit-btn { background-color: #4CAF50; color: white; }
             .error { color: red; }
+            .warning { color: orange; margin-bottom: 10px; }
+            img#image-preview { max-width: 200px; margin-top: 10px; }
           </style>
         </head>
         <body>
@@ -2801,6 +2806,8 @@ app.get('/admin/edit-question', checkAuth, checkAdmin, async (req, res) => {
             </select>
             <label for="picture">Назва файлу зображення (опціонально, наприклад, Picture1.png):</label>
             <input type="text" id="picture" name="picture" value="${pictureName}" placeholder="Picture1.png">
+            ${warningMessage ? `<p class="warning">${warningMessage}</p>` : ''}
+            ${pictureName ? `<img id="image-preview" src="/images/${pictureName}" alt="Зображення питання" onerror="this.onerror=null;this.src='';this.alt='Зображення недоступне';">` : ''}
             <label for="text">Текст питання:</label>
             <textarea id="text" name="text" required>${question.text}</textarea>
             <label for="type">Тип питання:</label>
@@ -2850,6 +2857,21 @@ app.get('/admin/edit-question', checkAuth, checkAdmin, async (req, res) => {
               }
               return true;
             }
+
+            document.getElementById('picture').addEventListener('input', (e) => {
+              const pictureName = e.target.value;
+              const preview = document.getElementById('image-preview');
+              if (pictureName) {
+                preview.src = '/images/' + pictureName;
+                preview.onerror = () => {
+                  preview.src = '';
+                  preview.alt = 'Зображення недоступне';
+                };
+              } else {
+                preview.src = '';
+                preview.alt = '';
+              }
+            });
           </script>
         </body>
       </html>
@@ -3871,7 +3893,7 @@ app.get('/download-template', checkAuth, checkAdmin, async (req, res) => {
     ];
 
     sheet.addRow({
-      picture: 'Picture 1',
+      picture: 'Picture 1 (наприклад, Picture 1, Picture 2 тощо)',
       text: 'Приклад питання',
       option1: 'Варіант 1',
       option2: 'Варіант 2',
