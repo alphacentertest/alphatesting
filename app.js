@@ -287,9 +287,8 @@ const importQuestionsToMongoDB = async (filePath, testNumber) => {
     }
     logger.info('Worksheet "Questions" found', { rowCount: sheet.rowCount });
 
-    // Перевірка кількості рядків
-    const MAX_ROWS = 1000; // Максимальна кількість рядків
-    if (sheet.rowCount > MAX_ROWS + 1) { // +1 для заголовка
+    const MAX_ROWS = 1000;
+    if (sheet.rowCount > MAX_ROWS + 1) {
       throw new Error(`Занадто багато рядків (${sheet.rowCount - 1} питань). Максимальна кількість питань: ${MAX_ROWS}.`);
     }
 
@@ -318,7 +317,7 @@ const importQuestionsToMongoDB = async (filePath, testNumber) => {
 
           let questionData = {
             testNumber,
-            picture: picture.match(/^Picture (\d+)/i) ? `/images/Picture ${picture.match(/^Picture (\d+)/i)[1]}.png` : null,
+            picture: picture.match(/^Picture (\d+)/i) ? `/images/Picture${picture.match(/^Picture (\d+)/i)[1]}` : null,
             text: questionText,
             options,
             correctAnswers,
@@ -326,6 +325,24 @@ const importQuestionsToMongoDB = async (filePath, testNumber) => {
             points,
             variant
           };
+
+          // Перевірка доступних розширень для зображення
+          if (questionData.picture) {
+            const extensions = ['.png', '.jpg', '.jpeg', '.gif'];
+            let found = false;
+            for (const ext of extensions) {
+              const imagePath = path.join(__dirname, 'public', questionData.picture + ext);
+              if (fs.existsSync(imagePath)) {
+                questionData.picture = questionData.picture + ext;
+                found = true;
+                break;
+              }
+            }
+            if (!found) {
+              logger.warn(`Image not found for Picture ${questionData.picture}`, { testNumber, rowNumber });
+              questionData.picture = null;
+            }
+          }
 
           if (type === 'matching') {
             questionData.pairs = options.map((opt, idx) => ({
@@ -2582,8 +2599,8 @@ app.get('/admin/add-question', checkAuth, checkAdmin, (req, res) => {
             <select id="testNumber" name="testNumber" required>
               ${Object.keys(testNames).map(num => `<option value="${num}">${testNames[num].name}</option>`).join('')}
             </select>
-            <label for="picture">Посилання на фото (опціонально):</label>
-            <input type="text" id="picture" name="picture" placeholder="Введіть URL зображення">
+            <label for="picture">Назва файлу зображення (опціонально, наприклад, Picture1.png):</label>
+            <input type="text" id="picture" name="picture" placeholder="Picture1.png">
             <label for="text">Текст питання:</label>
             <textarea id="text" name="text" required></textarea>
             <label for="type">Тип питання:</label>
@@ -2627,8 +2644,8 @@ app.get('/admin/add-question', checkAuth, checkAdmin, (req, res) => {
                 errorMessage.textContent = 'Варіант має бути від 1 до 50 символів';
                 return false;
               }
-              if (picture && !/^https?:\/\/.*\.(jpeg|jpg|png|gif)$/i.test(picture)) {
-                errorMessage.textContent = 'Посилання на фото має бути дійсним URL із розширенням .jpeg, .jpg, .png або .gif';
+              if (picture && !/\.(jpeg|jpg|png|gif)$/i.test(picture)) {
+                errorMessage.textContent = 'Назва файлу зображення має закінчуватися на .jpeg, .jpg, .png або .gif';
                 return false;
               }
               return true;
@@ -2658,7 +2675,7 @@ app.post('/admin/add-question', checkAuth, checkAdmin, [
     .isLength({ min: 1, max: 50 }).withMessage('Варіант має бути від 1 до 50 символів'),
   body('picture')
     .optional({ checkFalsy: true })
-    .matches(/^https?:\/\/.*\.(jpeg|jpg|png|gif)$/i).withMessage('Посилання на фото має бути дійсним URL із розширенням .jpeg, .jpg, .png або .gif')
+    .matches(/\.(jpeg|jpg|png|gif)$/i).withMessage('Назва файлу зображення має закінчуватися на .jpeg, .jpg, .png або .gif')
 ], async (req, res) => {
   const startTime = Date.now();
   try {
@@ -2671,7 +2688,7 @@ app.post('/admin/add-question', checkAuth, checkAdmin, [
 
     let questionData = {
       testNumber,
-      picture: picture || '',
+      picture: picture ? `/images/${picture.trim()}` : null,
       text,
       type: type.toLowerCase(),
       options: options ? options.split(';').map(opt => opt.trim()).filter(Boolean) : [],
@@ -2743,6 +2760,7 @@ app.get('/admin/edit-question', checkAuth, checkAdmin, async (req, res) => {
     if (!question) {
       return res.status(404).send('Питання не знайдено');
     }
+    const pictureName = question.picture ? question.picture.replace('/images/', '') : '';
     const html = `
       <!DOCTYPE html>
       <html lang="uk">
@@ -2769,8 +2787,8 @@ app.get('/admin/edit-question', checkAuth, checkAdmin, async (req, res) => {
             <select id="testNumber" name="testNumber" required>
               ${Object.keys(testNames).map(num => `<option value="${num}" ${num === question.testNumber ? 'selected' : ''}>${testNames[num].name}</option>`).join('')}
             </select>
-            <label for="picture">Посилання на фото (опціонально):</label>
-            <input type="text" id="picture" name="picture" value="${question.picture || ''}" placeholder="Введіть URL зображення">
+            <label for="picture">Назва файлу зображення (опціонально, наприклад, Picture1.png):</label>
+            <input type="text" id="picture" name="picture" value="${pictureName}" placeholder="Picture1.png">
             <label for="text">Текст питання:</label>
             <textarea id="text" name="text" required>${question.text}</textarea>
             <label for="type">Тип питання:</label>
@@ -2814,8 +2832,8 @@ app.get('/admin/edit-question', checkAuth, checkAdmin, async (req, res) => {
                 errorMessage.textContent = 'Варіант має бути від 1 до 50 символів';
                 return false;
               }
-              if (picture && !/^https?:\/\/.*\.(jpeg|jpg|png|gif)$/i.test(picture)) {
-                errorMessage.textContent = 'Посилання на фото має бути дійсним URL із розширенням .jpeg, .jpg, .png або .gif';
+              if (picture && !/\.(jpeg|jpg|png|gif)$/i.test(picture)) {
+                errorMessage.textContent = 'Назва файлу зображення має закінчуватися на .jpeg, .jpg, .png або .gif';
                 return false;
               }
               return true;
@@ -2845,7 +2863,7 @@ app.post('/admin/edit-question', checkAuth, checkAdmin, [
     .isLength({ min: 1, max: 50 }).withMessage('Варіант має бути від 1 до 50 символів'),
   body('picture')
     .optional({ checkFalsy: true })
-    .matches(/^https?:\/\/.*\.(jpeg|jpg|png|gif)$/i).withMessage('Посилання на фото має бути дійсним URL із розширенням .jpeg, .jpg, .png або .gif')
+    .matches(/\.(jpeg|jpg|png|gif)$/i).withMessage('Назва файлу зображення має закінчуватися на .jpeg, .jpg, .png або .gif')
 ], async (req, res) => {
   const startTime = Date.now();
   try {
@@ -2858,7 +2876,7 @@ app.post('/admin/edit-question', checkAuth, checkAdmin, [
 
     let questionData = {
       testNumber,
-      picture: picture || '',
+      picture: picture ? `/images/${picture.trim()}` : null,
       text,
       type: type.toLowerCase(),
       options: options ? options.split(';').map(opt => opt.trim()).filter(Boolean) : [],
