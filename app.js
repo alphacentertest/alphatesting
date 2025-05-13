@@ -317,7 +317,7 @@ const importQuestionsToMongoDB = async (filePath, testNumber) => {
 
           let questionData = {
             testNumber,
-            picture: picture.match(/^Picture (\d+)/i) ? `/images/Picture${picture.match(/^Picture (\d+)/i)[1]}` : null,
+            picture: null, // Спочатку встановлюємо null
             text: questionText,
             options,
             correctAnswers,
@@ -326,21 +326,33 @@ const importQuestionsToMongoDB = async (filePath, testNumber) => {
             variant
           };
 
-          // Перевірка доступних розширень для зображення
-          if (questionData.picture) {
-            const extensions = ['.png', '.jpg', '.jpeg', '.gif'];
-            let found = false;
-            for (const ext of extensions) {
-              const imagePath = path.join(__dirname, 'public', questionData.picture + ext);
-              if (fs.existsSync(imagePath)) {
-                questionData.picture = questionData.picture + ext;
-                found = true;
-                break;
+          // Обробка зображення
+          if (picture) {
+            // Підтримуємо формат "Picture X" або "Picture X.extension"
+            const pictureMatch = picture.match(/^Picture (\d+)(?:\.(png|jpg|jpeg|gif))?$/i);
+            if (pictureMatch) {
+              const pictureNumber = pictureMatch[1];
+              const extension = pictureMatch[2] ? `.${pictureMatch[2].toLowerCase()}` : null;
+              const pictureBaseName = `/images/Picture${pictureNumber}`;
+              questionData.picture = pictureBaseName;
+
+              // Перевірка доступних розширень
+              const extensions = extension ? [extension] : ['.png', '.jpg', '.jpeg', '.gif'];
+              let found = false;
+              for (const ext of extensions) {
+                const imagePath = path.join(__dirname, 'public', pictureBaseName + ext);
+                if (fs.existsSync(imagePath)) {
+                  questionData.picture = pictureBaseName + ext;
+                  found = true;
+                  break;
+                }
               }
-            }
-            if (!found) {
-              logger.warn(`Image not found for Picture ${questionData.picture}`, { testNumber, rowNumber });
-              questionData.picture = null;
+              if (!found) {
+                logger.warn(`Image not found for Picture ${questionData.picture}`, { testNumber, rowNumber });
+                questionData.picture = null;
+              }
+            } else {
+              logger.warn(`Invalid picture format: ${picture}. Expected format: Picture X`, { testNumber, rowNumber });
             }
           }
 
