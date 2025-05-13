@@ -340,18 +340,23 @@ const importQuestionsToMongoDB = async (filePath, testNumber) => {
 
               const extensions = extension ? [extension] : ['.png', '.jpg', '.jpeg', '.gif'];
               let found = false;
+              // Перевіряємо наявність файлів у папці public/images
+              const imageDir = path.join(__dirname, 'public', 'images');
+              const filesInDir = fs.existsSync(imageDir) ? fs.readdirSync(imageDir) : [];
+              const targetFileNameBase = `Picture${pictureNumber}`;
               for (const ext of extensions) {
-                const imagePath = path.join(__dirname, 'public', pictureBaseName + ext);
-                logger.info(`Checking image existence: ${imagePath}`);
-                if (fs.existsSync(imagePath)) {
-                  questionData.picture = pictureBaseName + ext;
+                const expectedFileName = targetFileNameBase + ext;
+                const fileExists = filesInDir.some(file => file.toLowerCase() === expectedFileName.toLowerCase());
+                if (fileExists) {
+                  const matchedFile = filesInDir.find(file => file.toLowerCase() === expectedFileName.toLowerCase());
+                  questionData.picture = `/images/${matchedFile}`;
                   logger.info(`Image found: ${questionData.picture}`, { testNumber, rowNumber });
                   found = true;
                   break;
                 }
               }
               if (!found) {
-                logger.warn(`Image not found for Picture ${questionData.picture}`, { testNumber, rowNumber });
+                logger.warn(`Image not found for Picture ${questionData.picture}. Available files: ${filesInDir.join(', ')}`, { testNumber, rowNumber });
                 questionData.picture = null;
               }
             } else {
