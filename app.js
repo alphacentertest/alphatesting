@@ -3222,14 +3222,48 @@ app.get('/admin/results', checkAuth, checkAdmin, async (req, res) => {
             th, td { border: 1px solid black; padding: 8px; text-align: left; }
             th { background-color: #f2f2f2; }
             .error { color: red; }
-            .answers { white-space: pre-wrap; max-width: 300px; overflow-wrap: break-word; line-height: 1.8; }
-            .delete-btn { background-color: #ff4d4d; color: white; padding: 5px 10px; border: none; cursor: pointer; }
-            .delete-all-btn { background-color: #ff4d4d; color: white; padding: 10px 20px; margin: 10px 0; border: none; cursor: pointer; }
-            .nav-btn { padding: 10px 20px; margin: 10px 0; cursor: pointer; background-color: #007bff; color: white; border: none; }
+            .view-btn { background-color: #4CAF50; color: white; padding: 5px 10px; border: none; cursor: pointer; border-radius: 5px; }
+            .view-btn:hover { background-color: #45a049; }
+            .delete-btn { background-color: #ff4d4d; color: white; padding: 5px 10px; border: none; cursor: pointer; border-radius: 5px; }
+            .delete-all-btn { background-color: #ff4d4d; color: white; padding: 10px 20px; margin: 10px 0; border: none; cursor: pointer; border-radius: 5px; }
+            .nav-btn { padding: 10px 20px; margin: 10px 0; cursor: pointer; background-color: #007bff; color: white; border: none; border-radius: 5px; }
             .details { white-space: pre-wrap; max-width: 300px; line-height: 1.8; }
             .pagination { margin-top: 20px; }
             .pagination a { margin: 0 5px; padding: 5px 10px; background-color: #007bff; color: white; text-decoration: none; border-radius: 5px; }
             .pagination a:hover { background-color: #0056b3; }
+            #answers-modal {
+              display: none;
+              position: fixed;
+              top: 0;
+              left: 0;
+              width: 100%;
+              height: 100%;
+              background: rgba(0,0,0,0.5);
+              z-index: 1000;
+            }
+            #answers-modal .modal-content {
+              background: white;
+              margin: 15% auto;
+              padding: 20px;
+              width: 50%;
+              border-radius: 5px;
+              position: relative;
+            }
+            #answers-modal .close-btn {
+              position: absolute;
+              top: 10px;
+              right: 10px;
+              cursor: pointer;
+              background-color: #ff4d4d;
+              color: white;
+              border: none;
+              padding: 5px 10px;
+              border-radius: 5px;
+            }
+            #modal-content {
+              white-space: pre-wrap;
+              line-height: 1.8;
+            }
           </style>
         </head>
         <body>
@@ -3312,9 +3346,7 @@ app.get('/admin/results', checkAuth, checkAdmin, async (req, res) => {
 Среднее время ответа (сек): ${avgResponseTime}
 Общее количество действий: ${totalActivityCount}
         `;
-        // Обчислення відсотка правильних відповідей
         const percentage = r.totalPoints > 0 ? Math.round((r.score / r.totalPoints) * 100) : 0;
-        // Форматування тривалості у хвилини та секунди
         const durationMinutes = Math.floor(r.duration / 60);
         const durationSeconds = r.duration % 60;
         const formattedDuration = `${durationMinutes} хв ${durationSeconds} сек`;
@@ -3330,7 +3362,10 @@ app.get('/admin/results', checkAuth, checkAdmin, async (req, res) => {
             <td>${formattedDuration}</td>
             <td>${suspiciousActivityPercent}%</td>
             <td class="details">${activityDetails}</td>
-            <td class="answers">${answersDisplay}</td>
+            <td>
+              <button class="view-btn" onclick="showAnswersModal('answers-${index}')">Перегляд</button>
+              <input type="hidden" id="answers-${index}" value="${answersDisplay.replace(/"/g, '&quot;').replace(/\n/g, '<br>')}">
+            </td>
             <td><button class="delete-btn" onclick="deleteResult('${r._id}')">🗑️ Видалити</button></td>
           </tr>
         `;
@@ -3343,6 +3378,12 @@ app.get('/admin/results', checkAuth, checkAdmin, async (req, res) => {
             ${page > 1 ? `<a href="/admin/results?page=${page - 1}">Попередня</a>` : ''}
             <span>Сторінка ${page} з ${totalPages}</span>
             ${page < totalPages ? `<a href="/admin/results?page=${page + 1}">Наступна</a>` : ''}
+          </div>
+          <div id="answers-modal">
+            <div class="modal-content">
+              <button class="close-btn" onclick="closeAnswersModal()">Закрити</button>
+              <div id="modal-content"></div>
+            </div>
           </div>
           <script>
             async function deleteResult(id) {
@@ -3396,6 +3437,16 @@ app.get('/admin/results', checkAuth, checkAdmin, async (req, res) => {
                   alert('Не вдалося видалити всі результати. Перевірте ваше з’єднання з Інтернетом.');
                 }
               }
+            }
+
+            function showAnswersModal(id) {
+              const answers = document.getElementById(id).value;
+              document.getElementById('modal-content').innerHTML = answers;
+              document.getElementById('answers-modal').style.display = 'block';
+            }
+
+            function closeAnswersModal() {
+              document.getElementById('answers-modal').style.display = 'none';
             }
           </script>
         </body>
