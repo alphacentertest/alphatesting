@@ -3125,17 +3125,68 @@ app.get('/admin/import-users', checkAuth, checkAdmin, (req, res) => {
             button { padding: 10px 20px; margin: 5px; cursor: pointer; border: none; border-radius: 5px; }
             .nav-btn { background-color: #007bff; color: white; }
             .submit-btn { background-color: #4CAF50; color: white; }
+            .submit-btn:disabled { background-color: #cccccc; cursor: not-allowed; }
+            .error { color: red; }
           </style>
         </head>
         <body>
           <h1>Імпорт користувачів із Excel</h1>
-          <form method="POST" action="/admin/import-users" enctype="multipart/form-data">
-            <input type="hidden" name="_csrf" value="${req.csrfToken()}">
+          <form id="import-users-form">
+            <input type="hidden" name="_csrf" id="_csrf" value="${req.csrfToken()}">
             <label for="file">Виберіть файл users.xlsx:</label>
             <input type="file" id="file" name="file" accept=".xlsx" required>
-            <button type="submit" class="submit-btn">Завантажити</button>
+            <button type="submit" class="submit-btn" id="submit-btn">Завантажити</button>
           </form>
+          <div id="error-message" class="error"></div>
           <button class="nav-btn" onclick="window.location.href='/admin'">Повернутися до адмін-панелі</button>
+          <script>
+            document.getElementById('import-users-form').addEventListener('submit', async (e) => {
+              e.preventDefault();
+              const fileInput = document.getElementById('file');
+              const errorMessage = document.getElementById('error-message');
+              const submitBtn = document.getElementById('submit-btn');
+              const csrfToken = document.getElementById('_csrf').value;
+
+              if (!csrfToken) {
+                errorMessage.textContent = 'CSRF-токен відсутній. Оновіть сторінку та спробуйте знову.';
+                return;
+              }
+
+              if (!fileInput.files[0]) {
+                errorMessage.textContent = 'Файл не вибрано.';
+                return;
+              }
+
+              submitBtn.disabled = true;
+              submitBtn.textContent = 'Завантаження...';
+
+              const formData = new FormData();
+              formData.append('file', fileInput.files[0]);
+
+              try {
+                const response = await fetch('/admin/import-users', {
+                  method: 'POST',
+                  body: formData,
+                  headers: {
+                    'X-CSRF-Token': csrfToken
+                  }
+                });
+
+                const result = await response.text();
+                if (response.ok) {
+                  document.body.innerHTML = result;
+                } else {
+                  errorMessage.textContent = 'Помилка при завантаженні файлу: ' + result;
+                }
+              } catch (error) {
+                console.error('Error during file upload:', error);
+                errorMessage.textContent = 'Не вдалося підключитися до сервера. Перевірте ваше з’єднання з Інтернетом.';
+              } finally {
+                submitBtn.disabled = false;
+                submitBtn.textContent = 'Завантажити';
+              }
+            });
+          </script>
         </body>
       </html>
     `;
@@ -3149,12 +3200,21 @@ app.get('/admin/import-users', checkAuth, checkAdmin, (req, res) => {
 app.post('/admin/import-users', checkAuth, checkAdmin, upload.single('file'), async (req, res) => {
   const startTime = Date.now();
   try {
+    logger.info('Received POST request for /admin/import-users', {
+      body: req.body,
+      headers: { 'x-csrf-token': req.headers['x-csrf-token'] },
+      file: req.file ? { originalname: req.file.originalname, size: req.file.size } : 'no file'
+    });
+
     if (!req.file) {
+      logger.warn('Файл не завантажено: req.file відсутній');
       return res.status(400).send('Файл не завантажено');
     }
+
     const filePath = req.file.path;
     const importedCount = await importUsersToMongoDB(filePath);
     fs.unlinkSync(filePath);
+    logger.info(`Успішно імпортовано ${importedCount} користувачів`);
     res.send(`
       <!DOCTYPE html>
       <html lang="uk">
@@ -3173,7 +3233,7 @@ app.post('/admin/import-users', checkAuth, checkAdmin, upload.single('file'), as
     if (req.file && fs.existsSync(req.file.path)) {
       fs.unlinkSync(req.file.path);
     }
-    res.status(500).send('Помилка при імпорті користувачів');
+    res.status(500).send('Помилка при імпорті користувачів: ' + error.message);
   } finally {
     const endTime = Date.now();
     logger.info('Route /admin/import-users (POST) executed', { duration: `${endTime - startTime} ms` });
