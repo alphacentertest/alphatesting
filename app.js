@@ -2458,24 +2458,40 @@ app.post('/admin/edit-user', checkAuth, checkAdmin, [
   try {
     const errors = validationResult(req);
     if (!errors.isEmpty()) {
+      logger.warn('Validation errors in /admin/edit-user', { errors: errors.array() });
       return res.status(400).send(errors.array()[0].msg);
     }
 
     const { oldUsername, username, password } = req.body;
+    logger.info('Received data for user update', { oldUsername, username, passwordProvided: !!password });
+
     const existingUser = await db.collection('users').findOne({ username });
     if (existingUser && username !== oldUsername) {
+      logger.warn('Username already exists', { username });
       return res.status(400).send('Користувач із таким ім’ям уже існує');
     }
+
     const updateData = { username };
     if (password) {
       const saltRounds = 10;
       const hashedPassword = await bcrypt.hash(password, saltRounds);
       updateData.password = hashedPassword;
+      logger.info('Password updated for user', { username });
+    } else {
+      logger.info('Password not provided, skipping password update', { username });
     }
-    await db.collection('users').updateOne(
+
+    const updateResult = await db.collection('users').updateOne(
       { username: oldUsername },
       { $set: updateData }
     );
+    logger.info('Update result', { matchedCount: updateResult.matchedCount, modifiedCount: updateResult.modifiedCount });
+
+    if (updateResult.matchedCount === 0) {
+      logger.error('No user found to update', { oldUsername });
+      return res.status(404).send('Користувача не знайдено');
+    }
+
     await CacheManager.invalidateCache('users', null);
     res.send(`
       <!DOCTYPE html>
