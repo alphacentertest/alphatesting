@@ -2357,6 +2357,8 @@ app.post('/admin/add-user', checkAuth, checkAdmin, [
     const newUser = { username, password: hashedPassword };
     await db.collection('users').insertOne(newUser);
     await CacheManager.invalidateCache('users', null);
+    await loadUsersToCache(); // Оновлюємо userCache після додавання
+    logger.info('User cache reloaded after adding new user');
     res.send(`
       <!DOCTYPE html>
       <html lang="uk">
@@ -2492,7 +2494,11 @@ app.post('/admin/edit-user', checkAuth, checkAdmin, [
       return res.status(404).send('Користувача не знайдено');
     }
 
+    // Оновлюємо кеш після зміни пароля
     await CacheManager.invalidateCache('users', null);
+    await loadUsersToCache(); // Оновлюємо userCache
+    logger.info('User cache reloaded after update');
+
     res.send(`
       <!DOCTYPE html>
       <html lang="uk">
@@ -2521,6 +2527,8 @@ app.post('/admin/delete-user', checkAuth, checkAdmin, async (req, res) => {
     const { username } = req.body;
     await db.collection('users').deleteOne({ username });
     await CacheManager.invalidateCache('users', null);
+    await loadUsersToCache(); // Оновлюємо userCache після видалення
+    logger.info('User cache reloaded after deletion');
     res.json({ success: true });
   } catch (error) {
     logger.error('Error deleting user', { message: error.message, stack: error.stack });
