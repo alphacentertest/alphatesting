@@ -493,7 +493,25 @@ const initializeServer = async () => {
     await db.collection('tests').createIndex({ testNumber: 1 }, { unique: true });
     logger.info('MongoDB indexes created successfully');
 
-    // Миграция тестов, если коллекция пуста
+    // Міграція ролей для існуючих користувачів
+    const userCount = await db.collection('users').countDocuments();
+    if (userCount > 0) {
+      await db.collection('users').updateMany(
+        { role: { $exists: false }, username: "admin" },
+        { $set: { role: "admin" } }
+      );
+      await db.collection('users').updateMany(
+        { role: { $exists: false }, username: "Instructor" },
+        { $set: { role: "instructor" } }
+      );
+      await db.collection('users').updateMany(
+        { role: { $exists: false }, username: { $nin: ["admin", "Instructor"] } },
+        { $set: { role: "user" } }
+      );
+      logger.info('Migrated roles to existing users');
+    }
+
+    // Міграція тестов, якщо колекція пуста
     const testCount = await db.collection('tests').countDocuments();
     if (testCount === 0) {
       const defaultTests = {
@@ -810,6 +828,8 @@ const checkAuth = (req, res, next) => {
   try {
     const decoded = jwt.verify(token, process.env.JWT_SECRET || 'your-secret-key');
     req.user = decoded.username;
+    const foundUser = userCache.find(user => user.username === req.user);
+    req.userRole = foundUser ? foundUser.role : 'user'; // Додаємо роль користувача
     next();
   } catch (error) {
     logger.error('JWT verification failed', { message: error.message, stack: error.stack });
@@ -1143,19 +1163,19 @@ app.get('/test/question', checkAuth, (req, res) => {
             .matching-item { 
               border: 2px solid #ccc; 
               padding: 10px; 
-              margin: 0; /* Видаляємо margin, щоб не створювати зайвих відступів */
+              margin: 0; 
               border-radius: 5px; 
               cursor: move; 
-              font-family: Arial, sans-serif; /* Уніфікуємо шрифт */
-              font-size: 16px; /* Уніфікуємо розмір шрифту */
-              line-height: 1.5; /* Уніфікуємо висоту рядка для однакового вигляду */
-              min-height: 40px; /* Фіксована мінімальна висота для всіх полів */
+              font-family: Arial, sans-serif; 
+              font-size: 16px; 
+              line-height: 1.5; 
+              min-height: 40px; 
               display: flex; 
-              align-items: center; /* Вирівнювання тексту по вертикалі */
-              justify-content: flex-start; /* Вирівнювання тексту по горизонталі */
+              align-items: center; 
+              justify-content: flex-start; 
               box-sizing: border-box; 
-              white-space: normal; /* Дозволяємо тексту переноситися */
-              overflow-wrap: break-word; /* Дозволяємо перенос слів */
+              white-space: normal; 
+              overflow-wrap: break-word; 
             }
             .matching-item.matched { background-color: #90ee90; }
             .blank-input { width: 100px; margin: 0 5px; padding: 5px; border: 1px solid #ccc; border-radius: 4px; display: inline-block; }
@@ -1170,8 +1190,8 @@ app.get('/test/question', checkAuth, (req, res) => {
               .option-box, .matching-item { 
                 font-size: 18px; 
                 padding: 10px; 
-                min-height: 50px; /* Збільшена висота для мобільних пристроїв */
-                line-height: 1.5; /* Уніфікуємо висоту рядка */
+                min-height: 50px; 
+                line-height: 1.5; 
               }
               button { font-size: 18px; padding: 15px; }
               #timer { font-size: 20px; }
@@ -1245,7 +1265,7 @@ app.get('/test/question', checkAuth, (req, res) => {
         inputHtml += `<span class="question-text">${part}</span>`;
         if (i < parts.length - 1) {
           const userAnswer = userAnswers[i] || '';
-          inputHtml += `<input type="text" class="blank-input" id="blank_${i}" value="${userAnswer.replace(/"/g, '"')}" placeholder="Введіть відповідь">`;
+          inputHtml += `<input type="text" class="blank-input" id="blank_${i}" value="${userAnswer.replace(/"/g, '"')}" placeholder="Введіть відповідь" autocomplete="off">`; // Додаємо autocomplete="off"
         }
       });
       html += inputHtml;
@@ -1288,7 +1308,7 @@ app.get('/test/question', checkAuth, (req, res) => {
       if (q.type !== 'fillblank') {
         const userAnswer = answers[index] || '';
         html += `
-          <input type="text" name="q${index}" id="q${index}_input" value="${userAnswer}" placeholder="Введіть відповідь" class="answer-option"><br>
+          <input type="text" name="q${index}" id="q${index}_input" value="${userAnswer}" placeholder="Введіть відповідь" class="answer-option" autocomplete="off"><br>
         `;
       }
     } else {
@@ -2354,10 +2374,10 @@ app.post('/admin/add-user', checkAuth, checkAdmin, [
     }
     const saltRounds = 10;
     const hashedPassword = await bcrypt.hash(password, saltRounds);
-    const newUser = { username, password: hashedPassword };
+    const newUser = { username, password: hashedPassword, role: username === 'Instructor' ? 'instructor' : 'user' }; // Додаємо роль
     await db.collection('users').insertOne(newUser);
     await CacheManager.invalidateCache('users', null);
-    await loadUsersToCache(); // Оновлюємо userCache після додавання
+    await loadUsersToCache();
     logger.info('User cache reloaded after adding new user');
     res.send(`
       <!DOCTYPE html>
@@ -2483,6 +2503,15 @@ app.post('/admin/edit-user', checkAuth, checkAdmin, [
       logger.info('Password not provided, skipping password update', { username });
     }
 
+    // Зберігаємо або оновлюємо роль
+    if (username === 'Instructor') {
+      updateData.role = 'instructor';
+    } else if (username === 'admin') {
+      updateData.role = 'admin';
+    } else {
+      updateData.role = 'user';
+    }
+
     const updateResult = await db.collection('users').updateOne(
       { username: oldUsername },
       { $set: updateData }
@@ -2494,9 +2523,8 @@ app.post('/admin/edit-user', checkAuth, checkAdmin, [
       return res.status(404).send('Користувача не знайдено');
     }
 
-    // Оновлюємо кеш після зміни пароля
     await CacheManager.invalidateCache('users', null);
-    await loadUsersToCache(); // Оновлюємо userCache
+    await loadUsersToCache();
     logger.info('User cache reloaded after update');
 
     res.send(`
@@ -3401,9 +3429,13 @@ app.post('/admin/import-questions', checkAuth, checkAdmin, upload.single('file')
   }
 });
 
-app.get('/admin/results', checkAuth, checkAdmin, async (req, res) => {
+app.get('/admin/results', checkAuth, async (req, res) => {
   const startTime = Date.now();
   try {
+    if (req.userRole !== 'admin' && req.userRole !== 'instructor') {
+      return res.status(403).send('Доступ заборонено (403 Forbidden)');
+    }
+
     const page = parseInt(req.query.page) || 1;
     const limit = 10;
     const skip = (page - 1) * limit;
@@ -3542,11 +3574,11 @@ app.get('/admin/results', checkAuth, checkAdmin, async (req, res) => {
               <th>Підозріла активність (%)</th>
               <th>Деталі активності</th>
               <th>Відповіді та бали</th>
-              <th>Дія</th>
+              ${req.userRole === 'admin' ? '<th>Дія</th>' : ''}
             </tr>
     `;
     if (!results || results.length === 0) {
-      adminHtml += '<tr><td colspan="12">Немає результатів</td></tr>';
+      adminHtml += '<tr><td colspan="' + (req.userRole === 'admin' ? '12' : '11') + '">Немає результатів</td></tr>';
     } else {
       results.forEach((r, index) => {
         const answersArray = [];
@@ -3621,14 +3653,18 @@ app.get('/admin/results', checkAuth, checkAdmin, async (req, res) => {
               <button class="view-btn" onclick="showAnswersModal('answers-${index}', '${r.user || 'N/A'}', '${testNames[r.testNumber]?.name || 'N/A'}')">Перегляд</button>
               <input type="hidden" id="answers-${index}" value="${answersDisplay.replace(/"/g, '"').replace(/\n/g, '<br>')}">
             </td>
-            <td><button class="delete-btn" onclick="deleteResult('${r._id}')">🗑️ Видалити</button></td>
+            ${req.userRole === 'admin' ? `
+              <td><button class="delete-btn" onclick="deleteResult('${r._id}')">🗑️ Видалити</button></td>
+            ` : ''}
           </tr>
         `;
       });
     }
     adminHtml += `
           </table>
-          <button class="delete-all-btn" onclick="deleteAllResults()">Видалити всі результати</button>
+          ${req.userRole === 'admin' ? `
+            <button class="delete-all-btn" onclick="deleteAllResults()">Видалити всі результати</button>
+          ` : ''}
           <div class="pagination">
             ${page > 1 ? `<a href="/admin/results?page=${page - 1}">Попередня</a>` : ''}
             <span>Сторінка ${page} з ${totalPages}</span>
@@ -3642,58 +3678,60 @@ app.get('/admin/results', checkAuth, checkAdmin, async (req, res) => {
             </div>
           </div>
           <script>
-            async function deleteResult(id) {
-              if (confirm('Ви впевнені, що хочете видалити цей результат?')) {
-                try {
-                  const formData = new URLSearchParams();
-                  formData.append('id', id);
-                  formData.append('_csrf', '${req.csrfToken()}');
-                  const response = await fetch('/admin/delete-result', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-                    body: formData
-                  });
-                  if (!response.ok) {
-                    throw new Error('HTTP error! status: ' + response.status);
+            ${req.userRole === 'admin' ? `
+              async function deleteResult(id) {
+                if (confirm('Ви впевнені, що хочете видалити цей результат?')) {
+                  try {
+                    const formData = new URLSearchParams();
+                    formData.append('id', id);
+                    formData.append('_csrf', '${req.csrfToken()}');
+                    const response = await fetch('/admin/delete-result', {
+                      method: 'POST',
+                      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                      body: formData
+                    });
+                    if (!response.ok) {
+                      throw new Error('HTTP error! status: ' + response.status);
+                    }
+                    const result = await response.json();
+                    if (result.success) {
+                      window.location.reload();
+                    } else {
+                      alert('Помилка при видаленні результату: ' + result.message);
+                    }
+                  } catch (error) {
+                    console.error('Error deleting result:', error);
+                    alert('Не вдалося видалити результат. Перевірте ваше з’єднання з Інтернетом.');
                   }
-                  const result = await response.json();
-                  if (result.success) {
-                    window.location.reload();
-                  } else {
-                    alert('Помилка при видаленні результату: ' + result.message);
-                  }
-                } catch (error) {
-                  console.error('Error deleting result:', error);
-                  alert('Не вдалося видалити результат. Перевірте ваше з’єднання з Інтернетом.');
                 }
               }
-            }
 
-            async function deleteAllResults() {
-              if (confirm('Ви впевнені, що хочете видалити всі результати? Цю дію не можна скасувати!')) {
-                try {
-                  const formData = new URLSearchParams();
-                  formData.append('_csrf', '${req.csrfToken()}');
-                  const response = await fetch('/admin/delete-all-results', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-                    body: formData
-                  });
-                  if (!response.ok) {
-                    throw new Error('HTTP error! status: ' + response.status);
+              async function deleteAllResults() {
+                if (confirm('Ви впевнені, що хочете видалити всі результати? Цю дію не можна скасувати!')) {
+                  try {
+                    const formData = new URLSearchParams();
+                    formData.append('_csrf', '${req.csrfToken()}');
+                    const response = await fetch('/admin/delete-all-results', {
+                      method: 'POST',
+                      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                      body: formData
+                    });
+                    if (!response.ok) {
+                      throw new Error('HTTP error! status: ' + response.status);
+                    }
+                    const result = await response.json();
+                    if (result.success) {
+                      window.location.reload();
+                    } else {
+                      alert('Помилка при видаленні всіх результатів: ' + result.message);
+                    }
+                  } catch (error) {
+                    console.error('Error deleting all results:', error);
+                    alert('Не вдалося видалити всі результати. Перевірте ваше з’єднання з Інтернетом.');
                   }
-                  const result = await response.json();
-                  if (result.success) {
-                    window.location.reload();
-                  } else {
-                    alert('Помилка при видаленні всіх результатів: ' + result.message);
-                  }
-                } catch (error) {
-                  console.error('Error deleting all results:', error);
-                  alert('Не вдалося видалити всі результати. Перевірте ваше з’єднання з Інтернетом.');
                 }
               }
-            }
+            ` : ''}
 
             function showAnswersModal(id, user, testName) {
               const answers = document.getElementById(id).value;
