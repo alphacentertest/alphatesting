@@ -251,9 +251,11 @@ const importUsersToMongoDB = async (filePath) => {
       const row = sheet.getRow(rowNumber);
       const username = String(row.getCell(1).value || '').trim();
       const password = String(row.getCell(2).value || '').trim();
+      const role = String(row.getCell(3).value || '').trim().toLowerCase(); // Отримуємо роль із третього стовпця
       if (username && password) {
         const hashedPassword = await bcrypt.hash(password, saltRounds);
-        users.push({ username, password: hashedPassword });
+        const userRole = role === 'admin' ? 'admin' : role === 'instructor' ? 'instructor' : 'user'; // Якщо роль не вказана, за замовчуванням user
+        users.push({ username, password: hashedPassword, role: userRole });
       }
     }
     if (users.length === 0) {
@@ -264,6 +266,7 @@ const importUsersToMongoDB = async (filePath) => {
     await db.collection('users').insertMany(users);
     logger.info(`Imported ${users.length} users to MongoDB with hashed passwords`);
     await CacheManager.invalidateCache('users', null);
+    await loadUsersToCache();
     return users.length;
   } catch (error) {
     logger.error('Error importing users to MongoDB', { message: error.message, stack: error.stack });
@@ -776,6 +779,8 @@ app.post('/login', [
     }
 
     const foundUser = userCache.find(user => user.username === username);
+    logger.info('User found in cache', { username, cachedPassword: foundUser?.password });
+
     if (!foundUser) {
       logger.warn('User not found', { username });
       return res.status(401).json({ success: false, message: 'Невірний логін або пароль' });
@@ -790,7 +795,7 @@ app.post('/login', [
     await checkLoginAttempts(ipAddress, true);
 
     const token = jwt.sign(
-      { username: foundUser.username },
+      { username: foundUser.username, role: foundUser.role }, // Додаємо роль у JWT
       process.env.JWT_SECRET || 'your-secret-key',
       { expiresIn: '24h' }
     );
@@ -804,10 +809,10 @@ app.post('/login', [
 
     await logActivity(foundUser.username, 'увійшов на сайт', ipAddress);
 
-    if (foundUser.username === 'admin') {
+    if (foundUser.role === 'admin') {
       res.json({ success: true, redirect: '/admin' });
     } else {
-      res.json({ success: true, redirect: '/select-test' });
+      res.json({ success: true, redirect: '/select-test' }); // Для instructor і user перенаправляємо на вибір тестів
     }
   } catch (error) {
     logger.error('Ошибка в /login', { message: error.message, stack: error.stack });
@@ -828,8 +833,7 @@ const checkAuth = (req, res, next) => {
   try {
     const decoded = jwt.verify(token, process.env.JWT_SECRET || 'your-secret-key');
     req.user = decoded.username;
-    const foundUser = userCache.find(user => user.username === req.user);
-    req.userRole = foundUser ? foundUser.role : 'user'; // Додаємо роль користувача
+    req.userRole = decoded.role; // Використовуємо роль із JWT
     next();
   } catch (error) {
     logger.error('JWT verification failed', { message: error.message, stack: error.stack });
@@ -847,7 +851,7 @@ const checkAdmin = (req, res, next) => {
 app.get('/select-test', checkAuth, (req, res) => {
   const startTime = Date.now();
   try {
-    if (req.user === 'admin') {
+    if (req.userRole === 'admin') {
       return res.redirect('/admin');
     }
     const html = `
@@ -865,6 +869,7 @@ app.get('/select-test', checkAuth, (req, res) => {
             button:hover { background-color: #45a049; }
             #logout { background-color: #ef5350; color: white; position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%); width: 200px; }
             .no-tests { color: red; font-size: 18px; margin-top: 20px; }
+            .results-btn { background-color: #007bff; color: white; margin-top: 20px; }
             @media (max-width: 600px) {
               h1 { font-size: 28px; }
               button { font-size: 20px; width: 90%; padding: 15px; }
@@ -881,6 +886,9 @@ app.get('/select-test', checkAuth, (req, res) => {
                 `).join('')
               : '<p class="no-tests">Немає доступних тестів</p>'
             }
+            ${req.userRole === 'instructor' ? `
+              <button class="results-btn" onclick="window.location.href='/admin/results'">Переглянути результати</button>
+            ` : ''}
           </div>
           <button id="logout" onclick="logout()">Вийти</button>
           <script>
@@ -1091,7 +1099,7 @@ app.get('/test', checkAuth, async (req, res) => {
 app.get('/test/question', checkAuth, (req, res) => {
   const startTime = Date.now();
   try {
-    if (req.user === 'admin') return res.redirect('/admin');
+    if (req.userRole === 'admin') return res.redirect('/admin');
     const userTest = userTests.get(req.user);
     if (!userTest) {
       return res.status(400).send('Тест не розпочато');
@@ -1142,6 +1150,7 @@ app.get('/test/question', checkAuth, (req, res) => {
             .back-btn { background-color: red; color: white; }
             .next-btn { background-color: blue; color: white; }
             .finish-btn { background-color: green; color: white; }
+            .results-btn { background-color: #007bff; color: white; }
             button:disabled { background-color: grey; cursor: not-allowed; }
             #timer { font-size: 24px; margin-bottom: 20px; text-align: center; }
             #confirm-modal { display: none; position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%); background: white; padding: 20px; border: 2px solid black; z-index: 1000; }
@@ -1265,7 +1274,7 @@ app.get('/test/question', checkAuth, (req, res) => {
         inputHtml += `<span class="question-text">${part}</span>`;
         if (i < parts.length - 1) {
           const userAnswer = userAnswers[i] || '';
-          inputHtml += `<input type="text" class="blank-input" id="blank_${i}" value="${userAnswer.replace(/"/g, '"')}" placeholder="Введіть відповідь" autocomplete="off">`; // Додаємо autocomplete="off"
+          inputHtml += `<input type="text" class="blank-input" id="blank_${i}" value="${userAnswer.replace(/"/g, '"')}" placeholder="Введіть відповідь" autocomplete="off">`;
         }
       });
       html += inputHtml;
@@ -1344,6 +1353,9 @@ app.get('/test/question', checkAuth, (req, res) => {
             <button class="back-btn" ${index === 0 ? 'disabled' : ''} onclick="window.location.href='/test/question?index=${index - 1}'">Назад</button>
             <button id="submit-answer" class="next-btn" ${index === questions.length - 1 ? 'disabled' : ''} onclick="saveAndNext(${index})">Далі</button>
             <button class="finish-btn" onclick="showConfirm(${index})">Завершити тест</button>
+            ${req.userRole === 'instructor' ? `
+              <button class="results-btn" onclick="window.location.href='/admin/results'">Переглянути результати</button>
+            ` : ''}
           </div>
           <div id="confirm-modal">
             <h2>Ви дійсно бажаєте завершити тест?</h2>
