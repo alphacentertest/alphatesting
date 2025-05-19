@@ -2583,6 +2583,7 @@ app.get('/admin/questions', checkAuth, checkAdmin, async (req, res) => {
   const startTime = Date.now();
   try {
     const page = parseInt(req.query.page) || 1;
+    const sortBy = req.query.sortBy || 'order'; // За замовчуванням сортуємо за порядком
     const limit = 10;
     const skip = (page - 1) * limit;
 
@@ -2594,12 +2595,31 @@ app.get('/admin/questions', checkAuth, checkAdmin, async (req, res) => {
     try {
       totalQuestions = await db.collection('questions').countDocuments();
       totalPages = Math.ceil(totalQuestions / limit);
-      questions = await db.collection('questions')
-        .find({})
-        .sort({ order: 1 }) // Сортування за полем order
-        .skip(skip)
-        .limit(limit)
-        .toArray();
+
+      if (sortBy === 'testName') {
+        // Отримуємо всі питання без сортування з бази
+        questions = await db.collection('questions')
+          .find({})
+          .skip(skip)
+          .limit(limit)
+          .toArray();
+
+        // Сортуємо питання за назвою тесту (на стороні сервера)
+        questions.sort((a, b) => {
+          const testNameA = testNames[a.testNumber]?.name || '';
+          const testNameB = testNames[b.testNumber]?.name || '';
+          return testNameA.localeCompare(testNameB, 'uk'); // Сортування з урахуванням української локалізації
+        });
+      } else {
+        // Сортування за порядком (order), як було раніше
+        questions = await db.collection('questions')
+          .find({})
+          .sort({ order: 1 })
+          .skip(skip)
+          .limit(limit)
+          .toArray();
+      }
+
       await CacheManager.invalidateCache('questions', null);
     } catch (error) {
       logger.error('Error fetching questions from MongoDB', { message: error.message, stack: error.stack });
@@ -2622,6 +2642,7 @@ app.get('/admin/questions', checkAuth, checkAdmin, async (req, res) => {
             .action-btn.edit { background-color: #4CAF50; color: white; }
             .action-btn.delete { background-color: #ff4d4d; color: white; }
             .nav-btn { background-color: #007bff; color: white; }
+            .sort-btn { padding: 5px 10px; margin: 5px; cursor: pointer; border: none; border-radius: 5px; background-color: #007bff; color: white; }
             .pagination { margin-top: 20px; }
             .pagination a { margin: 0 5px; padding: 5px 10px; background-color: #007bff; color: white; text-decoration: none; border-radius: 5px; }
             .pagination a:hover { background-color: #0056b3; }
@@ -2631,6 +2652,10 @@ app.get('/admin/questions', checkAuth, checkAdmin, async (req, res) => {
           <h1>Керування питаннями</h1>
           <button class="nav-btn" onclick="window.location.href='/admin'">Повернутися до адмін-панелі</button>
           <button class="nav-btn" onclick="window.location.href='/admin/add-question'">Додати питання</button>
+          <div>
+            <button class="sort-btn" onclick="window.location.href='/admin/questions?page=${page}&sortBy=order'">Сортувати за порядком</button>
+            <button class="sort-btn" onclick="window.location.href='/admin/questions?page=${page}&sortBy=testName'">Сортувати за назвою тесту</button>
+          </div>
     `;
     if (errorMessage) {
       adminHtml += `<p class="error">${errorMessage}</p>`;
@@ -2666,9 +2691,9 @@ app.get('/admin/questions', checkAuth, checkAdmin, async (req, res) => {
     adminHtml += `
           </table>
           <div class="pagination">
-            ${page > 1 ? `<a href="/admin/questions?page=${page - 1}">Попередня</a>` : ''}
+            ${page > 1 ? `<a href="/admin/questions?page=${page - 1}&sortBy=${sortBy}">Попередня</a>` : ''}
             <span>Сторінка ${page} з ${totalPages}</span>
-            ${page < totalPages ? `<a href="/admin/questions?page=${page + 1}">Наступна</a>` : ''}
+            ${page < totalPages ? `<a href="/admin/questions?page=${page + 1}&sortBy=${sortBy}">Наступна</a>` : ''}
           </div>
           <script>
             async function deleteQuestion(id) {
