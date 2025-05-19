@@ -3567,7 +3567,11 @@ app.get('/admin/results', checkAuth, async (req, res) => {
         </head>
         <body>
           <h1>Результати всіх користувачів</h1>
-          <button class="nav-btn" onclick="window.location.href='/admin'">Повернутися до адмін-панелі</button>
+          ${req.userRole === 'admin' ? `
+            <button class="nav-btn" onclick="window.location.href='/admin'">Повернутися до адмін-панелі</button>
+          ` : `
+            <button class="nav-btn" onclick="window.location.href='/select-test'">Повернутися до вибору тестів</button>
+          `}
     `;
     if (errorMessage) {
       adminHtml += `<p class="error">${errorMessage}</p>`;
