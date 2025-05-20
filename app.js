@@ -155,19 +155,20 @@ let testNames = {};
 const loadTestsFromMongoDB = async () => {
   try {
     const tests = await db.collection('tests').find({}).toArray();
-    logger.info('Raw tests data from MongoDB', { tests });
-    testNames = tests.reduce((acc, test) => {
-      acc[test.testNumber] = {
+    testNames = {};
+    tests.forEach(test => {
+      testNames[test.testNumber] = {
         name: test.name,
         timeLimit: test.timeLimit,
         randomQuestions: test.randomQuestions,
         randomAnswers: test.randomAnswers,
         questionLimit: test.questionLimit,
-        attemptLimit: test.attemptLimit
+        attemptLimit: test.attemptLimit,
+        isQuickTest: test.isQuickTest || false,
+        timePerQuestion: test.timePerQuestion || null
       };
-      return acc;
-    }, {});
-    logger.info('Loaded tests from MongoDB', { count: Object.keys(testNames).length, testNames });
+    });
+    logger.info(`Loaded ${tests.length} tests from MongoDB`);
   } catch (error) {
     logger.error('Error loading tests from MongoDB', { message: error.message, stack: error.stack });
     throw error;
@@ -178,12 +179,23 @@ const saveTestToMongoDB = async (testNumber, testData) => {
   try {
     await db.collection('tests').updateOne(
       { testNumber },
-      { $set: { testNumber, ...testData } },
+      { 
+        $set: { 
+          testNumber,
+          name: testData.name,
+          timeLimit: testData.timeLimit,
+          randomQuestions: testData.randomQuestions,
+          randomAnswers: testData.randomAnswers,
+          questionLimit: testData.questionLimit,
+          attemptLimit: testData.attemptLimit,
+          isQuickTest: testData.isQuickTest || false, // Додаємо isQuickTest
+          timePerQuestion: testData.timePerQuestion || null // Додаємо timePerQuestion
+        }
+      },
       { upsert: true }
     );
-    logger.info('Saved test to MongoDB', { testNumber });
   } catch (error) {
-    logger.error('Error saving test to MongoDB', { testNumber, message: error.message, stack: error.stack });
+    logger.error('Error saving test to MongoDB', { message: error.message, stack: error.stack });
     throw error;
   }
 };
@@ -1018,7 +1030,7 @@ const checkTestAttempts = async (user, testNumber) => {
 app.get('/test', checkAuth, async (req, res) => {
   const startTime = Date.now();
   try {
-    if (req.user === 'admin') return res.redirect('/admin');
+    if (req.userRole === 'admin') return res.redirect('/admin');
     const testNumber = req.query.test;
     if (!testNumber || !testNames[testNumber]) {
       return res.status(400).send('Номер тесту не вказано або тест не знайдено');
@@ -1055,15 +1067,26 @@ app.get('/test', checkAuth, async (req, res) => {
 
     let questions = await loadQuestions(testNumber);
     const userVariant = Math.floor(Math.random() * 3) + 1;
+    logger.info(`Assigned variant to user ${req.user} for test ${testNumber}: Variant ${userVariant}`);
+
     questions = questions.filter(q => !q.variant || q.variant === '' || q.variant === `Variant ${userVariant}`);
+    logger.info(`Filtered questions for test ${testNumber}, variant ${userVariant}: ${questions.length} questions found`);
+
+    if (questions.length === 0) {
+      return res.status(400).send(`Немає питань для варіанту ${userVariant} у тесті ${testNumber}`);
+    }
+
     const questionLimit = testNames[testNumber].questionLimit;
     if (questionLimit && questions.length > questionLimit) {
       questions = shuffleArray([...questions]).slice(0, questionLimit);
     }
-    if (testNames[testNumber].randomQuestions) {
+
+    // Якщо тест швидкий, увімкнемо випадковий вибір питань і відповідей
+    const isQuickTest = testNames[testNumber].isQuickTest;
+    if (isQuickTest || testNames[testNumber].randomQuestions) {
       questions = shuffleArray([...questions]);
     }
-    if (testNames[testNumber].randomAnswers) {
+    if (isQuickTest || testNames[testNumber].randomAnswers) {
       questions = questions.map(q => {
         if (q.options && q.options.length > 0 && q.type !== 'ordering' && q.type !== 'matching') {
           const shuffledOptions = shuffleArray([...q.options]);
@@ -1075,6 +1098,7 @@ app.get('/test', checkAuth, async (req, res) => {
         return q;
       });
     }
+
     userTests.set(req.user, {
       testNumber,
       questions,
@@ -1082,8 +1106,11 @@ app.get('/test', checkAuth, async (req, res) => {
       currentQuestion: 0,
       startTime: Date.now(),
       timeLimit: testNames[testNumber].timeLimit * 1000,
-      variant: userVariant
+      variant: userVariant,
+      isQuickTest: isQuickTest,
+      timePerQuestion: testNames[testNumber].timePerQuestion // Зберігаємо час на питання
     });
+
     const ipAddress = req.headers['x-forwarded-for'] || req.socket.remoteAddress;
     await logActivity(req.user, `розпочав тест ${testNames[testNumber].name}`, ipAddress);
     res.redirect(`/test/question?index=0`);
@@ -1104,7 +1131,7 @@ app.get('/test/question', checkAuth, (req, res) => {
     if (!userTest) {
       return res.status(400).send('Тест не розпочато');
     }
-    const { questions, testNumber, answers, currentQuestion, startTime, timeLimit } = userTest;
+    const { questions, testNumber, answers, currentQuestion, startTime, timeLimit, isQuickTest, timePerQuestion } = userTest;
     const index = parseInt(req.query.index) || 0;
     if (index < 0 || index >= questions.length) {
       return res.status(400).send('Невірний номер питання');
@@ -1153,6 +1180,12 @@ app.get('/test/question', checkAuth, (req, res) => {
             .results-btn { background-color: #007bff; color: white; }
             button:disabled { background-color: grey; cursor: not-allowed; }
             #timer { font-size: 24px; margin-bottom: 20px; text-align: center; }
+            #question-timer { position: relative; width: 60px; height: 60px; margin: 0 auto 10px auto; }
+            #question-timer svg { width: 100%; height: 100%; }
+            #question-timer circle { fill: none; stroke-width: 5; }
+            #question-timer .timer-circle-bg { stroke: #e0e0e0; }
+            #question-timer .timer-circle { stroke: #ff4d4d; stroke-dasharray: 188; stroke-dashoffset: 0; transition: stroke-dashoffset 1s linear; }
+            #question-timer .timer-text { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); font-size: 18px; font-weight: bold; color: #333; }
             #confirm-modal { display: none; position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%); background: white; padding: 20px; border: 2px solid black; z-index: 1000; }
             #confirm-modal button { margin: 0 10px; }
             .question-box { padding: 10px; margin: 5px 0; }
@@ -1248,6 +1281,17 @@ app.get('/test/question', checkAuth, (req, res) => {
           </div>
           <div id="question-container">
     `;
+    if (isQuickTest) {
+      html += `
+        <div id="question-timer">
+          <svg viewBox="0 0 60 60">
+            <circle class="timer-circle-bg" cx="30" cy="30" r="30" />
+            <circle class="timer-circle" cx="30" cy="30" r="30" />
+          </svg>
+          <div class="timer-text" id="timer-text">${timePerQuestion}</div>
+        </div>
+      `;
+    }
     if (q.picture && q.picture.trim() !== '') {
       html += `
         <div id="image-container">
@@ -1350,8 +1394,10 @@ app.get('/test/question', checkAuth, (req, res) => {
             </div>
           </div>
           <div class="button-container">
-            <button class="back-btn" ${index === 0 ? 'disabled' : ''} onclick="window.location.href='/test/question?index=${index - 1}'">Назад</button>
-            <button id="submit-answer" class="next-btn" ${index === questions.length - 1 ? 'disabled' : ''} onclick="saveAndNext(${index})">Далі</button>
+            ${!isQuickTest ? `
+              <button class="back-btn" ${index === 0 ? 'disabled' : ''} onclick="window.location.href='/test/question?index=${index - 1}'">Назад</button>
+              <button id="submit-answer" class="next-btn" ${index === questions.length - 1 ? 'disabled' : ''} onclick="saveAndNext(${index})">Далі</button>
+            ` : ''}
             <button class="finish-btn" onclick="showConfirm(${index})">Завершити тест</button>
             ${req.userRole === 'instructor' ? `
               <button class="results-btn" onclick="window.location.href='/admin/results'">Переглянути результати</button>
@@ -1366,6 +1412,8 @@ app.get('/test/question', checkAuth, (req, res) => {
             const startTime = ${startTime};
             const timeLimit = ${timeLimit};
             const timerElement = document.getElementById('timer');
+            const isQuickTest = ${isQuickTest};
+            const timePerQuestion = ${timePerQuestion || 0};
             let timeAway = 0;
             let lastBlurTime = 0;
             let switchCount = 0;
@@ -1377,6 +1425,7 @@ app.get('/test/question', checkAuth, (req, res) => {
             const questionStartTime = ${userTest.answerTimestamps[index] || Date.now()};
             let selectedOptions = ${selectedOptionsString};
             let matchingPairs = ${JSON.stringify(answers[index] || [])};
+            let questionTimeRemaining = timePerQuestion;
 
             function updateTimer() {
               try {
@@ -1395,6 +1444,26 @@ app.get('/test/question', checkAuth, (req, res) => {
               }
             }
             requestAnimationFrame(updateTimer);
+
+            if (isQuickTest) {
+              function updateQuestionTimer() {
+                questionTimeRemaining = Math.max(0, timePerQuestion - Math.floor((Date.now() - questionStartTime) / 1000));
+                const timerText = document.getElementById('timer-text');
+                const timerCircle = document.querySelector('#question-timer .timer-circle');
+                if (timerText && timerCircle) {
+                  timerText.textContent = questionTimeRemaining;
+                  const circumference = 188; // Довжина кола (2 * π * r, де r = 30)
+                  const offset = (questionTimeRemaining / timePerQuestion) * circumference;
+                  timerCircle.style.strokeDashoffset = circumference - offset;
+                }
+                if (questionTimeRemaining <= 0) {
+                  saveAndNext(${index}); // Автоматичний перехід до наступного питання
+                } else {
+                  requestAnimationFrame(updateQuestionTimer);
+                }
+              }
+              requestAnimationFrame(updateQuestionTimer);
+            }
 
             window.addEventListener('blur', () => {
               lastBlurTime = Date.now();
@@ -1488,7 +1557,11 @@ app.get('/test/question', checkAuth, (req, res) => {
 
                 const result = await response.json();
                 if (result.success) {
-                  window.location.href = '/test/question?index=' + (index + 1);
+                  if (isQuickTest && index < ${questions.length - 1}) {
+                    window.location.href = '/test/question?index=' + (index + 1);
+                  } else {
+                    window.location.href = '/result';
+                  }
                 } else {
                   console.error('Error saving answer:', result.error);
                   alert('Помилка збереження відповіді');
@@ -3865,6 +3938,10 @@ app.get('/admin/edit-tests', checkAuth, checkAdmin, (req, res) => {
                 <input type="text" id="test${num}" name="test${num}" value="${data.name}" required>
                 <label for="time${num}">Час (сек):</label>
                 <input type="number" id="time${num}" name="time${num}" value="${data.timeLimit}" required min="1">
+                <label for="quickTest${num}">Quick Test:</label>
+                <input type="checkbox" id="quickTest${num}" name="quickTest${num}" ${data.isQuickTest ? 'checked' : ''}>
+                <label for="timePerQuestion${num}">Час на питання (сек):</label>
+                <input type="number" id="timePerQuestion${num}" name="timePerQuestion${num}" value="${data.timePerQuestion || ''}" placeholder="10" min="1">
                 <label for="randomQuestions${num}">Випадковий вибір питань:</label>
                 <input type="checkbox" id="randomQuestions${num}" name="randomQuestions${num}" ${data.randomQuestions ? 'checked' : ''}>
                 <label for="randomAnswers${num}">Випадковий вибір відповідей:</label>
@@ -3921,6 +3998,7 @@ app.post('/admin/edit-tests', checkAuth, checkAdmin, async (req, res) => {
       const timeLimit = req.body[`time${num}`];
       const questionLimit = req.body[`questionLimit${num}`];
       const attemptLimit = req.body[`attemptLimit${num}`];
+      const timePerQuestion = req.body[`timePerQuestion${num}`];
 
       if (!testName || testName.length < 1 || testName.length > 100) {
         validationErrors.push(`Назва тесту ${num} має бути від 1 до 100 символів`);
@@ -3933,6 +4011,9 @@ app.post('/admin/edit-tests', checkAuth, checkAdmin, async (req, res) => {
       }
       if (!attemptLimit || isNaN(parseInt(attemptLimit)) || parseInt(attemptLimit) < 1) {
         validationErrors.push(`Ліміт спроб для тесту ${num} має бути числом більше 0`);
+      }
+      if (timePerQuestion && (isNaN(parseInt(timePerQuestion)) || parseInt(timePerQuestion) < 1)) {
+        validationErrors.push(`Час на питання для тесту ${num} має бути числом більше 0`);
       }
     });
 
@@ -3947,6 +4028,9 @@ app.post('/admin/edit-tests', checkAuth, checkAdmin, async (req, res) => {
       const randomAnswers = req.body[`randomAnswers${num}`] === 'on';
       const questionLimit = req.body[`questionLimit${num}`] ? parseInt(req.body[`questionLimit${num}`]) : null;
       const attemptLimit = parseInt(req.body[`attemptLimit${num}`]);
+      const isQuickTest = req.body[`quickTest${num}`] === 'on';
+      const timePerQuestion = req.body[`timePerQuestion${num}`] ? parseInt(req.body[`timePerQuestion${num}`]) : null;
+
       if (testName && timeLimit && attemptLimit) {
         testNames[num] = {
           name: testName,
@@ -3954,7 +4038,9 @@ app.post('/admin/edit-tests', checkAuth, checkAdmin, async (req, res) => {
           randomQuestions,
           randomAnswers,
           questionLimit,
-          attemptLimit
+          attemptLimit,
+          isQuickTest, // Зберігаємо Quick Test
+          timePerQuestion // Зберігаємо час на питання
         };
         await saveTestToMongoDB(num, testNames[num]);
       }
