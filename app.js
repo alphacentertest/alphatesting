@@ -1144,10 +1144,17 @@ app.get('/test/question', checkAuth, (req, res) => {
       number: i + 1,
       answered: answers[i] && (Array.isArray(answers[i]) ? answers[i].length > 0 : answers[i].trim() !== '')
     }));
+
+    // Розрахунок загального часу для тесту
+    let totalTestTime = timeLimit / 1000; // Загальний час у секундах для звичайного тесту
+    if (isQuickTest) {
+      totalTestTime = questions.length * timePerQuestion; // Для Quick Test: кількість питань * час на питання
+    }
     const elapsedTime = Math.floor((Date.now() - startTime) / 1000);
-    const remainingTime = Math.max(0, Math.floor(timeLimit / 1000) - elapsedTime);
+    const remainingTime = Math.max(0, totalTestTime - elapsedTime);
     const minutes = Math.floor(remainingTime / 60).toString().padStart(2, '0');
     const seconds = (remainingTime % 60).toString().padStart(2, '0');
+
     const selectedOptions = answers[index] || [];
     const selectedOptionsString = JSON.stringify(selectedOptions).replace(/'/g, "\\'");
 
@@ -1180,12 +1187,12 @@ app.get('/test/question', checkAuth, (req, res) => {
             .results-btn { background-color: #007bff; color: white; }
             button:disabled { background-color: grey; cursor: not-allowed; }
             #timer { font-size: 24px; margin-bottom: 20px; text-align: center; }
-            #question-timer { position: relative; width: 60px; height: 60px; margin: 0 auto 10px auto; }
-            #question-timer svg { width: 100%; height: 100%; }
-            #question-timer circle { fill: none; stroke-width: 5; }
+            #question-timer { position: relative; width: 80px; height: 80px; margin: 0 auto 10px auto; }
+            #question-timer svg { width: 100%; height: 100%; transform: rotate(-90deg); }
+            #question-timer circle { fill: none; stroke-width: 8; }
             #question-timer .timer-circle-bg { stroke: #e0e0e0; }
-            #question-timer .timer-circle { stroke: #ff4d4d; stroke-dasharray: 188; stroke-dashoffset: 0; transition: stroke-dashoffset 1s linear; }
-            #question-timer .timer-text { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); font-size: 18px; font-weight: bold; color: #333; }
+            #question-timer .timer-circle { stroke: #ff4d4d; stroke-dasharray: 251; stroke-dashoffset: 0; transition: stroke-dashoffset 1s linear; }
+            #question-timer .timer-text { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); font-size: 20px; font-weight: bold; color: #333; }
             #confirm-modal { display: none; position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%); background: white; padding: 20px; border: 2px solid black; z-index: 1000; }
             #confirm-modal button { margin: 0 10px; }
             .question-box { padding: 10px; margin: 5px 0; }
@@ -1284,9 +1291,9 @@ app.get('/test/question', checkAuth, (req, res) => {
     if (isQuickTest) {
       html += `
         <div id="question-timer">
-          <svg viewBox="0 0 60 60">
-            <circle class="timer-circle-bg" cx="30" cy="30" r="30" />
-            <circle class="timer-circle" cx="30" cy="30" r="30" />
+          <svg viewBox="0 0 80 80">
+            <circle class="timer-circle-bg" cx="40" cy="40" r="36" />
+            <circle class="timer-circle" cx="40" cy="40" r="36" />
           </svg>
           <div class="timer-text" id="timer-text">${timePerQuestion}</div>
         </div>
@@ -1410,7 +1417,7 @@ app.get('/test/question', checkAuth, (req, res) => {
           </div>
           <script>
             const startTime = ${startTime};
-            const timeLimit = ${timeLimit};
+            const timeLimit = ${totalTestTime * 1000}; // Використовуємо розрахований час для Quick Test
             const timerElement = document.getElementById('timer');
             const isQuickTest = ${isQuickTest};
             const timePerQuestion = ${timePerQuestion || 0};
@@ -1452,12 +1459,12 @@ app.get('/test/question', checkAuth, (req, res) => {
                 const timerCircle = document.querySelector('#question-timer .timer-circle');
                 if (timerText && timerCircle) {
                   timerText.textContent = questionTimeRemaining;
-                  const circumference = 188; // Довжина кола (2 * π * r, де r = 30)
+                  const circumference = 251; // Довжина кола (2 * π * r, де r = 36)
                   const offset = (questionTimeRemaining / timePerQuestion) * circumference;
-                  timerCircle.style.strokeDashoffset = circumference - offset;
+                  timerCircle.style.strokeDashoffset = offset;
                 }
                 if (questionTimeRemaining <= 0) {
-                  saveAndNext(${index}); // Автоматичний перехід до наступного питання
+                  saveAndNext(${index});
                 } else {
                   requestAnimationFrame(updateQuestionTimer);
                 }
