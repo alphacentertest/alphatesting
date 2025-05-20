@@ -1259,7 +1259,7 @@ app.get('/test/question', checkAuth, (req, res) => {
         </head>
         <body>
           <h1>${testNames[testNumber].name}</h1>
-          <div id="timer">Залишилось часу: ${minutes} мм ${seconds} с</div>
+          <div id="timer">Залишилось часу: ${minutes} хв ${seconds} с</div>
           <div class="progress-bar">
     `;
     if (progress.length <= 10) {
@@ -1429,47 +1429,58 @@ app.get('/test/question', checkAuth, (req, res) => {
             let lastMouseMoveTime = 0;
             let lastKeydownTime = 0;
             const debounceDelay = 100;
-            const questionStartTime = ${userTest.answerTimestamps[index] || Date.now()};
+            const questionStartTime = Date.now(); // Використовуємо поточний час для точного старту
             let selectedOptions = ${selectedOptionsString};
             let matchingPairs = ${JSON.stringify(answers[index] || [])};
             let questionTimeRemaining = timePerQuestion;
+            let lastQuestionTimerUpdate = Date.now();
 
             function updateTimer() {
-              try {
-                const elapsedTime = Math.floor((Date.now() - startTime) / 1000);
-                const remainingTime = Math.max(0, Math.floor(timeLimit / 1000) - elapsedTime);
-                const minutes = Math.floor(remainingTime / 60).toString().padStart(2, '0');
-                const seconds = (remainingTime % 60).toString().padStart(2, '0');
-                timerElement.textContent = 'Залишилось часу: ' + minutes + ' мм ' + seconds + ' с';
-                if (remainingTime <= 0) {
-                  window.location.href = '/result';
-                } else {
-                  requestAnimationFrame(updateTimer);
-                }
-              } catch (error) {
-                console.error('Error in updateTimer:', error);
+              const elapsedTime = Math.floor((Date.now() - startTime) / 1000);
+              const remainingTime = Math.max(0, Math.floor(timeLimit / 1000) - elapsedTime);
+              const minutes = Math.floor(remainingTime / 60).toString().padStart(2, '0');
+              const seconds = (remainingTime % 60).toString().padStart(2, '0');
+              timerElement.textContent = 'Залишилось часу: ' + minutes + ' хв ' + seconds + ' с';
+              if (remainingTime <= 0) {
+                window.location.href = '/result';
               }
             }
-            requestAnimationFrame(updateTimer);
+
+            setInterval(updateTimer, 1000); // Оновлення загального таймера кожну секунду
 
             if (isQuickTest) {
               function updateQuestionTimer() {
-                questionTimeRemaining = Math.max(0, timePerQuestion - Math.floor((Date.now() - questionStartTime) / 1000));
+                const now = Date.now();
+                const elapsedSinceLastUpdate = (now - lastQuestionTimerUpdate) / 1000;
+                lastQuestionTimerUpdate = now;
+                questionTimeRemaining = Math.max(0, questionTimeRemaining - elapsedSinceLastUpdate);
                 const timerText = document.getElementById('timer-text');
                 const timerCircle = document.querySelector('#question-timer .timer-circle');
                 if (timerText && timerCircle) {
-                  timerText.textContent = questionTimeRemaining;
+                  timerText.textContent = Math.ceil(questionTimeRemaining);
                   const circumference = 251; // Довжина кола (2 * π * r, де r = 36)
-                  const offset = (1 - questionTimeRemaining / timePerQuestion) * circumference; // Зменшуємо коло
+                  const offset = (1 - questionTimeRemaining / timePerQuestion) * circumference;
                   timerCircle.style.strokeDashoffset = offset;
                 }
                 if (questionTimeRemaining <= 0) {
                   saveAndNext(${index});
-                } else {
-                  requestAnimationFrame(updateQuestionTimer);
                 }
               }
-              requestAnimationFrame(updateQuestionTimer);
+
+              // Використовуємо setInterval для оновлення таймера питання
+              const questionTimerInterval = setInterval(() => {
+                updateQuestionTimer();
+                if (questionTimeRemaining <= 0) {
+                  clearInterval(questionTimerInterval);
+                }
+              }, 100); // Оновлення кожні 100 мс для плавності
+
+              // Перевірка часу при поверненні до вкладки
+              document.addEventListener('visibilitychange', () => {
+                if (!document.hidden) {
+                  updateQuestionTimer();
+                }
+              });
             }
 
             window.addEventListener('blur', () => {
