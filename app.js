@@ -1138,7 +1138,7 @@ app.get('/test/question', checkAuth, (req, res) => {
     }
     userTest.currentQuestion = index;
     userTest.answerTimestamps = userTest.answerTimestamps || {};
-    userTest.answerTimestamps[index] = Date.now(); // Час початку питання (для загального використання)
+    userTest.answerTimestamps[index] = Date.now();
     const q = questions[index];
     const progress = Array.from({ length: questions.length }, (_, i) => ({
       number: i + 1,
@@ -1418,9 +1418,11 @@ app.get('/test/question', checkAuth, (req, res) => {
           <script>
             const startTime = ${startTime};
             const timeLimit = ${totalTestTime * 1000};
+            const totalTestTime = ${totalTestTime};
             const timerElement = document.getElementById('timer');
             const isQuickTest = ${isQuickTest};
             const timePerQuestion = ${timePerQuestion || 0};
+            const totalQuestions = ${questions.length};
             let timeAway = 0;
             let lastBlurTime = 0;
             let switchCount = 0;
@@ -1429,32 +1431,43 @@ app.get('/test/question', checkAuth, (req, res) => {
             let lastMouseMoveTime = 0;
             let lastKeydownTime = 0;
             const debounceDelay = 100;
-            const questionStartTime = performance.now(); // Точний час початку на клієнті
             let selectedOptions = ${selectedOptionsString};
             let matchingPairs = ${JSON.stringify(answers[index] || [])};
             let questionTimeRemaining = timePerQuestion;
-            let lastQuestionTimerUpdate = questionStartTime;
             let isTabActive = true;
+            let currentQuestionIndex = ${index};
+            let lastGlobalUpdateTime = Date.now();
 
-            function updateTimer() {
-              const elapsedTime = Math.floor((Date.now() - startTime) / 1000);
-              const remainingTime = Math.max(0, Math.floor(timeLimit / 1000) - elapsedTime);
+            function updateGlobalTimer() {
+              const now = Date.now();
+              const elapsedTime = Math.floor((now - startTime) / 1000);
+              const remainingTime = Math.max(0, totalTestTime - elapsedTime);
               const minutes = Math.floor(remainingTime / 60).toString().padStart(2, '0');
               const seconds = (remainingTime % 60).toString().padStart(2, '0');
               timerElement.textContent = 'Залишилось часу: ' + minutes + ' хв ' + seconds + ' с';
+              lastGlobalUpdateTime = now;
+
+              if (isQuickTest) {
+                const elapsedQuestions = Math.floor(elapsedTime / timePerQuestion);
+                if (elapsedQuestions > currentQuestionIndex && elapsedQuestions < totalQuestions) {
+                  currentQuestionIndex = elapsedQuestions;
+                  saveAndNext(currentQuestionIndex - 1);
+                }
+              }
+
               if (remainingTime <= 0) {
                 window.location.href = '/result';
               }
             }
 
-            setInterval(updateTimer, 1000);
+            setInterval(updateGlobalTimer, 1000);
 
             if (isQuickTest) {
               function updateQuestionTimer() {
-                const now = performance.now();
-                const elapsedSinceLastUpdate = (now - lastQuestionTimerUpdate) / 1000;
-                lastQuestionTimerUpdate = now;
-                questionTimeRemaining = Math.max(0, timePerQuestion - ((now - questionStartTime) / 1000));
+                const now = Date.now();
+                const elapsedTime = Math.floor((now - startTime) / 1000);
+                const currentQuestionElapsed = elapsedTime % timePerQuestion;
+                questionTimeRemaining = Math.max(0, timePerQuestion - currentQuestionElapsed);
                 const timerText = document.getElementById('timer-text');
                 const timerCircle = document.querySelector('#question-timer .timer-circle');
                 if (timerText && timerCircle) {
@@ -1463,24 +1476,22 @@ app.get('/test/question', checkAuth, (req, res) => {
                   const offset = (1 - questionTimeRemaining / timePerQuestion) * circumference;
                   timerCircle.style.strokeDashoffset = offset;
                 }
-                if (questionTimeRemaining <= 0) {
-                  saveAndNext(${index});
-                }
               }
 
               const questionTimerInterval = setInterval(() => {
                 if (isTabActive) {
                   updateQuestionTimer();
                 }
-                if (questionTimeRemaining <= 0) {
+                if (currentQuestionIndex >= totalQuestions - 1 && questionTimeRemaining <= 0) {
                   clearInterval(questionTimerInterval);
+                  saveAndNext(currentQuestionIndex);
                 }
               }, 50);
 
               document.addEventListener('visibilitychange', () => {
                 isTabActive = !document.hidden;
                 if (isTabActive) {
-                  lastQuestionTimerUpdate = performance.now();
+                  updateGlobalTimer();
                   updateQuestionTimer();
                 }
               });
@@ -1489,6 +1500,7 @@ app.get('/test/question', checkAuth, (req, res) => {
             window.addEventListener('blur', () => {
               if (isTabActive) {
                 lastBlurTime = performance.now();
+                switchCount++;
                 isTabActive = false;
               }
             });
@@ -1497,7 +1509,7 @@ app.get('/test/question', checkAuth, (req, res) => {
               if (!isTabActive) {
                 const now = performance.now();
                 if (lastBlurTime > 0) {
-                  timeAway += (now - lastBlurTime) / 1000; // Накопичуємо час у секундах
+                  timeAway += (now - lastBlurTime) / 1000;
                 }
                 lastBlurTime = 0;
                 isTabActive = true;
@@ -1562,7 +1574,7 @@ app.get('/test/question', checkAuth, (req, res) => {
                     answers.push(input ? input.value.trim() : '');
                   }
                 }
-                const responseTime = (performance.now() - questionStartTime) / 1000;
+                const responseTime = Math.min(timePerQuestion, (Date.now() - startTime) / 1000 - (index * timePerQuestion));
 
                 const formData = new URLSearchParams();
                 formData.append('index', index);
@@ -1624,7 +1636,7 @@ app.get('/test/question', checkAuth, (req, res) => {
                     answers.push(input ? input.value.trim() : '');
                   }
                 }
-                const responseTime = (performance.now() - questionStartTime) / 1000;
+                const responseTime = Math.min(timePerQuestion, (Date.now() - startTime) / 1000 - (index * timePerQuestion));
 
                 const formData = new URLSearchParams();
                 formData.append('index', index);
