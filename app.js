@@ -1138,8 +1138,7 @@ app.get('/test/question', checkAuth, (req, res) => {
     }
     userTest.currentQuestion = index;
     userTest.answerTimestamps = userTest.answerTimestamps || {};
-    const questionStartTime = Date.now(); // Час початку питання на сервері
-    userTest.answerTimestamps[index] = questionStartTime;
+    userTest.answerTimestamps[index] = Date.now(); // Час початку питання (для загального використання)
     const q = questions[index];
     const progress = Array.from({ length: questions.length }, (_, i) => ({
       number: i + 1,
@@ -1430,11 +1429,12 @@ app.get('/test/question', checkAuth, (req, res) => {
             let lastMouseMoveTime = 0;
             let lastKeydownTime = 0;
             const debounceDelay = 100;
-            const questionStartTime = ${questionStartTime}; // Час початку питання з сервера
+            const questionStartTime = performance.now(); // Точний час початку на клієнті
             let selectedOptions = ${selectedOptionsString};
             let matchingPairs = ${JSON.stringify(answers[index] || [])};
             let questionTimeRemaining = timePerQuestion;
             let lastQuestionTimerUpdate = questionStartTime;
+            let isTabActive = true;
 
             function updateTimer() {
               const elapsedTime = Math.floor((Date.now() - startTime) / 1000);
@@ -1451,7 +1451,7 @@ app.get('/test/question', checkAuth, (req, res) => {
 
             if (isQuickTest) {
               function updateQuestionTimer() {
-                const now = Date.now();
+                const now = performance.now();
                 const elapsedSinceLastUpdate = (now - lastQuestionTimerUpdate) / 1000;
                 lastQuestionTimerUpdate = now;
                 questionTimeRemaining = Math.max(0, timePerQuestion - ((now - questionStartTime) / 1000));
@@ -1469,29 +1469,38 @@ app.get('/test/question', checkAuth, (req, res) => {
               }
 
               const questionTimerInterval = setInterval(() => {
-                updateQuestionTimer();
+                if (isTabActive) {
+                  updateQuestionTimer();
+                }
                 if (questionTimeRemaining <= 0) {
                   clearInterval(questionTimerInterval);
                 }
-              }, 50); // Оновлення кожні 50 мс для плавності
+              }, 50);
 
               document.addEventListener('visibilitychange', () => {
-                if (!document.hidden) {
-                  const now = Date.now();
-                  lastQuestionTimerUpdate = now;
+                isTabActive = !document.hidden;
+                if (isTabActive) {
+                  lastQuestionTimerUpdate = performance.now();
                   updateQuestionTimer();
                 }
               });
             }
 
             window.addEventListener('blur', () => {
-              lastBlurTime = Date.now();
-              switchCount++;
+              if (isTabActive) {
+                lastBlurTime = performance.now();
+                isTabActive = false;
+              }
             });
 
             window.addEventListener('focus', () => {
-              if (lastBlurTime) {
-                timeAway += Date.now() - lastBlurTime;
+              if (!isTabActive) {
+                const now = performance.now();
+                if (lastBlurTime > 0) {
+                  timeAway += (now - lastBlurTime) / 1000; // Накопичуємо час у секундах
+                }
+                lastBlurTime = 0;
+                isTabActive = true;
               }
             });
 
@@ -1553,7 +1562,7 @@ app.get('/test/question', checkAuth, (req, res) => {
                     answers.push(input ? input.value.trim() : '');
                   }
                 }
-                const responseTime = Date.now() - questionStartTime;
+                const responseTime = (performance.now() - questionStartTime) / 1000;
 
                 const formData = new URLSearchParams();
                 formData.append('index', index);
@@ -1615,7 +1624,7 @@ app.get('/test/question', checkAuth, (req, res) => {
                     answers.push(input ? input.value.trim() : '');
                   }
                 }
-                const responseTime = Date.now() - questionStartTime;
+                const responseTime = (performance.now() - questionStartTime) / 1000;
 
                 const formData = new URLSearchParams();
                 formData.append('index', index);
@@ -3750,21 +3759,17 @@ app.get('/admin/results', checkAuth, async (req, res) => {
         const suspiciousActivityPercent = r.suspiciousActivity && r.suspiciousActivity.suspiciousScore
           ? Math.round(r.suspiciousActivity.suspiciousScore)
           : 0;
-        const timeAwayPercent = r.suspiciousActivity && r.suspiciousActivity.timeAway
-          ? Math.round((r.suspiciousActivity.timeAway / (r.duration * 1000)) * 100)
+        const timeAwayPercent = r.suspiciousActivity && r.suspiciousActivity.timeAway && r.duration
+          ? Math.round((r.suspiciousActivity.timeAway / r.duration) * 100)
           : 0;
         const switchCount = r.suspiciousActivity ? r.suspiciousActivity.switchCount || 0 : 0;
         const avgResponseTime = r.suspiciousActivity && r.suspiciousActivity.responseTimes
-          ? (r.suspiciousActivity.responseTimes.reduce((sum, time) => sum + (time || 0), 0) / r.suspiciousActivity.responseTimes.length / 1000).toFixed(2)
-          : 0;
-        const totalActivityCount = r.suspiciousActivity && r.suspiciousActivity.activityCounts
-          ? r.suspiciousActivity.activityCounts.reduce((sum, count) => sum + (count || 0), 0).toFixed(0)
+          ? (r.suspiciousActivity.responseTimes.reduce((sum, time) => sum + (time || 0), 0) / r.suspiciousActivity.responseTimes.length).toFixed(2)
           : 0;
         const activityDetails = `
-Время вне вкладки: ${timeAwayPercent}%
-Переключения вкладок: ${switchCount}
-Среднее время ответа (сек): ${avgResponseTime}
-Общее количество действий: ${totalActivityCount}
+Час поза вкладкою: ${timeAwayPercent}%
+Переключення вкладок: ${switchCount}
+Середній час відповіді (сек): ${avgResponseTime}
         `;
         const percentage = r.totalPoints > 0 ? Math.round((r.score / r.totalPoints) * 100) : 0;
         const durationMinutes = Math.floor(r.duration / 60);
