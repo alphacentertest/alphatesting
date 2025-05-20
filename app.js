@@ -1444,6 +1444,59 @@ app.get('/test/question', checkAuth, (req, res) => {
             let questionTimeRemaining = timePerQuestion;
             let currentQuestionIndex = ${index};
             let lastGlobalUpdateTime = Date.now();
+            let isSaving = false; // Флаг для відстеження процесу збереження
+
+            async function saveCurrentAnswer(index) {
+              if (isSaving) return; // Уникаємо повторного виклику під час збереження
+              isSaving = true;
+              try {
+                let answers = selectedOptions;
+                if (document.querySelector('input[name="q' + index + '"]')) {
+                  answers = document.getElementById('q' + index + '_input').value;
+                } else if (document.getElementById('sortable-options')) {
+                  answers = Array.from(document.querySelectorAll('#sortable-options .option-box')).map(el => el.dataset.value);
+                } else if (document.getElementById('left-column')) {
+                  answers = matchingPairs;
+                } else if ('${q.type}' === 'fillblank') {
+                  answers = [];
+                  for (let i = 0; i < ${q.blankCount || 1}; i++) {
+                    const input = document.getElementById('blank_' + i);
+                    answers.push(input ? input.value.trim() : '');
+                  }
+                }
+                const responseTime = Math.min(timePerQuestion, (Date.now() - startTime) / 1000 - (index * timePerQuestion));
+
+                const formData = new URLSearchParams();
+                formData.append('index', index);
+                formData.append('answer', JSON.stringify(answers));
+                formData.append('timeAway', timeAway);
+                formData.append('switchCount', switchCount);
+                formData.append('responseTime', responseTime);
+                formData.append('activityCount', activityCount);
+                formData.append('_csrf', '${req.csrfToken()}');
+
+                console.log('Auto-saving answer before test completion:', { index, answers });
+
+                const response = await fetch('/answer', {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                  body: formData
+                });
+
+                if (!response.ok) {
+                  throw new Error('HTTP error! status: ' + response.status);
+                }
+
+                const result = await response.json();
+                if (!result.success) {
+                  console.error('Error auto-saving answer:', result.error);
+                }
+              } catch (error) {
+                console.error('Error in auto-saving answer:', error);
+              } finally {
+                isSaving = false;
+              }
+            }
 
             function updateGlobalTimer() {
               const now = Date.now();
@@ -1463,7 +1516,13 @@ app.get('/test/question', checkAuth, (req, res) => {
               }
 
               if (remainingTime <= 0) {
-                window.location.href = '/result';
+                // Перед завершенням тесту зберігаємо останню відповідь
+                saveCurrentAnswer(currentQuestionIndex).then(() => {
+                  // Додаємо затримку, щоб переконатися, що збереження завершилося
+                  setTimeout(() => {
+                    window.location.href = '/result';
+                  }, 500);
+                });
               }
             }
 
@@ -1483,13 +1542,21 @@ app.get('/test/question', checkAuth, (req, res) => {
                   const offset = (1 - questionTimeRemaining / timePerQuestion) * circumference;
                   timerCircle.style.strokeDashoffset = offset;
                 }
+                if (questionTimeRemaining <= 0 && currentQuestionIndex < totalQuestions - 1) {
+                  // Зберігаємо відповідь перед автоматичним переходом на наступне питання
+                  saveCurrentAnswer(currentQuestionIndex);
+                }
               }
 
               const questionTimerInterval = setInterval(() => {
                 updateQuestionTimer();
                 if (currentQuestionIndex >= totalQuestions - 1 && questionTimeRemaining <= 0) {
                   clearInterval(questionTimerInterval);
-                  saveAndNext(currentQuestionIndex);
+                  saveCurrentAnswer(currentQuestionIndex).then(() => {
+                    setTimeout(() => {
+                      window.location.href = '/result';
+                    }, 500);
+                  });
                 }
               }, 50);
 
@@ -1627,6 +1694,8 @@ app.get('/test/question', checkAuth, (req, res) => {
 
             async function finishTest(index) {
               try {
+                // Зберігаємо відповідь перед завершенням тесту
+                await saveCurrentAnswer(index);
                 let answers = selectedOptions;
                 if (document.querySelector('input[name="q' + index + '"]')) {
                   answers = document.getElementById('q' + index + '_input').value;
