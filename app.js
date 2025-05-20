@@ -1434,7 +1434,6 @@ app.get('/test/question', checkAuth, (req, res) => {
             let selectedOptions = ${selectedOptionsString};
             let matchingPairs = ${JSON.stringify(answers[index] || [])};
             let questionTimeRemaining = timePerQuestion;
-            let isTabActive = true;
             let currentQuestionIndex = ${index};
             let lastGlobalUpdateTime = Date.now();
 
@@ -1479,9 +1478,7 @@ app.get('/test/question', checkAuth, (req, res) => {
               }
 
               const questionTimerInterval = setInterval(() => {
-                if (isTabActive) {
-                  updateQuestionTimer();
-                }
+                updateQuestionTimer();
                 if (currentQuestionIndex >= totalQuestions - 1 && questionTimeRemaining <= 0) {
                   clearInterval(questionTimerInterval);
                   saveAndNext(currentQuestionIndex);
@@ -1489,8 +1486,7 @@ app.get('/test/question', checkAuth, (req, res) => {
               }, 50);
 
               document.addEventListener('visibilitychange', () => {
-                isTabActive = !document.hidden;
-                if (isTabActive) {
+                if (!document.hidden) {
                   updateGlobalTimer();
                   updateQuestionTimer();
                 }
@@ -1498,24 +1494,20 @@ app.get('/test/question', checkAuth, (req, res) => {
             }
 
             window.addEventListener('blur', () => {
-              if (isTabActive) {
+              if (lastBlurTime === 0) {
                 lastBlurTime = performance.now();
                 switchCount++;
-                isTabActive = false;
-                console.log('Tab blurred, starting time away calculation:', lastBlurTime);
+                console.log('Tab blurred, starting time away calculation:', lastBlurTime, 'Switch count:', switchCount);
               }
             });
 
             window.addEventListener('focus', () => {
-              if (!isTabActive) {
+              if (lastBlurTime > 0) {
                 const now = performance.now();
-                if (lastBlurTime > 0) {
-                  const awayDuration = (now - lastBlurTime) / 1000; // Час у секундах
-                  timeAway += awayDuration;
-                  console.log('Tab focused, time away accumulated:', awayDuration, 'Total timeAway:', timeAway);
-                }
+                const awayDuration = (now - lastBlurTime) / 1000; // Час у секундах
+                timeAway += awayDuration;
+                console.log('Tab focused, time away accumulated:', awayDuration, 'Total timeAway:', timeAway);
                 lastBlurTime = 0;
-                isTabActive = true;
               }
             });
 
@@ -1588,6 +1580,8 @@ app.get('/test/question', checkAuth, (req, res) => {
                 formData.append('activityCount', activityCount);
                 formData.append('_csrf', '${req.csrfToken()}');
 
+                console.log('Saving data in saveAndNext:', { timeAway, switchCount });
+
                 const response = await fetch('/answer', {
                   method: 'POST',
                   headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
@@ -1649,6 +1643,8 @@ app.get('/test/question', checkAuth, (req, res) => {
                 formData.append('responseTime', responseTime);
                 formData.append('activityCount', activityCount);
                 formData.append('_csrf', '${req.csrfToken()}');
+
+                console.log('Saving data in finishTest:', { timeAway, switchCount });
 
                 const response = await fetch('/answer', {
                   method: 'POST',
@@ -3777,6 +3773,7 @@ app.get('/admin/results', checkAuth, async (req, res) => {
         const timeAwayPercent = r.suspiciousActivity && r.suspiciousActivity.timeAway && r.duration
           ? Math.round((r.suspiciousActivity.timeAway / r.duration) * 100)
           : 0;
+        console.log('Calculating timeAwayPercent:', { timeAway: r.suspiciousActivity?.timeAway, duration: r.duration, timeAwayPercent });
         const switchCount = r.suspiciousActivity ? r.suspiciousActivity.switchCount || 0 : 0;
         const avgResponseTime = r.suspiciousActivity && r.suspiciousActivity.responseTimes
           ? (r.suspiciousActivity.responseTimes.reduce((sum, time) => sum + (time || 0), 0) / r.suspiciousActivity.responseTimes.length).toFixed(2)
