@@ -328,7 +328,9 @@ const importQuestionsToMongoDB = async (filePath, testNumber) => {
           }
 
           // Нормалізація назви зображення для originalPicture
-          const normalizedPicture = picture ? picture.replace(/\.png$/i, '').replace(/^picture/i, 'Picture').replace(/\s+/g, '') : null;
+          const normalizedPicture = picture
+            ? picture.replace(/\.png$/i, '').replace(/^picture/i, 'Picture').replace(/\s+/g, '')
+            : null;
 
           let questionData = {
             testNumber,
@@ -343,32 +345,38 @@ const importQuestionsToMongoDB = async (filePath, testNumber) => {
             order: rowNumber - 1 // Поле order для збереження порядку
           };
 
-          if (picture) {
-            logger.info(`Processing picture field: ${picture}`, { testNumber, rowNumber });
+          // Перевірка наявності зображення
+          if (normalizedPicture) {
+            logger.info(`Processing picture field: ${normalizedPicture}`, { testNumber, rowNumber });
             const pictureMatch = normalizedPicture.match(/^Picture(\d+)$/i);
             if (pictureMatch) {
               const pictureNumber = pictureMatch[1];
-              const pictureBaseName = `/images/Picture${pictureNumber}`;
-              questionData.picture = pictureBaseName;
-
+              const targetFileNameBase = `Picture${pictureNumber}`; // Завжди в правильному регістрі
               const extensions = ['.png', '.jpg', '.jpeg', '.gif'];
               let found = false;
               const imageDir = path.join(__dirname, 'public', 'images');
               const filesInDir = fs.existsSync(imageDir) ? fs.readdirSync(imageDir) : [];
-              const targetFileNameBase = `Picture${pictureNumber}`;
+              logger.info(`Available files in public/images: ${filesInDir.join(', ')}`, { testNumber, rowNumber });
+
               for (const ext of extensions) {
-                const expectedFileName = targetFileNameBase + ext;
+                const expectedFileName = `${targetFileNameBase}${ext}`;
                 const fileExists = filesInDir.some(file => file.toLowerCase() === expectedFileName.toLowerCase());
                 if (fileExists) {
                   const matchedFile = filesInDir.find(file => file.toLowerCase() === expectedFileName.toLowerCase());
-                  questionData.picture = `/images/${matchedFile}`;
-                  logger.info(`Image found: ${questionData.picture}`, { testNumber, rowNumber });
-                  found = true;
-                  break;
+                  const imagePath = path.join(imageDir, matchedFile);
+                  if (fs.existsSync(imagePath)) {
+                    // Уніфікуємо регістр у шляху
+                    questionData.picture = `/images/Picture${pictureNumber}${ext.toLowerCase()}`; // Завжди в нижньому регістрі
+                    logger.info(`Image found: ${questionData.picture}`, { testNumber, rowNumber });
+                    found = true;
+                    break;
+                  } else {
+                    logger.warn(`File ${matchedFile} found in directory listing but does not exist on disk`, { testNumber, rowNumber });
+                  }
                 }
               }
               if (!found) {
-                logger.warn(`Image not found for Picture ${questionData.picture}. Available files: ${filesInDir.join(', ')}`, { testNumber, rowNumber });
+                logger.warn(`Image not found for ${normalizedPicture}. Available files: ${filesInDir.join(', ')}`, { testNumber, rowNumber });
                 questionData.picture = null;
               }
             } else {
@@ -3048,7 +3056,9 @@ app.get('/admin/edit-question', checkAuth, checkAdmin, async (req, res) => {
       return res.status(404).send('Питання не знайдено');
     }
     const pictureName = question.picture ? question.picture.replace('/images/', '') : '';
-    const normalizedOriginalPicture = question.originalPicture ? question.originalPicture.replace(/\.png$/i, '').replace(/^picture/i, 'Picture').replace(/\s+/g, '') : '';
+    const normalizedOriginalPicture = question.originalPicture
+      ? question.originalPicture.replace(/\.png$/i, '').replace(/^picture/i, 'Picture').replace(/\s+/g, '')
+      : '';
     const warningMessage = question.picture === null && question.originalPicture && question.originalPicture.trim() !== ''
       ? `Попередження: зображення "${normalizedOriginalPicture}" не було знайдено під час імпорту. Перевірте, чи файл зображення є в папці public/images.`
       : '';
