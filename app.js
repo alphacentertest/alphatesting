@@ -1417,7 +1417,7 @@ app.get('/test/question', checkAuth, (req, res) => {
           </div>
           <script>
             const startTime = ${startTime};
-            const timeLimit = ${totalTestTime * 1000}; // Використовуємо розрахований час для Quick Test
+            const timeLimit = ${totalTestTime * 1000};
             const timerElement = document.getElementById('timer');
             const isQuickTest = ${isQuickTest};
             const timePerQuestion = ${timePerQuestion || 0};
@@ -1460,7 +1460,7 @@ app.get('/test/question', checkAuth, (req, res) => {
                 if (timerText && timerCircle) {
                   timerText.textContent = questionTimeRemaining;
                   const circumference = 251; // Довжина кола (2 * π * r, де r = 36)
-                  const offset = (questionTimeRemaining / timePerQuestion) * circumference;
+                  const offset = (1 - questionTimeRemaining / timePerQuestion) * circumference; // Зменшуємо коло
                   timerCircle.style.strokeDashoffset = offset;
                 }
                 if (questionTimeRemaining <= 0) {
