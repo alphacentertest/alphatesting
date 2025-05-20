@@ -1081,12 +1081,12 @@ app.get('/test', checkAuth, async (req, res) => {
       questions = shuffleArray([...questions]).slice(0, questionLimit);
     }
 
-    // Якщо тест швидкий, увімкнемо випадковий вибір питань і відповідей
-    const isQuickTest = testNames[testNumber].isQuickTest;
-    if (isQuickTest || testNames[testNumber].randomQuestions) {
+    // Перемішуємо питання лише якщо ввімкнено randomQuestions
+    if (testNames[testNumber].randomQuestions) {
       questions = shuffleArray([...questions]);
     }
-    if (isQuickTest || testNames[testNumber].randomAnswers) {
+    // Перемішуємо відповіді лише якщо ввімкнено randomAnswers
+    if (testNames[testNumber].randomAnswers) {
       questions = questions.map(q => {
         if (q.options && q.options.length > 0 && q.type !== 'ordering' && q.type !== 'matching') {
           const shuffledOptions = shuffleArray([...q.options]);
@@ -1107,8 +1107,8 @@ app.get('/test', checkAuth, async (req, res) => {
       startTime: Date.now(),
       timeLimit: testNames[testNumber].timeLimit * 1000,
       variant: userVariant,
-      isQuickTest: isQuickTest,
-      timePerQuestion: testNames[testNumber].timePerQuestion // Зберігаємо час на питання
+      isQuickTest: testNames[testNumber].isQuickTest,
+      timePerQuestion: testNames[testNumber].timePerQuestion
     });
 
     const ipAddress = req.headers['x-forwarded-for'] || req.socket.remoteAddress;
@@ -1138,7 +1138,8 @@ app.get('/test/question', checkAuth, (req, res) => {
     }
     userTest.currentQuestion = index;
     userTest.answerTimestamps = userTest.answerTimestamps || {};
-    userTest.answerTimestamps[index] = userTest.answerTimestamps[index] || Date.now();
+    const questionStartTime = Date.now(); // Час початку питання на сервері
+    userTest.answerTimestamps[index] = questionStartTime;
     const q = questions[index];
     const progress = Array.from({ length: questions.length }, (_, i) => ({
       number: i + 1,
@@ -1146,9 +1147,9 @@ app.get('/test/question', checkAuth, (req, res) => {
     }));
 
     // Розрахунок загального часу для тесту
-    let totalTestTime = timeLimit / 1000; // Загальний час у секундах для звичайного тесту
+    let totalTestTime = timeLimit / 1000;
     if (isQuickTest) {
-      totalTestTime = questions.length * timePerQuestion; // Для Quick Test: кількість питань * час на питання
+      totalTestTime = questions.length * timePerQuestion;
     }
     const elapsedTime = Math.floor((Date.now() - startTime) / 1000);
     const remainingTime = Math.max(0, totalTestTime - elapsedTime);
@@ -1191,7 +1192,7 @@ app.get('/test/question', checkAuth, (req, res) => {
             #question-timer svg { width: 100%; height: 100%; transform: rotate(-90deg); }
             #question-timer circle { fill: none; stroke-width: 8; }
             #question-timer .timer-circle-bg { stroke: #e0e0e0; }
-            #question-timer .timer-circle { stroke: #ff4d4d; stroke-dasharray: 251; stroke-dashoffset: 0; transition: stroke-dashoffset 1s linear; }
+            #question-timer .timer-circle { stroke: #ff4d4d; stroke-dasharray: 251; stroke-dashoffset: 0; transition: stroke-dashoffset 0.1s linear; }
             #question-timer .timer-text { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); font-size: 20px; font-weight: bold; color: #333; }
             #confirm-modal { display: none; position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%); background: white; padding: 20px; border: 2px solid black; z-index: 1000; }
             #confirm-modal button { margin: 0 10px; }
@@ -1429,11 +1430,11 @@ app.get('/test/question', checkAuth, (req, res) => {
             let lastMouseMoveTime = 0;
             let lastKeydownTime = 0;
             const debounceDelay = 100;
-            const questionStartTime = Date.now(); // Використовуємо поточний час для точного старту
+            const questionStartTime = ${questionStartTime}; // Час початку питання з сервера
             let selectedOptions = ${selectedOptionsString};
             let matchingPairs = ${JSON.stringify(answers[index] || [])};
             let questionTimeRemaining = timePerQuestion;
-            let lastQuestionTimerUpdate = Date.now();
+            let lastQuestionTimerUpdate = questionStartTime;
 
             function updateTimer() {
               const elapsedTime = Math.floor((Date.now() - startTime) / 1000);
@@ -1446,19 +1447,19 @@ app.get('/test/question', checkAuth, (req, res) => {
               }
             }
 
-            setInterval(updateTimer, 1000); // Оновлення загального таймера кожну секунду
+            setInterval(updateTimer, 1000);
 
             if (isQuickTest) {
               function updateQuestionTimer() {
                 const now = Date.now();
                 const elapsedSinceLastUpdate = (now - lastQuestionTimerUpdate) / 1000;
                 lastQuestionTimerUpdate = now;
-                questionTimeRemaining = Math.max(0, questionTimeRemaining - elapsedSinceLastUpdate);
+                questionTimeRemaining = Math.max(0, timePerQuestion - ((now - questionStartTime) / 1000));
                 const timerText = document.getElementById('timer-text');
                 const timerCircle = document.querySelector('#question-timer .timer-circle');
                 if (timerText && timerCircle) {
-                  timerText.textContent = Math.ceil(questionTimeRemaining);
-                  const circumference = 251; // Довжина кола (2 * π * r, де r = 36)
+                  timerText.textContent = Math.round(questionTimeRemaining);
+                  const circumference = 251;
                   const offset = (1 - questionTimeRemaining / timePerQuestion) * circumference;
                   timerCircle.style.strokeDashoffset = offset;
                 }
@@ -1467,17 +1468,17 @@ app.get('/test/question', checkAuth, (req, res) => {
                 }
               }
 
-              // Використовуємо setInterval для оновлення таймера питання
               const questionTimerInterval = setInterval(() => {
                 updateQuestionTimer();
                 if (questionTimeRemaining <= 0) {
                   clearInterval(questionTimerInterval);
                 }
-              }, 100); // Оновлення кожні 100 мс для плавності
+              }, 50); // Оновлення кожні 50 мс для плавності
 
-              // Перевірка часу при поверненні до вкладки
               document.addEventListener('visibilitychange', () => {
                 if (!document.hidden) {
+                  const now = Date.now();
+                  lastQuestionTimerUpdate = now;
                   updateQuestionTimer();
                 }
               });
