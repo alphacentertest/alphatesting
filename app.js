@@ -1502,6 +1502,7 @@ app.get('/test/question', checkAuth, (req, res) => {
                 lastBlurTime = performance.now();
                 switchCount++;
                 isTabActive = false;
+                console.log('Tab blurred, starting time away calculation:', lastBlurTime);
               }
             });
 
@@ -1509,7 +1510,9 @@ app.get('/test/question', checkAuth, (req, res) => {
               if (!isTabActive) {
                 const now = performance.now();
                 if (lastBlurTime > 0) {
-                  timeAway += (now - lastBlurTime) / 1000;
+                  const awayDuration = (now - lastBlurTime) / 1000; // Час у секундах
+                  timeAway += awayDuration;
+                  console.log('Tab focused, time away accumulated:', awayDuration, 'Total timeAway:', timeAway);
                 }
                 lastBlurTime = 0;
                 isTabActive = true;
