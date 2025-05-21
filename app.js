@@ -1411,8 +1411,8 @@ app.get('/test/question', checkAuth, (req, res) => {
           <div class="button-container">
             ${!isQuickTest ? `
               <button class="back-btn" ${index === 0 ? 'disabled' : ''} onclick="window.location.href='/test/question?index=${index - 1}'">Назад</button>
-              <button id="submit-answer" class="next-btn" ${index === questions.length - 1 ? 'disabled' : ''} onclick="saveAndNext(${index})">Далі</button>
             ` : ''}
+            <button id="submit-answer" class="next-btn" ${index === questions.length - 1 ? 'disabled' : ''} onclick="saveAndNext(${index})">Далі</button>
             <button class="finish-btn" onclick="showConfirm(${index})">Завершити тест</button>
             ${req.userRole === 'instructor' ? `
               <button class="results-btn" onclick="window.location.href='/admin/results'">Переглянути результати</button>
@@ -1445,6 +1445,7 @@ app.get('/test/question', checkAuth, (req, res) => {
             let currentQuestionIndex = ${index};
             let lastGlobalUpdateTime = Date.now();
             let isSaving = false; // Флаг для відстеження процесу збереження
+            let hasMovedToNext = false; // Флаг для уникнення подвійного переходу
 
             async function saveCurrentAnswer(index) {
               if (isSaving) return; // Уникаємо повторного виклику під час збереження
@@ -1509,7 +1510,7 @@ app.get('/test/question', checkAuth, (req, res) => {
 
               if (isQuickTest) {
                 const elapsedQuestions = Math.floor(elapsedTime / timePerQuestion);
-                if (elapsedQuestions > currentQuestionIndex && elapsedQuestions < totalQuestions) {
+                if (elapsedQuestions > currentQuestionIndex && elapsedQuestions < totalQuestions && !hasMovedToNext) {
                   currentQuestionIndex = elapsedQuestions;
                   saveAndNext(currentQuestionIndex - 1);
                 }
@@ -1542,7 +1543,7 @@ app.get('/test/question', checkAuth, (req, res) => {
                   const offset = (1 - questionTimeRemaining / timePerQuestion) * circumference;
                   timerCircle.style.strokeDashoffset = offset;
                 }
-                if (questionTimeRemaining <= 0 && currentQuestionIndex < totalQuestions - 1) {
+                if (questionTimeRemaining <= 0 && currentQuestionIndex < totalQuestions - 1 && !hasMovedToNext) {
                   // Зберігаємо відповідь перед автоматичним переходом на наступне питання
                   saveCurrentAnswer(currentQuestionIndex);
                 }
@@ -1550,7 +1551,7 @@ app.get('/test/question', checkAuth, (req, res) => {
 
               const questionTimerInterval = setInterval(() => {
                 updateQuestionTimer();
-                if (currentQuestionIndex >= totalQuestions - 1 && questionTimeRemaining <= 0) {
+                if (currentQuestionIndex >= totalQuestions - 1 && questionTimeRemaining <= 0 && !hasMovedToNext) {
                   clearInterval(questionTimerInterval);
                   saveCurrentAnswer(currentQuestionIndex).then(() => {
                     setTimeout(() => {
@@ -1630,6 +1631,7 @@ app.get('/test/question', checkAuth, (req, res) => {
 
             async function saveAndNext(index) {
               try {
+                hasMovedToNext = true; // Встановлюємо флаг, щоб уникнути автоматичного переходу
                 let answers = selectedOptions;
                 if (document.querySelector('input[name="q' + index + '"]')) {
                   answers = document.getElementById('q' + index + '_input').value;
@@ -1669,7 +1671,7 @@ app.get('/test/question', checkAuth, (req, res) => {
 
                 const result = await response.json();
                 if (result.success) {
-                  if (isQuickTest && index < ${questions.length - 1}) {
+                  if (index < ${questions.length - 1}) {
                     window.location.href = '/test/question?index=' + (index + 1);
                   } else {
                     window.location.href = '/result';
@@ -3266,26 +3268,49 @@ app.post('/admin/edit-question', checkAuth, checkAdmin, [
 
     const { id, testNumber, text, type, options, correctAnswers, points, variant, picture } = req.body;
 
+    // Отримуємо існуюче питання з бази даних
+    const oldQuestion = await db.collection('questions').findOne({ _id: new ObjectId(id) });
+    if (!oldQuestion) {
+      return res.status(404).send('Питання не знайдено');
+    }
+
     // Нормалізація назви зображення для originalPicture
-    const normalizedPicture = picture ? picture.replace(/\.png$/i, '').replace(/^picture/i, 'Picture').replace(/\s+/g, '') : null;
+    const normalizedPicture = picture
+      ? picture.replace(/\.png$/i, '').replace(/^picture/i, 'Picture').replace(/\s+/g, '')
+      : null;
 
     let questionData = {
       testNumber,
-      picture: picture ? `/images/${normalizedPicture}` : null,
-      originalPicture: normalizedPicture, // Зберігаємо нормалізовану назву
+      picture: oldQuestion.picture, // Зберігаємо існуючий шлях до зображення за замовчуванням
+      originalPicture: normalizedPicture || oldQuestion.originalPicture, // Зберігаємо нормалізовану назву
       text,
       type: type.toLowerCase(),
       options: options ? options.split(';').map(opt => opt.trim()).filter(Boolean) : [],
       correctAnswers: correctAnswers.split(';').map(ans => ans.trim()).filter(Boolean),
       points: Number(points),
-      variant: variant || ''
+      variant: variant || '',
+      order: oldQuestion.order // Зберігаємо існуючий order
     };
 
-    // Перевірка наявності зображення
-    if (questionData.picture) {
-      const imagePath = path.join(__dirname, 'public', questionData.picture);
-      if (!fs.existsSync(imagePath)) {
-        questionData.picture = null; // Якщо зображення не знайдено, встановлюємо picture в null
+    // Перевірка наявності зображення, якщо поле picture змінилося
+    if (picture && picture !== oldQuestion.picture?.replace('/images/', '')) {
+      const imageDir = path.join(__dirname, 'public', 'images');
+      const extensions = ['.png', '.jpg', '.jpeg', '.gif'];
+      let found = false;
+
+      for (const ext of extensions) {
+        const expectedFileName = `${normalizedPicture}${ext}`;
+        const imagePath = path.join(imageDir, expectedFileName);
+        if (fs.existsSync(imagePath)) {
+          questionData.picture = `/images/${normalizedPicture}${ext.toLowerCase()}`;
+          found = true;
+          break;
+        }
+      }
+
+      if (!found) {
+        logger.warn(`Image ${normalizedPicture} not found in public/images during edit`, { testNumber });
+        questionData.picture = null; // Якщо зображення не знайдено, скидаємо picture на null
       }
     }
 
@@ -3320,21 +3345,20 @@ app.post('/admin/edit-question', checkAuth, checkAdmin, [
       questionData.correctAnswer = questionData.correctAnswers[0];
     }
 
-    const oldQuestion = await db.collection('questions').findOne({ _id: new ObjectId(id) });
     const oldTestNumber = oldQuestion.testNumber;
 
-    // Зберігаємо існуючий order, щоб не змінювати порядок питання
-    questionData.order = oldQuestion.order;
-
+    // Оновлюємо запис у базі даних
     await db.collection('questions').updateOne(
       { _id: new ObjectId(id) },
       { $set: questionData }
     );
 
+    // Оновлюємо кеш для старого і нового тестів
     await CacheManager.invalidateCache('questions', oldTestNumber);
     if (testNumber !== oldTestNumber) {
       await CacheManager.invalidateCache('questions', testNumber);
     }
+    await CacheManager.invalidateCache('allQuestions', 'all');
 
     res.send(`
       <!DOCTYPE html>
