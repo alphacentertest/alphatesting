@@ -1163,10 +1163,8 @@ app.get('/test', checkAuth, async (req, res) => {
 app.get('/test/question', checkAuth, (req, res) => {
   const startTime = Date.now();
   try {
-    // Перевірка, чи користувач є адміністратором
     if (req.userRole === 'admin') return res.redirect('/admin');
 
-    // Отримання тесту користувача з userTests
     const userTest = userTests.get(req.user);
     if (!userTest) {
       return res.status(400).send('Тест не розпочато');
@@ -1175,12 +1173,10 @@ app.get('/test/question', checkAuth, (req, res) => {
     const { questions, testNumber, answers, currentQuestion, startTime, timeLimit, isQuickTest, timePerQuestion } = userTest;
     const index = parseInt(req.query.index) || 0;
 
-    // Перевірка коректності індексу питання
     if (index < 0 || index >= questions.length) {
       return res.status(400).send('Невірний номер питання');
     }
 
-    // Оновлення поточного питання та ініціалізація часу відповіді
     userTest.currentQuestion = index;
     userTest.answerTimestamps = userTest.answerTimestamps || {};
     userTest.answerTimestamps[index] = Date.now();
@@ -1191,7 +1187,6 @@ app.get('/test/question', checkAuth, (req, res) => {
       answered: answers[i] && (Array.isArray(answers[i]) ? answers[i].length > 0 : answers[i].trim() !== '')
     }));
 
-    // Обчислення часу, що залишився
     let totalTestTime = timeLimit / 1000;
     if (isQuickTest) {
       totalTestTime = questions.length * timePerQuestion;
@@ -1201,17 +1196,14 @@ app.get('/test/question', checkAuth, (req, res) => {
     const minutes = Math.floor(remainingTime / 60).toString().padStart(2, '0');
     const seconds = (remainingTime % 60).toString().padStart(2, '0');
 
-    // Отримання вибраних відповідей
     const selectedOptions = answers[index] || [];
     const selectedOptionsString = JSON.stringify(selectedOptions).replace(/'/g, "\\'");
 
-    // Ініціалізація часу початку питання
     userTest.questionStartTime = userTest.questionStartTime || {};
     if (!userTest.questionStartTime[index]) {
       userTest.questionStartTime[index] = Date.now();
     }
 
-    // Формування HTML-відповіді
     let html = `
       <!DOCTYPE html>
       <html lang="uk">
@@ -1238,7 +1230,6 @@ app.get('/test/question', checkAuth, (req, res) => {
             .back-btn { background-color: red; color: white; }
             .next-btn { background-color: blue; color: white; }
             .finish-btn { background-color: green; color: white; }
-            .results-btn { background-color: #007bff; color: white; }
             button:disabled { background-color: grey; cursor: not-allowed; }
             #timer { font-size: 24px; margin-bottom: 20px; text-align: center; }
             #question-timer { position: relative; width: 80px; height: 80px; margin: 0 auto 10px auto; }
@@ -1317,7 +1308,6 @@ app.get('/test/question', checkAuth, (req, res) => {
           <div class="progress-bar">
     `;
 
-    // Відображення прогресу (кола для кожного питання)
     if (progress.length <= 10) {
       html += `
         <div class="progress-row">
@@ -1346,7 +1336,6 @@ app.get('/test/question', checkAuth, (req, res) => {
           <div id="question-container">
     `;
 
-    // Таймер для швидких тестів
     if (isQuickTest) {
       html += `
         <div id="question-timer">
@@ -1359,7 +1348,6 @@ app.get('/test/question', checkAuth, (req, res) => {
       `;
     }
 
-    // Відображення зображення, якщо воно є
     if (q.picture && q.picture.trim() !== '') {
       html += `
         <div id="image-container">
@@ -1369,7 +1357,6 @@ app.get('/test/question', checkAuth, (req, res) => {
       `;
     }
 
-    // Інструкція залежно від типу питання
     const instructionText = q.type === 'multiple' ? 'Виберіть усі правильні відповіді' :
                            q.type === 'input' ? 'Введіть правильну відповідь' :
                            q.type === 'ordering' ? 'Розташуйте відповіді у правильній послідовності' :
@@ -1380,7 +1367,6 @@ app.get('/test/question', checkAuth, (req, res) => {
             <div class="question-box">
               <h2 id="question-text">${index + 1}. `;
     
-    // Обробка питання типу fillblank
     if (q.type === 'fillblank') {
       const userAnswers = Array.isArray(answers[index]) ? answers[index] : [];
       logger.info(`Fillblank question parts for index ${index}`, { parts: q.text.split('___') });
@@ -1405,7 +1391,6 @@ app.get('/test/question', checkAuth, (req, res) => {
             <div id="answers">
     `;
 
-    // Обробка питання типу matching
     if (q.type === 'matching' && q.pairs) {
       const leftItems = shuffleArray([...q.pairs.map(p => p.left)]);
       const rightItems = shuffleArray([...q.pairs.map(p => p.right)]);
@@ -1433,7 +1418,6 @@ app.get('/test/question', checkAuth, (req, res) => {
         <button onclick="resetMatchingPairs()">Скинути зіставлення</button>
       `;
     } else if (!q.options || q.options.length === 0) {
-      // Обробка питання типу input
       if (q.type !== 'fillblank') {
         const userAnswer = answers[index] || '';
         html += `
@@ -1441,7 +1425,6 @@ app.get('/test/question', checkAuth, (req, res) => {
         `;
       }
     } else {
-      // Обробка питання типу ordering
       if (q.type === 'ordering') {
         html += `
           <div id="sortable-options">
@@ -1456,7 +1439,6 @@ app.get('/test/question', checkAuth, (req, res) => {
           </div>
         `;
       } else {
-        // Обробка інших типів питань (multiple, singlechoice, truefalse)
         q.options.forEach((option, optIndex) => {
           const selected = selectedOptions.includes(option) ? 'selected' : '';
           const escapedOption = option.replace(/'/g, "\\'").replace(/"/g, '\\"');
@@ -1478,9 +1460,6 @@ app.get('/test/question', checkAuth, (req, res) => {
             ` : ''}
             <button id="submit-answer" class="next-btn" ${index === questions.length - 1 ? 'disabled' : ''} onclick="saveAndNext(${index})">Далі</button>
             <button class="finish-btn" onclick="showConfirm(${index})">Завершити тест</button>
-            ${req.userRole === 'instructor' ? `
-              <button class="results-btn" onclick="window.location.href='/admin/results'">Переглянути результати</button>
-            ` : ''}
           </div>
           <div id="confirm-modal">
             <h2>Ви дійсно бажаєте завершити тест?</h2>
@@ -1566,132 +1545,6 @@ app.get('/test/question', checkAuth, (req, res) => {
                 isSaving = false;
               }
             }
-
-            function updateGlobalTimer() {
-              const now = Date.now();
-              const elapsedTime = Math.floor((now - startTime) / 1000);
-              const remainingTime = Math.max(0, totalTestTime - elapsedTime);
-              const minutes = Math.floor(remainingTime / 60).toString().padStart(2, '0');
-              const seconds = (remainingTime % 60).toString().padStart(2, '0');
-              timerElement.textContent = 'Залишилось часу: ' + minutes + ' хв ' + seconds + ' с';
-              lastGlobalUpdateTime = now;
-
-              if (isQuickTest) {
-                const elapsedQuestions = Math.floor(elapsedTime / timePerQuestion);
-                if (elapsedQuestions > currentQuestionIndex && elapsedQuestions < totalQuestions && !hasMovedToNext) {
-                  currentQuestionIndex = elapsedQuestions;
-                  saveAndNext(currentQuestionIndex - 1);
-                }
-              }
-
-              if (remainingTime <= 0) {
-                saveCurrentAnswer(currentQuestionIndex).then(() => {
-                  setTimeout(() => {
-                    window.location.href = '/result';
-                  }, 500);
-                });
-              }
-            }
-
-            setInterval(updateGlobalTimer, 1000);
-
-            if (isQuickTest) {
-              function updateQuestionTimer() {
-                const now = Date.now();
-                const elapsedSinceQuestionStart = Math.floor((now - questionStartTime) / 1000);
-                questionTimeRemaining = Math.max(0, timePerQuestion - elapsedSinceQuestionStart);
-                const timerText = document.getElementById('timer-text');
-                const timerCircle = document.querySelector('#question-timer .timer-circle');
-                if (timerText && timerCircle) {
-                  timerText.textContent = Math.round(questionTimeRemaining);
-                  const circumference = 251;
-                  const offset = (1 - questionTimeRemaining / timePerQuestion) * circumference;
-                  timerCircle.style.strokeDashoffset = offset;
-                }
-                if (questionTimeRemaining <= 0 && currentQuestionIndex < totalQuestions - 1 && !hasMovedToNext) {
-                  saveCurrentAnswer(currentQuestionIndex);
-                }
-              }
-
-              const questionTimerInterval = setInterval(() => {
-                updateQuestionTimer();
-                if (currentQuestionIndex >= totalQuestions - 1 && questionTimeRemaining <= 0 && !hasMovedToNext) {
-                  clearInterval(questionTimerInterval);
-                  saveCurrentAnswer(currentQuestionIndex).then(() => {
-                    setTimeout(() => {
-                      window.location.href = '/result';
-                    }, 500);
-                  });
-                }
-              }, 50);
-
-              document.addEventListener('visibilitychange', () => {
-                if (!document.hidden) {
-                  updateGlobalTimer();
-                  updateQuestionTimer();
-                }
-              });
-            }
-
-            window.addEventListener('blur', () => {
-              if (lastBlurTime === 0) {
-                lastBlurTime = performance.now();
-                switchCount++;
-                console.log('Tab blurred, starting time away calculation:', lastBlurTime, 'Switch count:', switchCount);
-              }
-            });
-
-            window.addEventListener('focus', () => {
-              if (lastBlurTime > 0) {
-                const now = performance.now();
-                const awayDuration = (now - lastBlurTime) / 1000;
-                timeAway += awayDuration;
-                console.log('Tab focused, time away accumulated:', awayDuration, 'Total timeAway:', timeAway);
-                lastBlurTime = 0;
-              }
-            });
-
-            function debounceMouseMove() {
-              const now = Date.now();
-              if (now - lastMouseMoveTime >= debounceDelay) {
-                lastMouseMoveTime = now;
-                lastActivityTime = now;
-                activityCount++;
-              }
-            }
-
-            function debounceKeydown() {
-              const now = Date.now();
-              if (now - lastKeydownTime >= debounceDelay) {
-                lastKeydownTime = now;
-                lastActivityTime = now;
-                activityCount++;
-              }
-            }
-
-            document.addEventListener('mousemove', debounceMouseMove);
-            document.addEventListener('keydown', debounceKeydown);
-
-            document.querySelectorAll('.option-box:not(.draggable)').forEach(box => {
-              box.addEventListener('click', () => {
-                const questionType = '${q.type}';
-                const option = box.getAttribute('data-value');
-                if (questionType === 'truefalse' || questionType === 'multiple' || questionType === 'singlechoice') {
-                  if (questionType === 'truefalse' || questionType === 'singlechoice') {
-                    selectedOptions = [option];
-                    document.querySelectorAll('.option-box').forEach(b => b.classList.remove('selected'));
-                  } else {
-                    const idx = selectedOptions.indexOf(option);
-                    if (idx === -1) {
-                      selectedOptions.push(option);
-                    } else {
-                      selectedOptions.splice(idx, 1);
-                    }
-                  }
-                  box.classList.toggle('selected');
-                }
-              });
-            });
 
             async function saveAndNext(index) {
               try {
@@ -1823,6 +1676,127 @@ app.get('/test/question', checkAuth, (req, res) => {
                 alert('Не вдалося завершити тест. Перевірте ваше з’єднання з Інтернетом.');
               }
             }
+
+            function updateGlobalTimer() {
+              const now = Date.now();
+              const elapsedTime = Math.floor((now - startTime) / 1000);
+              const remainingTime = Math.max(0, totalTestTime - elapsedTime);
+              const minutes = Math.floor(remainingTime / 60).toString().padStart(2, '0');
+              const seconds = (remainingTime % 60).toString().padStart(2, '0');
+              timerElement.textContent = 'Залишилось часу: ' + minutes + ' хв ' + seconds + ' с';
+              lastGlobalUpdateTime = now;
+
+              if (remainingTime <= 0) {
+                saveCurrentAnswer(currentQuestionIndex).then(() => {
+                  setTimeout(() => {
+                    window.location.href = '/result';
+                  }, 500);
+                });
+              }
+            }
+
+            setInterval(updateGlobalTimer, 1000);
+
+            if (isQuickTest) {
+              function updateQuestionTimer() {
+                const now = Date.now();
+                const elapsedSinceQuestionStart = Math.floor((now - questionStartTime) / 1000);
+                questionTimeRemaining = Math.max(0, timePerQuestion - elapsedSinceQuestionStart);
+                const timerText = document.getElementById('timer-text');
+                const timerCircle = document.querySelector('#question-timer .timer-circle');
+                if (timerText && timerCircle) {
+                  timerText.textContent = Math.round(questionTimeRemaining);
+                  const circumference = 251;
+                  const offset = (1 - questionTimeRemaining / timePerQuestion) * circumference;
+                  timerCircle.style.strokeDashoffset = offset;
+                }
+                if (questionTimeRemaining <= 0 && currentQuestionIndex < totalQuestions - 1 && !hasMovedToNext) {
+                  hasMovedToNext = true;
+                  saveCurrentAnswer(currentQuestionIndex).then(() => {
+                    saveAndNext(currentQuestionIndex);
+                  });
+                }
+              }
+
+              const questionTimerInterval = setInterval(() => {
+                updateQuestionTimer();
+                if (currentQuestionIndex >= totalQuestions - 1 && questionTimeRemaining <= 0 && !hasMovedToNext) {
+                  clearInterval(questionTimerInterval);
+                  saveCurrentAnswer(currentQuestionIndex).then(() => {
+                    setTimeout(() => {
+                      window.location.href = '/result';
+                    }, 500);
+                  });
+                }
+              }, 50);
+
+              document.addEventListener('visibilitychange', () => {
+                if (!document.hidden) {
+                  updateGlobalTimer();
+                  updateQuestionTimer();
+                }
+              });
+            }
+
+            window.addEventListener('blur', () => {
+              if (lastBlurTime === 0) {
+                lastBlurTime = performance.now();
+                switchCount++;
+                console.log('Tab blurred, starting time away calculation:', lastBlurTime, 'Switch count:', switchCount);
+              }
+            });
+
+            window.addEventListener('focus', () => {
+              if (lastBlurTime > 0) {
+                const now = performance.now();
+                const awayDuration = (now - lastBlurTime) / 1000;
+                timeAway += awayDuration;
+                console.log('Tab focused, time away accumulated:', awayDuration, 'Total timeAway:', timeAway);
+                lastBlurTime = 0;
+              }
+            });
+
+            function debounceMouseMove() {
+              const now = Date.now();
+              if (now - lastMouseMoveTime >= debounceDelay) {
+                lastMouseMoveTime = now;
+                lastActivityTime = now;
+                activityCount++;
+              }
+            }
+
+            function debounceKeydown() {
+              const now = Date.now();
+              if (now - lastKeydownTime >= debounceDelay) {
+                lastKeydownTime = now;
+                lastActivityTime = now;
+                activityCount++;
+              }
+            }
+
+            document.addEventListener('mousemove', debounceMouseMove);
+            document.addEventListener('keydown', debounceKeydown);
+
+            document.querySelectorAll('.option-box:not(.draggable)').forEach(box => {
+              box.addEventListener('click', () => {
+                const questionType = '${q.type}';
+                const option = box.getAttribute('data-value');
+                if (questionType === 'truefalse' || questionType === 'multiple' || questionType === 'singlechoice') {
+                  if (questionType === 'truefalse' || questionType === 'singlechoice') {
+                    selectedOptions = [option];
+                    document.querySelectorAll('.option-box').forEach(b => b.classList.remove('selected'));
+                  } else {
+                    const idx = selectedOptions.indexOf(option);
+                    if (idx === -1) {
+                      selectedOptions.push(option);
+                    } else {
+                      selectedOptions.splice(idx, 1);
+                    }
+                  }
+                  box.classList.toggle('selected');
+                }
+              });
+            });
 
             const sortable = document.getElementById('sortable-options');
             if (sortable) {
