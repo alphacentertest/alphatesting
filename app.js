@@ -1134,12 +1134,14 @@ app.get('/test', checkAuth, async (req, res) => {
       });
     }
 
+    // Переконайтеся, що startTime ініціалізується коректно
+    const testStartTime = Date.now();
     userTests.set(req.user, {
       testNumber,
       questions,
       answers: {},
       currentQuestion: 0,
-      startTime: Date.now(),
+      startTime: testStartTime,
       timeLimit: testNames[testNumber].timeLimit * 1000,
       variant: userVariant,
       isQuickTest: testNames[testNumber].isQuickTest,
@@ -1161,25 +1163,35 @@ app.get('/test', checkAuth, async (req, res) => {
 app.get('/test/question', checkAuth, (req, res) => {
   const startTime = Date.now();
   try {
+    // Перевірка, чи користувач є адміністратором
     if (req.userRole === 'admin') return res.redirect('/admin');
+
+    // Отримання тесту користувача з userTests
     const userTest = userTests.get(req.user);
     if (!userTest) {
       return res.status(400).send('Тест не розпочато');
     }
+
     const { questions, testNumber, answers, currentQuestion, startTime, timeLimit, isQuickTest, timePerQuestion } = userTest;
     const index = parseInt(req.query.index) || 0;
+
+    // Перевірка коректності індексу питання
     if (index < 0 || index >= questions.length) {
       return res.status(400).send('Невірний номер питання');
     }
+
+    // Оновлення поточного питання та ініціалізація часу відповіді
     userTest.currentQuestion = index;
     userTest.answerTimestamps = userTest.answerTimestamps || {};
     userTest.answerTimestamps[index] = Date.now();
+
     const q = questions[index];
     const progress = Array.from({ length: questions.length }, (_, i) => ({
       number: i + 1,
       answered: answers[i] && (Array.isArray(answers[i]) ? answers[i].length > 0 : answers[i].trim() !== '')
     }));
 
+    // Обчислення часу, що залишився
     let totalTestTime = timeLimit / 1000;
     if (isQuickTest) {
       totalTestTime = questions.length * timePerQuestion;
@@ -1189,14 +1201,17 @@ app.get('/test/question', checkAuth, (req, res) => {
     const minutes = Math.floor(remainingTime / 60).toString().padStart(2, '0');
     const seconds = (remainingTime % 60).toString().padStart(2, '0');
 
+    // Отримання вибраних відповідей
     const selectedOptions = answers[index] || [];
     const selectedOptionsString = JSON.stringify(selectedOptions).replace(/'/g, "\\'");
 
+    // Ініціалізація часу початку питання
     userTest.questionStartTime = userTest.questionStartTime || {};
     if (!userTest.questionStartTime[index]) {
       userTest.questionStartTime[index] = Date.now();
     }
 
+    // Формування HTML-відповіді
     let html = `
       <!DOCTYPE html>
       <html lang="uk">
@@ -1301,6 +1316,8 @@ app.get('/test/question', checkAuth, (req, res) => {
           <div id="timer">Залишилось часу: ${minutes} хв ${seconds} с</div>
           <div class="progress-bar">
     `;
+
+    // Відображення прогресу (кола для кожного питання)
     if (progress.length <= 10) {
       html += `
         <div class="progress-row">
@@ -1323,10 +1340,13 @@ app.get('/test/question', checkAuth, (req, res) => {
         `;
       }
     }
+
     html += `
           </div>
           <div id="question-container">
     `;
+
+    // Таймер для швидких тестів
     if (isQuickTest) {
       html += `
         <div id="question-timer">
@@ -1338,6 +1358,8 @@ app.get('/test/question', checkAuth, (req, res) => {
         </div>
       `;
     }
+
+    // Відображення зображення, якщо воно є
     if (q.picture && q.picture.trim() !== '') {
       html += `
         <div id="image-container">
@@ -1346,6 +1368,8 @@ app.get('/test/question', checkAuth, (req, res) => {
         </div>
       `;
     }
+
+    // Інструкція залежно від типу питання
     const instructionText = q.type === 'multiple' ? 'Виберіть усі правильні відповіді' :
                            q.type === 'input' ? 'Введіть правильну відповідь' :
                            q.type === 'ordering' ? 'Розташуйте відповіді у правильній послідовності' :
@@ -1355,6 +1379,8 @@ app.get('/test/question', checkAuth, (req, res) => {
     html += `
             <div class="question-box">
               <h2 id="question-text">${index + 1}. `;
+    
+    // Обробка питання типу fillblank
     if (q.type === 'fillblank') {
       const userAnswers = Array.isArray(answers[index]) ? answers[index] : [];
       logger.info(`Fillblank question parts for index ${index}`, { parts: q.text.split('___') });
@@ -1371,12 +1397,15 @@ app.get('/test/question', checkAuth, (req, res) => {
     } else {
       html += q.text;
     }
+
     html += `
               </h2>
             </div>
             <p id="instruction" class="instruction">${instructionText}</p>
             <div id="answers">
     `;
+
+    // Обробка питання типу matching
     if (q.type === 'matching' && q.pairs) {
       const leftItems = shuffleArray([...q.pairs.map(p => p.left)]);
       const rightItems = shuffleArray([...q.pairs.map(p => p.right)]);
@@ -1404,6 +1433,7 @@ app.get('/test/question', checkAuth, (req, res) => {
         <button onclick="resetMatchingPairs()">Скинути зіставлення</button>
       `;
     } else if (!q.options || q.options.length === 0) {
+      // Обробка питання типу input
       if (q.type !== 'fillblank') {
         const userAnswer = answers[index] || '';
         html += `
@@ -1411,6 +1441,7 @@ app.get('/test/question', checkAuth, (req, res) => {
         `;
       }
     } else {
+      // Обробка питання типу ordering
       if (q.type === 'ordering') {
         html += `
           <div id="sortable-options">
@@ -1425,6 +1456,7 @@ app.get('/test/question', checkAuth, (req, res) => {
           </div>
         `;
       } else {
+        // Обробка інших типів питань (multiple, singlechoice, truefalse)
         q.options.forEach((option, optIndex) => {
           const selected = selectedOptions.includes(option) ? 'selected' : '';
           const escapedOption = option.replace(/'/g, "\\'").replace(/"/g, '\\"');
@@ -1436,6 +1468,7 @@ app.get('/test/question', checkAuth, (req, res) => {
         });
       }
     }
+
     html += `
             </div>
           </div>
@@ -1497,7 +1530,10 @@ app.get('/test/question', checkAuth, (req, res) => {
                     answers.push(input ? input.value.trim() : '');
                   }
                 }
-                const responseTime = Math.min(timePerQuestion, (Date.now() - startTime) / 1000 - (index * timePerQuestion));
+                const elapsedTimeSinceStart = (Date.now() - startTime) / 1000;
+                const responseTime = isQuickTest
+                  ? Math.max(0, Math.min(timePerQuestion, elapsedTimeSinceStart - (index * timePerQuestion)))
+                  : elapsedTimeSinceStart;
 
                 const formData = new URLSearchParams();
                 formData.append('index', index);
@@ -1508,7 +1544,7 @@ app.get('/test/question', checkAuth, (req, res) => {
                 formData.append('activityCount', activityCount);
                 formData.append('_csrf', '${res.locals._csrf}');
 
-                console.log('Auto-saving answer before test completion:', { index, answers });
+                console.log('Auto-saving answer before test completion:', { index, answers, responseTime });
 
                 const response = await fetch('/answer', {
                   method: 'POST',
@@ -1674,7 +1710,10 @@ app.get('/test/question', checkAuth, (req, res) => {
                     answers.push(input ? input.value.trim() : '');
                   }
                 }
-                const responseTime = Math.min(timePerQuestion, (Date.now() - startTime) / 1000 - (index * timePerQuestion));
+                const elapsedTimeSinceStart = (Date.now() - startTime) / 1000;
+                const responseTime = isQuickTest
+                  ? Math.max(0, Math.min(timePerQuestion, elapsedTimeSinceStart - (index * timePerQuestion)))
+                  : elapsedTimeSinceStart;
 
                 const formData = new URLSearchParams();
                 formData.append('index', index);
@@ -1685,7 +1724,7 @@ app.get('/test/question', checkAuth, (req, res) => {
                 formData.append('activityCount', activityCount);
                 formData.append('_csrf', '${res.locals._csrf}');
 
-                console.log('Saving data in saveAndNext:', { timeAway, switchCount });
+                console.log('Saving data in saveAndNext:', { timeAway, switchCount, responseTime });
 
                 const response = await fetch('/answer', {
                   method: 'POST',
@@ -1746,7 +1785,10 @@ app.get('/test/question', checkAuth, (req, res) => {
                     answers.push(input ? input.value.trim() : '');
                   }
                 }
-                const responseTime = Math.min(timePerQuestion, (Date.now() - startTime) / 1000 - (index * timePerQuestion));
+                const elapsedTimeSinceStart = (Date.now() - startTime) / 1000;
+                const responseTime = isQuickTest
+                  ? Math.max(0, Math.min(timePerQuestion, elapsedTimeSinceStart - (index * timePerQuestion)))
+                  : elapsedTimeSinceStart;
 
                 const formData = new URLSearchParams();
                 formData.append('index', index);
@@ -1757,7 +1799,7 @@ app.get('/test/question', checkAuth, (req, res) => {
                 formData.append('activityCount', activityCount);
                 formData.append('_csrf', '${res.locals._csrf}');
 
-                console.log('Saving data in finishTest:', { timeAway, switchCount });
+                console.log('Saving data in finishTest:', { timeAway, switchCount, responseTime });
 
                 const response = await fetch('/answer', {
                   method: 'POST',
@@ -1932,11 +1974,21 @@ app.post('/answer', checkAuth, express.urlencoded({ extended: true }), async (re
       return res.status(400).json({ success: false, error: 'Тест не розпочато' });
     }
 
+    // Додаткове логування для діагностики
+    logger.info('Received response time data', {
+      index,
+      responseTime: parseFloat(responseTime),
+      startTime: userTest.startTime,
+      currentTime: Date.now(),
+      timePerQuestion: userTest.timePerQuestion,
+      isQuickTest: userTest.isQuickTest
+    });
+
     userTest.answers[index] = parsedAnswer;
     userTest.suspiciousActivity = userTest.suspiciousActivity || { timeAway: 0, switchCount: 0, responseTimes: [], activityCounts: [] };
     userTest.suspiciousActivity.timeAway = (userTest.suspiciousActivity.timeAway || 0) + (parseInt(timeAway) || 0);
     userTest.suspiciousActivity.switchCount = (userTest.suspiciousActivity.switchCount || 0) + (parseInt(switchCount) || 0);
-    userTest.suspiciousActivity.responseTimes[index] = parseInt(responseTime) || 0;
+    userTest.suspiciousActivity.responseTimes[index] = Math.max(0, parseFloat(responseTime) || 0);
     userTest.suspiciousActivity.activityCounts[index] = parseInt(activityCount) || 0;
 
     res.json({ success: true });
@@ -2043,8 +2095,9 @@ app.get('/result', checkAuth, async (req, res) => {
       ? Math.round((suspiciousActivity.timeAway / (duration * 1000)) * 100)
       : 0;
     const switchCount = suspiciousActivity ? suspiciousActivity.switchCount || 0 : 0;
+    // Гарантуємо, що avgResponseTime не від’ємний
     const avgResponseTime = suspiciousActivity && suspiciousActivity.responseTimes
-      ? (suspiciousActivity.responseTimes.reduce((sum, time) => sum + (time || 0), 0) / suspiciousActivity.responseTimes.length / 1000).toFixed(2)
+      ? Math.max(0, (suspiciousActivity.responseTimes.reduce((sum, time) => sum + (time || 0), 0) / suspiciousActivity.responseTimes.length / 1000)).toFixed(2)
       : 0;
     const totalActivityCount = suspiciousActivity && suspiciousActivity.activityCounts
       ? suspiciousActivity.activityCounts.reduce((sum, count) => sum + (count || 0), 0).toFixed(0)
