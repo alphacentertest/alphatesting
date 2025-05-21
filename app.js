@@ -1166,6 +1166,12 @@ app.get('/test/question', checkAuth, (req, res) => {
     const selectedOptions = answers[index] || [];
     const selectedOptionsString = JSON.stringify(selectedOptions).replace(/'/g, "\\'");
 
+    // Встановлюємо час початку для поточного питання
+    userTest.questionStartTime = userTest.questionStartTime || {};
+    if (!userTest.questionStartTime[index]) {
+      userTest.questionStartTime[index] = Date.now();
+    }
+
     let html = `
       <!DOCTYPE html>
       <html lang="uk">
@@ -1444,11 +1450,12 @@ app.get('/test/question', checkAuth, (req, res) => {
             let questionTimeRemaining = timePerQuestion;
             let currentQuestionIndex = ${index};
             let lastGlobalUpdateTime = Date.now();
-            let isSaving = false; // Флаг для відстеження процесу збереження
-            let hasMovedToNext = false; // Флаг для уникнення подвійного переходу
+            let isSaving = false;
+            let hasMovedToNext = false;
+            let questionStartTime = ${userTest.questionStartTime[index]}; // Час початку поточного питання
 
             async function saveCurrentAnswer(index) {
-              if (isSaving) return; // Уникаємо повторного виклику під час збереження
+              if (isSaving) return;
               isSaving = true;
               try {
                 let answers = selectedOptions;
@@ -1517,9 +1524,7 @@ app.get('/test/question', checkAuth, (req, res) => {
               }
 
               if (remainingTime <= 0) {
-                // Перед завершенням тесту зберігаємо останню відповідь
                 saveCurrentAnswer(currentQuestionIndex).then(() => {
-                  // Додаємо затримку, щоб переконатися, що збереження завершилося
                   setTimeout(() => {
                     window.location.href = '/result';
                   }, 500);
@@ -1532,9 +1537,8 @@ app.get('/test/question', checkAuth, (req, res) => {
             if (isQuickTest) {
               function updateQuestionTimer() {
                 const now = Date.now();
-                const elapsedTime = Math.floor((now - startTime) / 1000);
-                const currentQuestionElapsed = elapsedTime % timePerQuestion;
-                questionTimeRemaining = Math.max(0, timePerQuestion - currentQuestionElapsed);
+                const elapsedSinceQuestionStart = Math.floor((now - questionStartTime) / 1000);
+                questionTimeRemaining = Math.max(0, timePerQuestion - elapsedSinceQuestionStart);
                 const timerText = document.getElementById('timer-text');
                 const timerCircle = document.querySelector('#question-timer .timer-circle');
                 if (timerText && timerCircle) {
@@ -1544,7 +1548,6 @@ app.get('/test/question', checkAuth, (req, res) => {
                   timerCircle.style.strokeDashoffset = offset;
                 }
                 if (questionTimeRemaining <= 0 && currentQuestionIndex < totalQuestions - 1 && !hasMovedToNext) {
-                  // Зберігаємо відповідь перед автоматичним переходом на наступне питання
                   saveCurrentAnswer(currentQuestionIndex);
                 }
               }
@@ -1580,7 +1583,7 @@ app.get('/test/question', checkAuth, (req, res) => {
             window.addEventListener('focus', () => {
               if (lastBlurTime > 0) {
                 const now = performance.now();
-                const awayDuration = (now - lastBlurTime) / 1000; // Час у секундах
+                const awayDuration = (now - lastBlurTime) / 1000;
                 timeAway += awayDuration;
                 console.log('Tab focused, time away accumulated:', awayDuration, 'Total timeAway:', timeAway);
                 lastBlurTime = 0;
@@ -1631,7 +1634,7 @@ app.get('/test/question', checkAuth, (req, res) => {
 
             async function saveAndNext(index) {
               try {
-                hasMovedToNext = true; // Встановлюємо флаг, щоб уникнути автоматичного переходу
+                hasMovedToNext = true;
                 let answers = selectedOptions;
                 if (document.querySelector('input[name="q' + index + '"]')) {
                   answers = document.getElementById('q' + index + '_input').value;
@@ -1671,11 +1674,19 @@ app.get('/test/question', checkAuth, (req, res) => {
 
                 const result = await response.json();
                 if (result.success) {
-                  if (index < ${questions.length - 1}) {
-                    window.location.href = '/test/question?index=' + (index + 1);
-                  } else {
-                    window.location.href = '/result';
-                  }
+                  // Скидаємо таймер для наступного питання
+                  const nextIndex = index + 1;
+                  fetch('/set-question-start-time?index=' + nextIndex, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                    body: new URLSearchParams({ '_csrf': '${req.csrfToken()}' })
+                  }).then(() => {
+                    if (nextIndex < ${questions.length}) {
+                      window.location.href = '/test/question?index=' + nextIndex;
+                    } else {
+                      window.location.href = '/result';
+                    }
+                  });
                 } else {
                   console.error('Error saving answer:', result.error);
                   alert('Помилка збереження відповіді');
@@ -1696,7 +1707,6 @@ app.get('/test/question', checkAuth, (req, res) => {
 
             async function finishTest(index) {
               try {
-                // Зберігаємо відповідь перед завершенням тесту
                 await saveCurrentAnswer(index);
                 let answers = selectedOptions;
                 if (document.querySelector('input[name="q' + index + '"]')) {
@@ -1839,6 +1849,31 @@ app.get('/test/question', checkAuth, (req, res) => {
   } finally {
     const endTime = Date.now();
     logger.info('Route /test/question executed', { duration: `${endTime - startTime} ms` });
+  }
+});
+
+// Новий маршрут для оновлення часу початку питання
+app.post('/set-question-start-time', checkAuth, (req, res) => {
+  const startTime = Date.now();
+  try {
+    const userTest = userTests.get(req.user);
+    if (!userTest) {
+      return res.status(400).json({ success: false, error: 'Тест не розпочато' });
+    }
+    const index = parseInt(req.query.index);
+    if (index >= 0 && index < userTest.questions.length) {
+      userTest.questionStartTime = userTest.questionStartTime || {};
+      userTest.questionStartTime[index] = Date.now();
+      res.json({ success: true });
+    } else {
+      res.status(400).json({ success: false, error: 'Невірний номер питання' });
+    }
+  } catch (error) {
+    logger.error('Error in /set-question-start-time', { message: error.message, stack: error.stack });
+    res.status(500).json({ success: false, error: 'Помилка сервера' });
+  } finally {
+    const endTime = Date.now();
+    logger.info('Route /set-question-start-time executed', { duration: `${endTime - startTime} ms` });
   }
 });
 
