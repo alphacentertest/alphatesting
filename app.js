@@ -447,7 +447,7 @@ const importQuestionsToMongoDB = async (filePath, testNumber) => {
 
           if (type === 'input') {
             if (questionData.correctAnswers.length !== 1) {
-              throws throw new Error('Для типу Input у рядку ${rowNumber} потрібна одна правильная відповідь');
+              throw new Error(`Для типу Input у рядку ${rowNumber} потрібна одна правильна відповідь`);
             }
             const correctAnswer = questionData.correctAnswers[0];
             if (correctAnswer.includes('-')) {
@@ -3132,11 +3132,17 @@ app.get('/admin/questions', checkAuth, checkAdmin, async (req, res) => {
 app.get('/admin/add-question', checkAuth, checkAdmin, (req, res) => {
   const startTime = Date.now();
   try {
+    // Перевірка, чи всі необхідні змінні доступні
+    if (!testNames || !Object.keys(testNames).length) {
+      throw new Error('Список тестів недоступний');
+    }
+
     const html = `
       <!DOCTYPE html>
       <html lang="uk">
         <head>
           <meta charset="UTF-8">
+          <meta name="viewport" content="width=device-width, initial-scale=1.0">
           <title>Додати питання</title>
           <style>
             body { font-family: Arial, sans-serif; padding: 20px; }
@@ -3153,17 +3159,19 @@ app.get('/admin/add-question', checkAuth, checkAdmin, (req, res) => {
         <body>
           <h1>Додати питання</h1>
           <form method="POST" action="/admin/add-question" onsubmit="return validateForm()">
-            <input type="hidden" name="_csrf" value="${res.locals._csrf}">
+            <input type="hidden" name="_csrf" value="${res.locals._csrf || ''}">
             <label for="testNumber">Номер тесту:</label>
             <select id="testNumber" name="testNumber" required>
               ${Object.keys(testNames).map(num => `<option value="${num}">${testNames[num].name}</option>`).join('')}
             </select>
             <label for="picture">Назва файлу зображення (опціонально, наприклад, Picture1.png):</label>
+            <p class="note">Файл зображення має бути у папці public/images.</p>
             <input type="text" id="picture" name="picture" placeholder="Picture1.png">
             <label for="text">Текст питання:</label>
-            <textarea id="text" name="text" required></textarea>
+            <p class="note">Для типу Fillblank використовуйте ___ для позначення пропусків.</p>
+            <textarea id="text" name="text" required placeholder="Введіть текст питання"></textarea>
             <label for="type">Тип питання:</label>
-            <select id="type" name="type" required>
+            <select id="type" name="type" required onchange="updateFormFields()">
               <option value="multiple">Multiple Choice</option>
               <option value="singlechoice">Single Choice</option>
               <option value="truefalse">True/False</option>
@@ -3172,10 +3180,12 @@ app.get('/admin/add-question', checkAuth, checkAdmin, (req, res) => {
               <option value="matching">Matching</option>
               <option value="fillblank">Fill in the Blank</option>
             </select>
-            <label for="options">Варіанти відповідей (через крапку з комою):</label>
-            <textarea id="options" name="options" placeholder="Введіть варіанти через крапку з комою"></textarea>
+            <div id="options-container">
+              <label for="options">Варіанти відповідей (через крапку з комою):</label>
+              <textarea id="options" name="options" placeholder="Введіть варіанти через крапку з комою"></textarea>
+            </div>
             <label for="correctAnswers">Правильні відповіді (через крапку з комою):</label>
-            <p class="note">Для типів Input і Fillblank можна вказати діапазон у форматі "число1-число2", наприклад, "12-14".</p>
+            <p id="correctAnswersNote" class="note">Для типів Input і Fillblank можна вказати діапазон у форматі "число1-число2", наприклад, "12-14".</p>
             <textarea id="correctAnswers" name="correctAnswers" required placeholder="Введіть правильні відповіді через крапку з комою"></textarea>
             <label for="points">Бали за питання:</label>
             <input type="number" id="points" name="points" value="1" min="1" required>
@@ -3186,14 +3196,35 @@ app.get('/admin/add-question', checkAuth, checkAdmin, (req, res) => {
           <div id="error-message" class="error"></div>
           <button class="nav-btn" onclick="window.location.href='/admin/questions'">Повернутися до списку питань</button>
           <script>
+            function updateFormFields() {
+              const type = document.getElementById('type').value;
+              const optionsContainer = document.getElementById('options-container');
+              const correctAnswersNote = document.getElementById('correctAnswersNote');
+              if (type === 'truefalse') {
+                optionsContainer.style.display = 'none';
+                document.getElementById('options').value = 'Правда; Неправда';
+              } else if (type === 'input' || type === 'fillblank') {
+                optionsContainer.style.display = 'none';
+                correctAnswersNote.style.display = 'block';
+              } else {
+                optionsContainer.style.display = 'block';
+                if (type !== 'input' && type !== 'fillblank') {
+                  correctAnswersNote.style.display = 'none';
+                }
+              }
+            }
+
             function validateForm() {
               const text = document.getElementById('text').value;
               const points = document.getElementById('points').value;
               const variant = document.getElementById('variant').value;
               const picture = document.getElementById('picture').value;
+              const type = document.getElementById('type').value;
+              const correctAnswers = document.getElementById('correctAnswers').value;
               const errorMessage = document.getElementById('error-message');
+
               if (text.length < 5 || text.length > 1000) {
-                                errorMessage.textContent = 'Текст питання має бути від 5 до 1000 символів';
+                errorMessage.textContent = 'Текст питання має бути від 5 до 1000 символів';
                 return false;
               }
               if (points < 1 || points > 100) {
@@ -3208,38 +3239,68 @@ app.get('/admin/add-question', checkAuth, checkAdmin, (req, res) => {
                 errorMessage.textContent = 'Назва файлу зображення має закінчуватися на .jpeg, .jpg, .png або .gif';
                 return false;
               }
-              const type = document.getElementById('type').value;
-              const correctAnswers = document.getElementById('correctAnswers').value;
               if (type === 'input' || type === 'fillblank') {
                 const answersArray = correctAnswers.split(';').map(ans => ans.trim());
                 if (type === 'input' && answersArray.length !== 1) {
                   errorMessage.textContent = 'Для типу Input потрібна лише одна правильна відповідь';
                   return false;
                 }
+                if (type === 'fillblank') {
+                  const blankCount = (text.match(/___/g) || []).length;
+                  if (blankCount === 0 || blankCount !== answersArray.length) {
+                    errorMessage.textContent = 'Кількість пропусків у тексті питання не відповідає кількості правильних відповідей';
+                    return false;
+                  }
+                }
                 for (let i = 0; i < answersArray.length; i++) {
                   const answer = answersArray[i];
                   if (answer.includes('-')) {
                     const [min, max] = answer.split('-').map(val => parseFloat(val.trim()));
                     if (isNaN(min) || isNaN(max) || min > max) {
-                      errorMessage.textContent = `Правильна відповідь ${i + 1} має невірний формат діапазону. Використовуйте "число1-число2", де число1 <= число2.`;
+                      errorMessage.textContent = \`Правильна відповідь \${i + 1} має невірний формат діапазону. Використовуйте "число1-число2", де число1 <= число2.\`;
                       return false;
                     }
                   } else {
                     const value = parseFloat(answer);
                     if (isNaN(value)) {
-                      errorMessage.textContent = `Правильна відповідь ${i + 1} для типу ${type} має бути числом або діапазоном у форматі "число1-число2".`;
+                      errorMessage.textContent = \`Правильна відповідь \${i + 1} для типу \${type} має бути числом або діапазоном у форматі "число1-число2".\`;
                       return false;
                     }
                   }
                 }
               }
+              if (type === 'singlechoice') {
+                const correctAnswersArray = correctAnswers.split(';').map(ans => ans.trim());
+                if (correctAnswersArray.length !== 1) {
+                  errorMessage.textContent = 'Для типу Single Choice потрібна одна правильна відповідь';
+                  return false;
+                }
+                const options = document.getElementById('options').value.split(';').map(opt => opt.trim()).filter(Boolean);
+                if (options.length < 2) {
+                  errorMessage.textContent = 'Для типу Single Choice потрібно мінімум 2 варіанти відповідей';
+                  return false;
+                }
+              }
+              if (type === 'matching') {
+                const options = document.getElementById('options').value.split(';').map(opt => opt.trim()).filter(Boolean);
+                const correctAnswersArray = correctAnswers.split(';').map(ans => ans.trim()).filter(Boolean);
+                if (options.length === 0 || options.length !== correctAnswersArray.length) {
+                  errorMessage.textContent = 'Для типу Matching кількість варіантів має відповідати кількості правильних відповідей';
+                  return false;
+                }
+              }
               return true;
             }
+
+            updateFormFields();
           </script>
         </body>
       </html>
-    `;
+    `.trim();
     res.send(html);
+  } catch (error) {
+    logger.error('Error in /admin/add-question', { message: error.message, stack: error.stack });
+    res.status(500).send('Помилка при додаванні питання');
   } finally {
     const endTime = Date.now();
     logger.info('Route /admin/add-question executed', { duration: `${endTime - startTime} ms` });
@@ -3407,10 +3468,15 @@ app.get('/admin/edit-question', checkAuth, checkAdmin, async (req, res) => {
   const startTime = Date.now();
   try {
     const { id } = req.query;
+    if (!id || !ObjectId.isValid(id)) {
+      return res.status(400).send('Невірний ідентифікатор питання');
+    }
+
     const question = await db.collection('questions').findOne({ _id: new ObjectId(id) });
     if (!question) {
       return res.status(404).send('Питання не знайдено');
     }
+
     const pictureName = question.picture ? question.picture.replace('/images/', '') : '';
     const normalizedOriginalPicture = question.originalPicture
       ? question.originalPicture.replace(/\.png$/i, '').replace(/^picture/i, 'Picture').replace(/\s+/g, '')
@@ -3418,11 +3484,13 @@ app.get('/admin/edit-question', checkAuth, checkAdmin, async (req, res) => {
     const warningMessage = question.picture === null && question.originalPicture && question.originalPicture.trim() !== ''
       ? `Попередження: зображення "${normalizedOriginalPicture}" не було знайдено під час імпорту. Перевірте, чи файл зображення є в папці public/images.`
       : '';
+
     const html = `
       <!DOCTYPE html>
       <html lang="uk">
         <head>
           <meta charset="UTF-8">
+          <meta name="viewport" content="width=device-width, initial-scale=1.0">
           <title>Редагувати питання</title>
           <style>
             body { font-family: Arial, sans-serif; padding: 20px; }
@@ -3441,20 +3509,22 @@ app.get('/admin/edit-question', checkAuth, checkAdmin, async (req, res) => {
         <body>
           <h1>Редагувати питання</h1>
           <form method="POST" action="/admin/edit-question" onsubmit="return validateForm()">
-            <input type="hidden" name="_csrf" value="${res.locals._csrf}">
+            <input type="hidden" name="_csrf" value="${res.locals._csrf || ''}">
             <input type="hidden" name="id" value="${id}">
             <label for="testNumber">Номер тесту:</label>
             <select id="testNumber" name="testNumber" required>
               ${Object.keys(testNames).map(num => `<option value="${num}" ${num === question.testNumber ? 'selected' : ''}>${testNames[num].name}</option>`).join('')}
             </select>
             <label for="picture">Назва файлу зображення (опціонально, наприклад, Picture1.png):</label>
+            <p class="note">Файл зображення має бути у папці public/images.</p>
             <input type="text" id="picture" name="picture" value="${pictureName}" placeholder="Picture1.png">
             ${warningMessage ? `<p class="warning">${warningMessage}</p>` : ''}
             ${pictureName ? `<img id="image-preview" src="/images/${pictureName}" alt="Зображення питання" onerror="this.onerror=null;this.src='';this.alt='Зображення недоступне';">` : ''}
             <label for="text">Текст питання:</label>
-            <textarea id="text" name="text" required>${question.text}</textarea>
+            <p class="note">Для типу Fillblank використовуйте ___ для позначення пропусків.</p>
+            <textarea id="text" name="text" required placeholder="Введіть текст питання">${question.text}</textarea>
             <label for="type">Тип питання:</label>
-            <select id="type" name="type" required>
+            <select id="type" name="type" required onchange="updateFormFields()">
               <option value="multiple" ${question.type === 'multiple' ? 'selected' : ''}>Multiple Choice</option>
               <option value="singlechoice" ${question.type === 'singlechoice' ? 'selected' : ''}>Single Choice</option>
               <option value="truefalse" ${question.type === 'truefalse' ? 'selected' : ''}>True/False</option>
@@ -3463,26 +3533,49 @@ app.get('/admin/edit-question', checkAuth, checkAdmin, async (req, res) => {
               <option value="matching" ${question.type === 'matching' ? 'selected' : ''}>Matching</option>
               <option value="fillblank" ${question.type === 'fillblank' ? 'selected' : ''}>Fill in the Blank</option>
             </select>
-            <label for="options">Варіанти відповідей (через крапку з комою):</label>
-            <textarea id="options" name="options">${question.options.join('; ')}</textarea>
+            <div id="options-container">
+              <label for="options">Варіанти відповідей (через крапку з комою):</label>
+              <textarea id="options" name="options" placeholder="Введіть варіанти через крапку з комою">${question.options.join('; ')}</textarea>
+            </div>
             <label for="correctAnswers">Правильні відповіді (через крапку з комою):</label>
-            <p class="note">Для типів Input і Fillblank можна вказати діапазон у форматі "число1-число2", наприклад, "12-14".</p>
-            <textarea id="correctAnswers" name="correctAnswers" required>${question.correctAnswers.join('; ')}</textarea>
+            <p id="correctAnswersNote" class="note">Для типів Input і Fillblank можна вказати діапазон у форматі "число1-число2", наприклад, "12-14".</p>
+            <textarea id="correctAnswers" name="correctAnswers" required placeholder="Введіть правильні відповіді через крапку з комою">${question.correctAnswers.join('; ')}</textarea>
             <label for="points">Бали за питання:</label>
             <input type="number" id="points" name="points" value="${question.points}" min="1" required>
             <label for="variant">Варіант:</label>
-            <input type="text" id="variant" name="variant" value="${question.variant}">
+            <input type="text" id="variant" name="variant" value="${question.variant}" placeholder="Наприклад, Variant 1">
             <button type="submit" class="submit-btn">Зберегти</button>
           </form>
           <div id="error-message" class="error"></div>
           <button class="nav-btn" onclick="window.location.href='/admin/questions'">Повернутися до списку питань</button>
           <script>
+            function updateFormFields() {
+              const type = document.getElementById('type').value;
+              const optionsContainer = document.getElementById('options-container');
+              const correctAnswersNote = document.getElementById('correctAnswersNote');
+              if (type === 'truefalse') {
+                optionsContainer.style.display = 'none';
+                document.getElementById('options').value = 'Правда; Неправда';
+              } else if (type === 'input' || type === 'fillblank') {
+                optionsContainer.style.display = 'none';
+                correctAnswersNote.style.display = 'block';
+              } else {
+                optionsContainer.style.display = 'block';
+                if (type !== 'input' && type !== 'fillblank') {
+                  correctAnswersNote.style.display = 'none';
+                }
+              }
+            }
+
             function validateForm() {
               const text = document.getElementById('text').value;
               const points = document.getElementById('points').value;
               const variant = document.getElementById('variant').value;
               const picture = document.getElementById('picture').value;
+              const type = document.getElementById('type').value;
+              const correctAnswers = document.getElementById('correctAnswers').value;
               const errorMessage = document.getElementById('error-message');
+
               if (text.length < 5 || text.length > 1000) {
                 errorMessage.textContent = 'Текст питання має бути від 5 до 1000 символів';
                 return false;
@@ -3499,29 +3592,54 @@ app.get('/admin/edit-question', checkAuth, checkAdmin, async (req, res) => {
                 errorMessage.textContent = 'Назва файлу зображення має закінчуватися на .jpeg, .jpg, .png або .gif';
                 return false;
               }
-              const type = document.getElementById('type').value;
-              const correctAnswers = document.getElementById('correctAnswers').value;
               if (type === 'input' || type === 'fillblank') {
                 const answersArray = correctAnswers.split(';').map(ans => ans.trim());
                 if (type === 'input' && answersArray.length !== 1) {
                   errorMessage.textContent = 'Для типу Input потрібна лише одна правильна відповідь';
                   return false;
                 }
+                if (type === 'fillblank') {
+                  const blankCount = (text.match(/___/g) || []).length;
+                  if (blankCount === 0 || blankCount !== answersArray.length) {
+                    errorMessage.textContent = 'Кількість пропусків у тексті питання не відповідає кількості правильних відповідей';
+                    return false;
+                  }
+                }
                 for (let i = 0; i < answersArray.length; i++) {
                   const answer = answersArray[i];
                   if (answer.includes('-')) {
                     const [min, max] = answer.split('-').map(val => parseFloat(val.trim()));
                     if (isNaN(min) || isNaN(max) || min > max) {
-                      errorMessage.textContent = `Правильна відповідь ${i + 1} має невірний формат діапазону. Використовуйте "число1-число2", де число1 <= число2.`;
+                      errorMessage.textContent = \`Правильна відповідь \${i + 1} має невірний формат діапазону. Використовуйте "число1-число2", де число1 <= число2.\`;
                       return false;
                     }
                   } else {
                     const value = parseFloat(answer);
                     if (isNaN(value)) {
-                      errorMessage.textContent = `Правильна відповідь ${i + 1} для типу ${type} має бути числом або діапазоном у форматі "число1-число2".`;
+                      errorMessage.textContent = \`Правильна відповідь \${i + 1} для типу \${type} має бути числом або діапазоном у форматі "число1-число2".\`;
                       return false;
                     }
                   }
+                }
+              }
+              if (type === 'singlechoice') {
+                const correctAnswersArray = correctAnswers.split(';').map(ans => ans.trim());
+                if (correctAnswersArray.length !== 1) {
+                  errorMessage.textContent = 'Для типу Single Choice потрібна одна правильна відповідь';
+                  return false;
+                }
+                const options = document.getElementById('options').value.split(';').map(opt => opt.trim()).filter(Boolean);
+                if (options.length < 2) {
+                  errorMessage.textContent = 'Для типу Single Choice потрібно мінімум 2 варіанти відповідей';
+                  return false;
+                }
+              }
+              if (type === 'matching') {
+                const options = document.getElementById('options').value.split(';').map(opt => opt.trim()).filter(Boolean);
+                const correctAnswersArray = correctAnswers.split(';').map(ans => ans.trim()).filter(Boolean);
+                if (options.length === 0 || options.length !== correctAnswersArray.length) {
+                  errorMessage.textContent = 'Для типу Matching кількість варіантів має відповідати кількості правильних відповідей';
+                  return false;
                 }
               }
               return true;
@@ -3541,10 +3659,12 @@ app.get('/admin/edit-question', checkAuth, checkAdmin, async (req, res) => {
                 preview.alt = '';
               }
             });
+
+            updateFormFields();
           </script>
         </body>
       </html>
-    `;
+    `.trim();
     res.send(html);
   } catch (error) {
     logger.error('Error in /admin/edit-question', { message: error.message, stack: error.stack });
