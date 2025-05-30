@@ -2011,9 +2011,19 @@ app.get('/result', checkAuth, async (req, res) => {
           userAnswer: normalizedUserAnswer,
           correctAnswer: normalizedCorrectAnswer
         });
-        const isCorrect = normalizedUserAnswer === normalizedCorrectAnswer;
-        if (isCorrect) {
-          questionScore = q.points;
+
+        if (normalizedCorrectAnswer.includes('-')) {
+          const [min, max] = normalizedCorrectAnswer.split('-').map(val => parseFloat(val.trim()));
+          const userValue = parseFloat(normalizedUserAnswer);
+          const isCorrect = !isNaN(userValue) && userValue >= min && userValue <= max;
+          if (isCorrect) {
+            questionScore = q.points;
+          }
+        } else {
+          const isCorrect = normalizedUserAnswer === normalizedCorrectAnswer;
+          if (isCorrect) {
+            questionScore = q.points;
+          }
         }
       } else if (q.type === 'ordering' && userAnswer && Array.isArray(userAnswer)) {
         const userAnswers = userAnswer.map(val => normalizeAnswer(val));
@@ -2034,8 +2044,22 @@ app.get('/result', checkAuth, async (req, res) => {
         const userAnswers = userAnswer.map(val => normalizeAnswer(val));
         const correctAnswers = q.correctAnswers.map(val => normalizeAnswer(val));
         logger.info(`Fillblank question ${index + 1}`, { userAnswers, correctAnswers });
+
+        // Перевірка відповідей: кожна відповідь може бути або точним значенням, або діапазоном
         const isCorrect = userAnswers.length === correctAnswers.length &&
-          userAnswers.every((answer, idx) => answer === correctAnswers[idx]);
+          userAnswers.every((answer, idx) => {
+            const correctAnswer = correctAnswers[idx];
+            if (correctAnswer.includes('-')) {
+              // Якщо це діапазон
+              const [min, max] = correctAnswer.split('-').map(val => parseFloat(val.trim()));
+              const userValue = parseFloat(answer);
+              return !isNaN(userValue) && userValue >= min && userValue <= max;
+            } else {
+              // Якщо це точне значення
+              return answer === correctAnswer;
+            }
+          });
+
         if (isCorrect) {
           questionScore = q.points;
         }
@@ -2063,7 +2087,6 @@ app.get('/result', checkAuth, async (req, res) => {
       ? Math.round((suspiciousActivity.timeAway / (duration * 1000)) * 100)
       : 0;
     const switchCount = suspiciousActivity ? suspiciousActivity.switchCount || 0 : 0;
-    // Обчислення avgResponseTime без зайвого ділення на 1000
     const avgResponseTime = suspiciousActivity && suspiciousActivity.responseTimes
       ? (suspiciousActivity.responseTimes.reduce((sum, time) => sum + (time || 0), 0) / suspiciousActivity.responseTimes.length).toFixed(2)
       : 0;
@@ -3108,22 +3131,18 @@ app.post('/admin/add-question', checkAuth, checkAdmin, [
 ], async (req, res) => {
   const startTime = Date.now();
   try {
-    // Перевірка валідації вхідних даних
     const errors = validationResult(req);
     if (!errors.isEmpty()) {
       logger.warn('Validation errors in /admin/add-question', { errors: errors.array() });
       return res.status(400).send(errors.array()[0].msg);
     }
 
-    // Отримання даних з тіла запиту
     const { testNumber, text, type, options, correctAnswers, points, variant, picture } = req.body;
 
-    // Нормалізація назви зображення для originalPicture
     const normalizedPicture = picture
       ? picture.replace(/\.png$/i, '').replace(/^picture/i, 'Picture').replace(/\s+/g, '')
       : null;
 
-    // Формування об'єкта питання
     let questionData = {
       testNumber,
       picture: picture ? `/images/${normalizedPicture}` : null,
@@ -3134,21 +3153,19 @@ app.post('/admin/add-question', checkAuth, checkAdmin, [
       correctAnswers: correctAnswers.split(';').map(ans => ans.trim()).filter(Boolean),
       points: Number(points),
       variant: variant || '',
-      order: await db.collection('questions').countDocuments({ testNumber }) // Порядок на основі кількості існуючих питань
+      order: await db.collection('questions').countDocuments({ testNumber })
     };
 
-    // Перевірка наявності зображення
     if (questionData.picture) {
       const imagePath = path.join(__dirname, 'public', questionData.picture);
       if (!fs.existsSync(imagePath)) {
         logger.warn(`Image not found at path: ${imagePath}`);
-        questionData.picture = null; // Якщо зображення не знайдено, скидаємо picture на null
+        questionData.picture = null;
       } else {
         logger.info(`Image found: ${questionData.picture}`);
       }
     }
 
-    // Обробка різних типів питань
     if (type === 'truefalse') {
       questionData.options = ["Правда", "Неправда"];
     }
@@ -3173,6 +3190,21 @@ app.post('/admin/add-question', checkAuth, checkAdmin, [
         return res.status(400).send('Кількість пропусків у тексті питання не відповідає кількості правильних відповідей');
       }
       questionData.blankCount = blankCount;
+
+      // Валідація правильних відповідей для fillblank
+      questionData.correctAnswers.forEach((correctAnswer, idx) => {
+        if (correctAnswer.includes('-')) {
+          const [min, max] = correctAnswer.split('-').map(val => parseFloat(val.trim()));
+          if (isNaN(min) || isNaN(max) || min > max) {
+            return res.status(400).send(`Невірний формат діапазону для правильної відповіді ${idx + 1}. Використовуйте формат "число1-число2", наприклад, "12-14", де число1 <= число2.`);
+          }
+        } else {
+          const value = parseFloat(correctAnswer);
+          if (isNaN(value)) {
+            return res.status(400).send(`Правильна відповідь ${idx + 1} для типу Fillblank має бути числом або діапазоном у форматі "число1-число2".`);
+          }
+        }
+      });
     }
 
     if (type === 'singlechoice') {
@@ -3186,16 +3218,31 @@ app.post('/admin/add-question', checkAuth, checkAdmin, [
       questionData.correctAnswer = questionData.correctAnswers[0];
     }
 
-    // Збереження питання в MongoDB
+    if (type === 'input') {
+      if (questionData.correctAnswers.length !== 1) {
+        return res.status(400).send('Для типу Input потрібна одна правильна відповідь');
+      }
+      const correctAnswer = questionData.correctAnswers[0];
+      if (correctAnswer.includes('-')) {
+        const [min, max] = correctAnswer.split('-').map(val => parseFloat(val.trim()));
+        if (isNaN(min) || isNaN(max) || min > max) {
+          return res.status(400).send('Невірний формат діапазону для правильної відповіді. Використовуйте формат "число1-число2", наприклад, "12-14", де число1 <= число2.');
+        }
+      } else {
+        const value = parseFloat(correctAnswer);
+        if (isNaN(value)) {
+          return res.status(400).send('Правильна відповідь для типу Input має бути числом або діапазоном у форматі "число1-число2".');
+        }
+      }
+    }
+
     await db.collection('questions').insertOne(questionData);
     logger.info('Question added to MongoDB', { testNumber, text, type });
 
-    // Оновлення кешу
     await CacheManager.invalidateCache('questions', testNumber);
     await CacheManager.invalidateCache('allQuestions', 'all');
     logger.info('Cache invalidated after adding question', { testNumber });
 
-    // Відповідь користувачу
     res.send(`
       <!DOCTYPE html>
       <html lang="uk">
@@ -3444,6 +3491,21 @@ app.post('/admin/edit-question', checkAuth, checkAdmin, [
         return res.status(400).send('Кількість пропусків у тексті питання не відповідає кількості правильних відповідей');
       }
       questionData.blankCount = blankCount;
+
+      // Валідація правильних відповідей для fillblank
+      questionData.correctAnswers.forEach((correctAnswer, idx) => {
+        if (correctAnswer.includes('-')) {
+          const [min, max] = correctAnswer.split('-').map(val => parseFloat(val.trim()));
+          if (isNaN(min) || isNaN(max) || min > max) {
+            return res.status(400).send(`Невірний формат діапазону для правильної відповіді ${idx + 1}. Використовуйте формат "число1-число2", наприклад, "12-14", де число1 <= число2.`);
+          }
+        } else {
+          const value = parseFloat(correctAnswer);
+          if (isNaN(value)) {
+            return res.status(400).send(`Правильна відповідь ${idx + 1} для типу Fillblank має бути числом або діапазоном у форматі "число1-число2".`);
+          }
+        }
+      });
     }
 
     if (type === 'singlechoice') {
@@ -3451,6 +3513,24 @@ app.post('/admin/edit-question', checkAuth, checkAdmin, [
         return res.status(400).send('Для типу Single Choice потрібна одна правильна відповідь і мінімум 2 варіанти');
       }
       questionData.correctAnswer = questionData.correctAnswers[0];
+    }
+
+    if (type === 'input') {
+      if (questionData.correctAnswers.length !== 1) {
+        return res.status(400).send('Для типу Input потрібна одна правильна відповідь');
+      }
+      const correctAnswer = questionData.correctAnswers[0];
+      if (correctAnswer.includes('-')) {
+        const [min, max] = correctAnswer.split('-').map(val => parseFloat(val.trim()));
+        if (isNaN(min) || isNaN(max) || min > max) {
+          return res.status(400).send('Невірний формат діапазону для правильної відповіді. Використовуйте формат "число1-число2", наприклад, "12-14", де число1 <= число2.');
+        }
+      } else {
+        const value = parseFloat(correctAnswer);
+        if (isNaN(value)) {
+          return res.status(400).send('Правильна відповідь для типу Input має бути числом або діапазоном у форматі "число1-число2".');
+        }
+      }
     }
 
     const oldTestNumber = oldQuestion.testNumber;
@@ -3949,6 +4029,7 @@ app.get('/admin/results', checkAuth, async (req, res) => {
           });
         }
         logger.info(`User ${r.user} answers array`, { answersArray });
+
         const answersDisplay = answersArray.length > 0
           ? answersArray.map((a, i) => {
               if (a === undefined || a === null) return null;
@@ -3969,6 +4050,7 @@ app.get('/admin/results', checkAuth, async (req, res) => {
               return `Питання ${i + 1}: ${userAnswer ? userAnswer.replace(/\\'/g, "'") : 'Немає відповіді'} (${questionScore} балів)`;
             }).filter(line => line !== null).join('\n')
           : 'Немає відповідей';
+
         const formatDateTime = (isoString) => {
           if (!isoString) return 'N/A';
           const date = new Date(isoString);
