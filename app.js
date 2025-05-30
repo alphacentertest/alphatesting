@@ -1509,10 +1509,8 @@ app.get('/test/question', checkAuth, (req, res) => {
                     answers.push(input ? input.value.trim() : '');
                   }
                 }
-                const elapsedTimeSinceStart = (Date.now() - startTime) / 1000;
-                const responseTime = isQuickTest
-                  ? Math.max(0, Math.min(timePerQuestion, elapsedTimeSinceStart - (index * timePerQuestion)))
-                  : elapsedTimeSinceStart;
+                // Обчислення responseTime як різниця між часом завершення і часом початку питання
+                const responseTime = (Date.now() - questionStartTime) / 1000;
 
                 const formData = new URLSearchParams();
                 formData.append('index', index);
@@ -1563,10 +1561,8 @@ app.get('/test/question', checkAuth, (req, res) => {
                     answers.push(input ? input.value.trim() : '');
                   }
                 }
-                const elapsedTimeSinceStart = (Date.now() - startTime) / 1000;
-                const responseTime = isQuickTest
-                  ? Math.max(0, Math.min(timePerQuestion, elapsedTimeSinceStart - (index * timePerQuestion)))
-                  : elapsedTimeSinceStart;
+                // Обчислення responseTime як різниця між часом завершення і часом початку питання
+                const responseTime = (Date.now() - questionStartTime) / 1000;
 
                 const formData = new URLSearchParams();
                 formData.append('index', index);
@@ -1638,10 +1634,8 @@ app.get('/test/question', checkAuth, (req, res) => {
                     answers.push(input ? input.value.trim() : '');
                   }
                 }
-                const elapsedTimeSinceStart = (Date.now() - startTime) / 1000;
-                const responseTime = isQuickTest
-                  ? Math.max(0, Math.min(timePerQuestion, elapsedTimeSinceStart - (index * timePerQuestion)))
-                  : elapsedTimeSinceStart;
+                // Обчислення responseTime як різниця між часом завершення і часом початку питання
+                const responseTime = (Date.now() - questionStartTime) / 1000;
 
                 const formData = new URLSearchParams();
                 formData.append('index', index);
@@ -2069,9 +2063,9 @@ app.get('/result', checkAuth, async (req, res) => {
       ? Math.round((suspiciousActivity.timeAway / (duration * 1000)) * 100)
       : 0;
     const switchCount = suspiciousActivity ? suspiciousActivity.switchCount || 0 : 0;
-    // Гарантуємо, що avgResponseTime не від’ємний
+    // Обчислення avgResponseTime без зайвого ділення на 1000
     const avgResponseTime = suspiciousActivity && suspiciousActivity.responseTimes
-      ? Math.max(0, (suspiciousActivity.responseTimes.reduce((sum, time) => sum + (time || 0), 0) / suspiciousActivity.responseTimes.length / 1000)).toFixed(2)
+      ? (suspiciousActivity.responseTimes.reduce((sum, time) => sum + (time || 0), 0) / suspiciousActivity.responseTimes.length).toFixed(2)
       : 0;
     const totalActivityCount = suspiciousActivity && suspiciousActivity.activityCounts
       ? suspiciousActivity.activityCounts.reduce((sum, count) => sum + (count || 0), 0).toFixed(0)
