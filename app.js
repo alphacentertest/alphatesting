@@ -411,7 +411,7 @@ const importQuestionsToMongoDB = async (filePath, testNumber) => {
           if (type === 'matching') {
             questionData.pairs = options.map((opt, idx) => ({
               left: opt || '',
-              right: correctAnswers[idx] || ''
+              right: questionData.correctAnswers[idx] || ''
             })).filter(pair => pair.left && pair.right);
             if (questionData.pairs.length === 0) throw new Error('Для типу Matching потрібні пари відповідей');
             questionData.correctPairs = questionData.pairs.map(pair => [pair.left, pair.right]);
@@ -420,14 +420,47 @@ const importQuestionsToMongoDB = async (filePath, testNumber) => {
           if (type === 'fillblank') {
             questionText = questionText.replace(/\s*___\s*/g, '___');
             const blankCount = (questionText.match(/___/g) || []).length;
-            if (blankCount === 0 || blankCount !== correctAnswers.length) throw new Error('Кількість пропусків у тексті питання не відповідає кількості правильних відповідей');
+            if (blankCount === 0 || blankCount !== questionData.correctAnswers.length) throw new Error('Кількість пропусків у тексті питання не відповідає кількості правильних відповідей');
             questionData.text = questionText;
             questionData.blankCount = blankCount;
+
+            // Валідація правильних відповідей для fillblank
+            questionData.correctAnswers.forEach((correctAnswer, idx) => {
+              if (correctAnswer.includes('-')) {
+                const [min, max] = correctAnswer.split('-').map(val => parseFloat(val.trim()));
+                if (isNaN(min) || isNaN(max) || min > max) {
+                  throw new Error(`Невірний формат діапазону для правильної відповіді ${idx + 1} у рядку ${rowNumber}. Використовуйте формат "число1-число2", наприклад, "12-14", де число1 <= число2.`);
+                }
+              } else {
+                const value = parseFloat(correctAnswer);
+                if (isNaN(value)) {
+                  throw new Error(`Правильна відповідь ${idx + 1} у рядку ${rowNumber} для типу Fillblank має бути числом або діапазоном у форматі "число1-число2".`);
+                }
+              }
+            });
           }
 
           if (type === 'singlechoice') {
             if (correctAnswers.length !== 1 || options.length < 2) throw new Error('Для типу Single Choice потрібна одна правильна відповідь і мінімум 2 варіанти');
             questionData.correctAnswer = correctAnswers[0];
+          }
+
+          if (type === 'input') {
+            if (questionData.correctAnswers.length !== 1) {
+              throws throw new Error('Для типу Input у рядку ${rowNumber} потрібна одна правильная відповідь');
+            }
+            const correctAnswer = questionData.correctAnswers[0];
+            if (correctAnswer.includes('-')) {
+              const [min, max] = correctAnswer.split('-').map(val => parseFloat(val.trim()));
+              if (isNaN(min) || isNaN(max) || min > max) {
+                throw new Error(`Невірний формат діапазону для правильної відповіді у рядку ${rowNumber}. Використовуйте формат "число1-число2", наприклад, "12-14", де число1 <= число2.`);
+              }
+            } else {
+              const value = parseFloat(correctAnswer);
+              if (isNaN(value)) {
+                throw new Error(`Правильна відповідь у рядку ${rowNumber} для типу Input має бути числом або діапазоном у форматі "число1-число2".`);
+              }
+            }
           }
 
           questions.push(questionData);
@@ -984,7 +1017,7 @@ app.post('/logout', checkAuth, (req, res) => {
 
 const userTests = new Map();
 
-const saveResult = async (user, testNumber, score, totalPoints, startTime, endTime, totalClicks, correctClicks, totalQuestions, percentage, suspiciousActivity, answers, scoresPerQuestion, variant, ipAddress) => {
+const saveResult = async (user, testNumber, score, totalPoints, startTime, endTime, totalClicks, correctClicks, totalQuestions, percentage, suspiciousActivity, answers, scoresPerQuestion, variant, ipAddress, testSessionId) => {
   const startTimeLog = Date.now();
   const session = client.startSession();
   try {
@@ -1009,7 +1042,8 @@ const saveResult = async (user, testNumber, score, totalPoints, startTime, endTi
         answers: Object.fromEntries(Object.entries(answers).sort((a, b) => parseInt(a[0]) - parseInt(b[0]))),
         scoresPerQuestion,
         suspiciousActivity,
-        variant: `Variant ${variant}`
+        variant: `Variant ${variant}`,
+        testSessionId // Додаємо testSessionId
       };
       logger.info('Saving result to MongoDB with answers', { answers: result.answers });
       if (!db) {
@@ -1134,8 +1168,9 @@ app.get('/test', checkAuth, async (req, res) => {
       });
     }
 
-    // Переконайтеся, що startTime ініціалізується коректно
     const testStartTime = Date.now();
+    // Генеруємо унікальний testSessionId для запобігання дублювання результатів
+    const testSessionId = `${req.user}_${testNumber}_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
     userTests.set(req.user, {
       testNumber,
       questions,
@@ -1145,7 +1180,9 @@ app.get('/test', checkAuth, async (req, res) => {
       timeLimit: testNames[testNumber].timeLimit * 1000,
       variant: userVariant,
       isQuickTest: testNames[testNumber].isQuickTest,
-      timePerQuestion: testNames[testNumber].timePerQuestion
+      timePerQuestion: testNames[testNumber].timePerQuestion,
+      testSessionId: testSessionId,
+      isSavingResult: false
     });
 
     const ipAddress = req.headers['x-forwarded-for'] || req.socket.remoteAddress;
@@ -1170,7 +1207,7 @@ app.get('/test/question', checkAuth, (req, res) => {
       return res.status(400).send('Тест не розпочато');
     }
 
-    const { questions, testNumber, answers, currentQuestion, startTime, timeLimit, isQuickTest, timePerQuestion } = userTest;
+    const { questions, testNumber, answers, currentQuestion, startTime: testStartTime, timeLimit, isQuickTest, timePerQuestion } = userTest;
     const index = parseInt(req.query.index) || 0;
 
     if (index < 0 || index >= questions.length) {
@@ -1191,7 +1228,7 @@ app.get('/test/question', checkAuth, (req, res) => {
     if (isQuickTest) {
       totalTestTime = questions.length * timePerQuestion;
     }
-    const elapsedTime = Math.floor((Date.now() - startTime) / 1000);
+    const elapsedTime = Math.floor((Date.now() - testStartTime) / 1000);
     const remainingTime = Math.max(0, totalTestTime - elapsedTime);
     const minutes = Math.floor(remainingTime / 60).toString().padStart(2, '0');
     const seconds = (remainingTime % 60).toString().padStart(2, '0');
@@ -1467,8 +1504,8 @@ app.get('/test/question', checkAuth, (req, res) => {
             <button onclick="hideConfirm()">Ні</button>
           </div>
           <script>
-            const startTime = ${startTime};
-            const timeLimit = ${totalTestTime * 1000};
+            const startTime = ${testStartTime};
+            const timeLimit = ${timeLimit};
             const totalTestTime = ${totalTestTime};
             const timerElement = document.getElementById('timer');
             const isQuickTest = ${isQuickTest};
@@ -1509,7 +1546,6 @@ app.get('/test/question', checkAuth, (req, res) => {
                     answers.push(input ? input.value.trim() : '');
                   }
                 }
-                // Обчислення responseTime як різниця між часом завершення і часом початку питання
                 const responseTime = (Date.now() - questionStartTime) / 1000;
 
                 const formData = new URLSearchParams();
@@ -1561,7 +1597,6 @@ app.get('/test/question', checkAuth, (req, res) => {
                     answers.push(input ? input.value.trim() : '');
                   }
                 }
-                // Обчислення responseTime як різниця між часом завершення і часом початку питання
                 const responseTime = (Date.now() - questionStartTime) / 1000;
 
                 const formData = new URLSearchParams();
@@ -1634,7 +1669,6 @@ app.get('/test/question', checkAuth, (req, res) => {
                     answers.push(input ? input.value.trim() : '');
                   }
                 }
-                // Обчислення responseTime як різниця між часом завершення і часом початку питання
                 const responseTime = (Date.now() - questionStartTime) / 1000;
 
                 const formData = new URLSearchParams();
@@ -1977,7 +2011,7 @@ app.get('/result', checkAuth, async (req, res) => {
     if (!userTest) {
       return res.status(400).json({ error: 'Тест не розпочато' });
     }
-    const { questions, answers, testNumber, startTime, suspiciousActivity, variant } = userTest;
+    const { questions, answers, testNumber, startTime: testStartTime, suspiciousActivity, variant, testSessionId, timeLimit } = userTest;
     let score = 0;
     const totalPoints = questions.reduce((sum, q) => sum + q.points, 0);
     const scoresPerQuestion = questions.map((q, index) => {
@@ -2045,17 +2079,14 @@ app.get('/result', checkAuth, async (req, res) => {
         const correctAnswers = q.correctAnswers.map(val => normalizeAnswer(val));
         logger.info(`Fillblank question ${index + 1}`, { userAnswers, correctAnswers });
 
-        // Перевірка відповідей: кожна відповідь може бути або точним значенням, або діапазоном
         const isCorrect = userAnswers.length === correctAnswers.length &&
           userAnswers.every((answer, idx) => {
             const correctAnswer = correctAnswers[idx];
             if (correctAnswer.includes('-')) {
-              // Якщо це діапазон
               const [min, max] = correctAnswer.split('-').map(val => parseFloat(val.trim()));
               const userValue = parseFloat(answer);
               return !isNaN(userValue) && userValue >= min && userValue <= max;
             } else {
-              // Якщо це точне значення
               return answer === correctAnswer;
             }
           });
@@ -2076,13 +2107,20 @@ app.get('/result', checkAuth, async (req, res) => {
     });
 
     score = scoresPerQuestion.reduce((sum, s) => sum + s, 0);
-    const endTime = Date.now();
+    let endTime = Date.now();
+    // Обрізаємо endTime, якщо він перевищує ліміт часу тесту
+    const maxEndTime = testStartTime + timeLimit;
+    if (endTime > maxEndTime) {
+      endTime = maxEndTime;
+      logger.info(`Adjusted endTime to match timeLimit for testSessionId: ${testSessionId}`);
+    }
+
     const percentage = (score / totalPoints) * 100;
     const totalClicks = Object.keys(answers).length;
     const correctClicks = scoresPerQuestion.filter(s => s > 0).length;
     const totalQuestions = questions.length;
 
-    const duration = Math.round((endTime - startTime) / 1000);
+    const duration = Math.round((endTime - testStartTime) / 1000);
     const timeAwayPercent = suspiciousActivity && suspiciousActivity.timeAway
       ? Math.round((suspiciousActivity.timeAway / (duration * 1000)) * 100)
       : 0;
@@ -2105,7 +2143,37 @@ app.get('/result', checkAuth, async (req, res) => {
     }
 
     const ipAddress = req.headers['x-forwarded-for'] || req.socket.remoteAddress;
-    await saveResult(req.user, testNumber, score, totalPoints, startTime, endTime, totalClicks, correctClicks, totalQuestions, percentage, suspiciousActivity, answers, scoresPerQuestion, variant, ipAddress);
+
+    const existingResult = await db.collection('test_results').findOne({ testSessionId });
+    if (existingResult) {
+      logger.info(`Result already saved for testSessionId: ${testSessionId}, skipping save.`);
+    } else if (userTest.isSavingResult) {
+      logger.info(`Result is already being saved for testSessionId: ${testSessionId}, skipping save.`);
+    } else {
+      userTest.isSavingResult = true;
+      await saveResult(
+        req.user,
+        testNumber,
+        score,
+        totalPoints,
+        testStartTime,
+        endTime,
+        totalClicks,
+        correctClicks,
+        totalQuestions,
+        percentage,
+        suspiciousActivity,
+        answers,
+        scoresPerQuestion,
+        variant,
+        ipAddress,
+        testSessionId
+      );
+      logger.info(`Result saved for testSessionId: ${testSessionId}`);
+    }
+
+    userTest.isSavingResult = false;
+    userTests.delete(req.user);
 
     const endDateTime = new Date(endTime);
     const formattedTime = endDateTime.toLocaleTimeString('uk-UA', { hour12: false });
@@ -2252,42 +2320,79 @@ app.get('/results', checkAuth, async (req, res) => {
       const scoresPerQuestion = questions.map((q, index) => {
         const userAnswer = answers[index];
         let questionScore = 0;
+
+        const normalizeAnswer = (answer) => {
+          if (!answer) return '';
+          return String(answer)
+            .trim()
+            .toLowerCase()
+            .replace(/\s+/g, '')
+            .replace(',', '.')
+            .replace(/\\'/g, "'")
+            .replace(/°/g, 'deg');
+        };
+
         if (q.type === 'multiple' && userAnswer && Array.isArray(userAnswer)) {
-          const correctAnswers = q.correctAnswers.map(val => String(val).trim().toLowerCase());
-          const userAnswers = userAnswer.map(val => String(val).trim().toLowerCase());
-          if (correctAnswers.length === userAnswers.length &&
-              correctAnswers.every(val => userAnswers.includes(val)) &&
-              userAnswers.every(val => correctAnswers.includes(val))) {
+          const correctAnswers = q.correctAnswers.map(val => normalizeAnswer(val));
+          const userAnswers = userAnswer.map(val => normalizeAnswer(val));
+          const isCorrect = correctAnswers.length === userAnswers.length &&
+            correctAnswers.every(val => userAnswers.includes(val)) &&
+            userAnswers.every(val => correctAnswers.includes(val));
+          if (isCorrect) {
             questionScore = q.points;
           }
         } else if (q.type === 'input' && userAnswer) {
-          if (String(userAnswer).trim().toLowerCase() === String(q.correctAnswers[0]).trim().toLowerCase()) {
-            questionScore = q.points;
+          const normalizedUserAnswer = normalizeAnswer(userAnswer);
+          const normalizedCorrectAnswer = normalizeAnswer(q.correctAnswers[0]);
+          if (normalizedCorrectAnswer.includes('-')) {
+            const [min, max] = normalizedCorrectAnswer.split('-').map(val => parseFloat(val.trim()));
+            const userValue = parseFloat(normalizedUserAnswer);
+            const isCorrect = !isNaN(userValue) && userValue >= min && userValue <= max;
+            if (isCorrect) {
+              questionScore = q.points;
+            }
+          } else {
+            const isCorrect = normalizedUserAnswer === normalizedCorrectAnswer;
+            if (isCorrect) {
+              questionScore = q.points;
+            }
           }
         } else if (q.type === 'ordering' && userAnswer && Array.isArray(userAnswer)) {
-          const userAnswers = userAnswer.map(val => String(val).trim().toLowerCase());
-          const correctAnswers = q.correctAnswers.map(val => String(val).trim().toLowerCase());
-          if (userAnswers.join(',') === correctAnswers.join(',')) {
+          const userAnswers = userAnswer.map(val => normalizeAnswer(val));
+          const correctAnswers = q.correctAnswers.map(val => normalizeAnswer(val));
+          const isCorrect = userAnswers.join(',') === correctAnswers.join(',');
+          if (isCorrect) {
             questionScore = q.points;
           }
         } else if (q.type === 'matching' && userAnswer && Array.isArray(userAnswer)) {
-          const userPairs = userAnswer.map(pair => [String(pair[0]).trim().toLowerCase(), String(pair[1]).trim().toLowerCase()]);
-          const correctPairs = q.correctPairs.map(pair => [String(pair[0]).trim().toLowerCase(), String(pair[1]).trim().toLowerCase()]);
-          if (userPairs.length === correctPairs.length &&
-              userPairs.every(userPair => correctPairs.some(correctPair => userPair[0] === correctPair[0] && userPair[1] === correctPair[1]))) {
+          const userPairs = userAnswer.map(pair => [normalizeAnswer(pair[0]), normalizeAnswer(pair[1])]);
+          const correctPairs = q.correctPairs.map(pair => [normalizeAnswer(pair[0]), normalizeAnswer(pair[1])]);
+          const isCorrect = userPairs.length === correctPairs.length &&
+            userPairs.every(userPair => correctPairs.some(correctPair => userPair[0] === correctPair[0] && userPair[1] === correctPair[1]));
+          if (isCorrect) {
             questionScore = q.points;
           }
         } else if (q.type === 'fillblank' && userAnswer && Array.isArray(userAnswer)) {
-          const userAnswers = userAnswer.map(val => String(val).trim().toLowerCase().replace(/\s+/g, '').replace(',', '.'));
-          const correctAnswers = q.correctAnswers.map(val => String(val).trim().toLowerCase().replace(/\s+/g, '').replace(',', '.'));
+          const userAnswers = userAnswer.map(val => normalizeAnswer(val));
+          const correctAnswers = q.correctAnswers.map(val => normalizeAnswer(val));
           logger.info(`Fillblank question ${index + 1} in /results`, { userAnswers, correctAnswers });
-          if (userAnswers.length === correctAnswers.length &&
-              userAnswers.every((answer, idx) => answer === correctAnswers[idx])) {
+          const isCorrect = userAnswers.length === correctAnswers.length &&
+            userAnswers.every((answer, idx) => {
+              const correctAnswer = correctAnswers[idx];
+              if (correctAnswer.includes('-')) {
+                const [min, max] = correctAnswer.split('-').map(val => parseFloat(val.trim()));
+                const userValue = parseFloat(answer);
+                return !isNaN(userValue) && userValue >= min && userValue <= max;
+              } else {
+                return answer === correctAnswer;
+              }
+            });
+          if (isCorrect) {
             questionScore = q.points;
           }
         } else if (q.type === 'singlechoice' && userAnswer && Array.isArray(userAnswer)) {
-          const userAnswers = userAnswer.map(val => String(val).trim().toLowerCase());
-          const correctAnswer = String(q.correctAnswer).trim().toLowerCase();
+          const userAnswers = userAnswer.map(val => normalizeAnswer(val));
+          const correctAnswer = normalizeAnswer(q.correctAnswer);
           logger.info(`Single choice question ${index + 1} in /results`, { userAnswers, correctAnswer });
           const isCorrect = userAnswers.length === 1 && userAnswers[0] === correctAnswer;
           if (isCorrect) {
@@ -2296,6 +2401,7 @@ app.get('/results', checkAuth, async (req, res) => {
         }
         return questionScore;
       });
+
       score = scoresPerQuestion.reduce((sum, s) => sum + s, 0);
       const endTime = Date.now();
       const duration = Math.round((endTime - startTime) / 1000);
@@ -3041,6 +3147,7 @@ app.get('/admin/add-question', checkAuth, checkAdmin, (req, res) => {
             .nav-btn { background-color: #007bff; color: white; }
             .submit-btn { background-color: #4CAF50; color: white; }
             .error { color: red; }
+            .note { color: blue; font-style: italic; }
           </style>
         </head>
         <body>
@@ -3068,6 +3175,7 @@ app.get('/admin/add-question', checkAuth, checkAdmin, (req, res) => {
             <label for="options">Варіанти відповідей (через крапку з комою):</label>
             <textarea id="options" name="options" placeholder="Введіть варіанти через крапку з комою"></textarea>
             <label for="correctAnswers">Правильні відповіді (через крапку з комою):</label>
+            <p class="note">Для типів Input і Fillblank можна вказати діапазон у форматі "число1-число2", наприклад, "12-14".</p>
             <textarea id="correctAnswers" name="correctAnswers" required placeholder="Введіть правильні відповіді через крапку з комою"></textarea>
             <label for="points">Бали за питання:</label>
             <input type="number" id="points" name="points" value="1" min="1" required>
@@ -3085,7 +3193,7 @@ app.get('/admin/add-question', checkAuth, checkAdmin, (req, res) => {
               const picture = document.getElementById('picture').value;
               const errorMessage = document.getElementById('error-message');
               if (text.length < 5 || text.length > 1000) {
-                errorMessage.textContent = 'Текст питання має бути від 5 до 1000 символів';
+                                errorMessage.textContent = 'Текст питання має бути від 5 до 1000 символів';
                 return false;
               }
               if (points < 1 || points > 100) {
@@ -3099,6 +3207,31 @@ app.get('/admin/add-question', checkAuth, checkAdmin, (req, res) => {
               if (picture && !/\.(jpeg|jpg|png|gif)$/i.test(picture)) {
                 errorMessage.textContent = 'Назва файлу зображення має закінчуватися на .jpeg, .jpg, .png або .gif';
                 return false;
+              }
+              const type = document.getElementById('type').value;
+              const correctAnswers = document.getElementById('correctAnswers').value;
+              if (type === 'input' || type === 'fillblank') {
+                const answersArray = correctAnswers.split(';').map(ans => ans.trim());
+                if (type === 'input' && answersArray.length !== 1) {
+                  errorMessage.textContent = 'Для типу Input потрібна лише одна правильна відповідь';
+                  return false;
+                }
+                for (let i = 0; i < answersArray.length; i++) {
+                  const answer = answersArray[i];
+                  if (answer.includes('-')) {
+                    const [min, max] = answer.split('-').map(val => parseFloat(val.trim()));
+                    if (isNaN(min) || isNaN(max) || min > max) {
+                      errorMessage.textContent = `Правильна відповідь ${i + 1} має невірний формат діапазону. Використовуйте "число1-число2", де число1 <= число2.`;
+                      return false;
+                    }
+                  } else {
+                    const value = parseFloat(answer);
+                    if (isNaN(value)) {
+                      errorMessage.textContent = `Правильна відповідь ${i + 1} для типу ${type} має бути числом або діапазоном у форматі "число1-число2".`;
+                      return false;
+                    }
+                  }
+                }
               }
               return true;
             }
@@ -3191,7 +3324,7 @@ app.post('/admin/add-question', checkAuth, checkAdmin, [
       }
       questionData.blankCount = blankCount;
 
-      // Валідація правильних відповідей для fillblank
+      // Валідація правильних відповідей для fillblank (вже перевірено в клієнтській частині, але додаємо для безпеки)
       questionData.correctAnswers.forEach((correctAnswer, idx) => {
         if (correctAnswer.includes('-')) {
           const [min, max] = correctAnswer.split('-').map(val => parseFloat(val.trim()));
@@ -3301,6 +3434,7 @@ app.get('/admin/edit-question', checkAuth, checkAdmin, async (req, res) => {
             .submit-btn { background-color: #4CAF50; color: white; }
             .error { color: red; }
             .warning { color: orange; margin-bottom: 10px; }
+            .note { color: blue; font-style: italic; }
             img#image-preview { max-width: 200px; margin-top: 10px; }
           </style>
         </head>
@@ -3332,6 +3466,7 @@ app.get('/admin/edit-question', checkAuth, checkAdmin, async (req, res) => {
             <label for="options">Варіанти відповідей (через крапку з комою):</label>
             <textarea id="options" name="options">${question.options.join('; ')}</textarea>
             <label for="correctAnswers">Правильні відповіді (через крапку з комою):</label>
+            <p class="note">Для типів Input і Fillblank можна вказати діапазон у форматі "число1-число2", наприклад, "12-14".</p>
             <textarea id="correctAnswers" name="correctAnswers" required>${question.correctAnswers.join('; ')}</textarea>
             <label for="points">Бали за питання:</label>
             <input type="number" id="points" name="points" value="${question.points}" min="1" required>
@@ -3363,6 +3498,31 @@ app.get('/admin/edit-question', checkAuth, checkAdmin, async (req, res) => {
               if (picture && !/\.(jpeg|jpg|png|gif)$/i.test(picture)) {
                 errorMessage.textContent = 'Назва файлу зображення має закінчуватися на .jpeg, .jpg, .png або .gif';
                 return false;
+              }
+              const type = document.getElementById('type').value;
+              const correctAnswers = document.getElementById('correctAnswers').value;
+              if (type === 'input' || type === 'fillblank') {
+                const answersArray = correctAnswers.split(';').map(ans => ans.trim());
+                if (type === 'input' && answersArray.length !== 1) {
+                  errorMessage.textContent = 'Для типу Input потрібна лише одна правильна відповідь';
+                  return false;
+                }
+                for (let i = 0; i < answersArray.length; i++) {
+                  const answer = answersArray[i];
+                  if (answer.includes('-')) {
+                    const [min, max] = answer.split('-').map(val => parseFloat(val.trim()));
+                    if (isNaN(min) || isNaN(max) || min > max) {
+                      errorMessage.textContent = `Правильна відповідь ${i + 1} має невірний формат діапазону. Використовуйте "число1-число2", де число1 <= число2.`;
+                      return false;
+                    }
+                  } else {
+                    const value = parseFloat(answer);
+                    if (isNaN(value)) {
+                      errorMessage.textContent = `Правильна відповідь ${i + 1} для типу ${type} має бути числом або діапазоном у форматі "число1-число2".`;
+                      return false;
+                    }
+                  }
+                }
               }
               return true;
             }
