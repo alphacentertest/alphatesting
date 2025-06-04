@@ -33,10 +33,11 @@ const logger = winston.createLogger({
   ]
 });
 
-// Налаштування multer з лімітом розміру файлу (5MB)
+// Налаштування multer для зберігання файлів у пам’яті (для Vercel)
+const storage = multer.memoryStorage();
 const upload = multer({
-  dest: 'uploads/',
-  limits: { fileSize: 5 * 1024 * 1024 } // 5MB ліміт
+  storage: storage,
+  limits: { fileSize: 4 * 1024 * 1024 } // 4MB ліміт (Vercel обмеження)
 });
 
 // Настройка nodemailer для отправки email
@@ -274,10 +275,10 @@ app.use((err, req, res, next) => {
   }
 });
 
-const importUsersToMongoDB = async (filePath) => {
+const importUsersToMongoDB = async (buffer) => {
   try {
     const workbook = new ExcelJS.Workbook();
-    await workbook.xlsx.readFile(filePath);
+    await workbook.xlsx.load(buffer);
     let sheet = workbook.getWorksheet('Users') || workbook.getWorksheet('Sheet1');
     if (!sheet) {
       throw new Error('Лист "Users" або "Sheet1" не знайдено у файлі');
@@ -311,11 +312,11 @@ const importUsersToMongoDB = async (filePath) => {
   }
 };
 
-const importQuestionsToMongoDB = async (filePath, testNumber) => {
+const importQuestionsToMongoDB = async (buffer, testNumber) => {
   try {
-    logger.info('Opening workbook', { filePath });
+    logger.info('Opening workbook');
     const workbook = new ExcelJS.Workbook();
-    await workbook.xlsx.readFile(filePath);
+    await workbook.xlsx.load(buffer);
     logger.info('Workbook opened successfully');
 
     const sheet = workbook.getWorksheet('Questions');
@@ -725,6 +726,10 @@ app.get('/api/test', (req, res) => {
   res.json({ success: true, message: 'Express server is working on /api/test' });
 });
 
+app.get('/favicon.ico', (req, res) => {
+  res.status(204).end();
+});
+
 app.get('/', (req, res) => {
   logger.info('Serving index.html');
   res.send(`
@@ -955,7 +960,7 @@ app.get('/select-test', checkAuth, (req, res) => {
           <div class="test-buttons">
             ${Object.entries(testNames).length > 0
               ? Object.entries(testNames).map(([num, data]) => `
-                  <button onclick="window.location.href='/test?test=${num}'">${data.name}</button>
+                  <button onclick="window.location.href='/test?test=${num}'">${data.name.replace(/"/g, '\\"')}</button>
                 `).join('')
               : '<p class="no-tests">Немає доступних тестів</p>'
             }
@@ -966,6 +971,7 @@ app.get('/select-test', checkAuth, (req, res) => {
           <button id="logout" onclick="logout()">Вийти</button>
           <script>
             async function logout() {
+              console.log('Attempting to logout, CSRF token:', '${res.locals._csrf}');
               const formData = new URLSearchParams();
               formData.append('_csrf', '${res.locals._csrf}');
               try {
@@ -974,13 +980,20 @@ app.get('/select-test', checkAuth, (req, res) => {
                   headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
                   body: formData
                 });
+                console.log('Logout response status:', response.status);
                 if (!response.ok) {
                   throw new Error('HTTP error! status: ' + response.status);
                 }
-                window.location.href = '/';
+                const result = await response.json();
+                console.log('Logout response:', result);
+                if (result.success) {
+                  window.location.href = '/';
+                } else {
+                  throw new Error('Logout failed: ' + result.message);
+                }
               } catch (error) {
                 console.error('Error during logout:', error);
-                alert('Не вдалося вийти. Перевірте ваше з’єднання з Інтернетом.');
+                alert('Не вдалося вийти. Перевірте консоль браузера для деталей.');
               }
             }
           </script>
@@ -997,13 +1010,16 @@ app.get('/select-test', checkAuth, (req, res) => {
 app.post('/logout', checkAuth, (req, res) => {
   const startTime = Date.now();
   try {
+    logger.info('CSRF token received in /logout', { token: req.body._csrf });
     const ipAddress = req.headers['x-forwarded-for'] || req.socket.remoteAddress;
     logActivity(req.user, 'покинув сайт', ipAddress);
     res.clearCookie('token');
     req.session.destroy(err => {
       if (err) {
         logger.error('Error destroying session', { message: err.message, stack: err.stack });
+        return res.status(500).json({ success: false, message: 'Помилка завершення сесії' });
       }
+      logger.info('Session destroyed successfully');
       res.json({ success: true });
     });
   } catch (error) {
@@ -1050,7 +1066,7 @@ const saveResult = async (user, testNumber, score, totalPoints, startTime, endTi
         throw new Error('MongoDB connection not established');
       }
       await db.collection('test_results').insertOne(result, { session });
-      await logActivity(user, `завершив тест ${testNames[testNumber].name} з результатом ${Math.round(percentage)}%`, ipAddress, { percentage: Math.round(percentage) }, session);
+      await logActivity(user, `завершив тест ${testNames[testNumber].name.replace(/"/g, '\\"')} з результатом ${Math.round(percentage)}%`, ipAddress, { percentage: Math.round(percentage) }, session);
     });
   } catch (error) {
     logger.error('Ошибка сохранения результата и лога активности', { message: error.message, stack: error.stack });
@@ -1186,7 +1202,7 @@ app.get('/test', checkAuth, async (req, res) => {
     });
 
     const ipAddress = req.headers['x-forwarded-for'] || req.socket.remoteAddress;
-    await logActivity(req.user, `розпочав тест ${testNames[testNumber].name}`, ipAddress);
+    await logActivity(req.user, `розпочав тест ${testNames[testNumber].name.replace(/"/g, '\\"')}`, ipAddress);
     res.redirect(`/test/question?index=0`);
   } catch (error) {
     logger.error('Ошибка в /test', { message: error.message, stack: error.stack });
@@ -1247,7 +1263,7 @@ app.get('/test/question', checkAuth, (req, res) => {
         <head>
           <meta charset="UTF-8">
           <meta name="viewport" content="width=device-width, initial-scale=1.0">
-          <title>${testNames[testNumber].name}</title>
+          <title>${testNames[testNumber].name.replace(/"/g, '\\"')}</title>
           <script src="https://cdnjs.cloudflare.com/ajax/libs/Sortable/1.15.0/Sortable.min.js"></script>
           <style>
             body { font-family: Arial, sans-serif; margin: 0; padding: 20px; padding-bottom: 80px; background-color: #f0f0f0; }
@@ -1340,7 +1356,7 @@ app.get('/test/question', checkAuth, (req, res) => {
           </style>
         </head>
         <body>
-          <h1>${testNames[testNumber].name}</h1>
+          <h1>${testNames[testNumber].name.replace(/"/g, '\\"')}</h1>
           <div id="timer">Залишилось часу: ${minutes} хв ${seconds} с</div>
           <div class="progress-bar">
     `;
@@ -1413,7 +1429,7 @@ app.get('/test/question', checkAuth, (req, res) => {
         inputHtml += `<span class="question-text">${part}</span>`;
         if (i < parts.length - 1) {
           const userAnswer = userAnswers[i] || '';
-          inputHtml += `<input type="text" class="blank-input" id="blank_${i}" value="${userAnswer.replace(/"/g, '"')}" placeholder="Введіть відповідь" autocomplete="off">`;
+          inputHtml += `<input type="text" class="blank-input" id="blank_${i}" value="${userAnswer.replace(/"/g, '\\"')}" placeholder="Введіть відповідь" autocomplete="off">`;
         }
       });
       html += inputHtml;
@@ -1524,13 +1540,13 @@ app.get('/test/question', checkAuth, (req, res) => {
             let questionTimeRemaining = timePerQuestion;
             let currentQuestionIndex = ${index};
             let lastGlobalUpdateTime = Date.now();
-            let isSaving = false;
+            let isSubmitting = false;
             let hasMovedToNext = false;
             let questionStartTime = ${userTest.questionStartTime[index]};
 
             async function saveCurrentAnswer(index) {
-              if (isSaving) return;
-              isSaving = true;
+              if (isSubmitting) return;
+              isSubmitting = true;
               try {
                 let answers = selectedOptions;
                 if (document.querySelector('input[name="q' + index + '"]')) {
@@ -1576,11 +1592,13 @@ app.get('/test/question', checkAuth, (req, res) => {
               } catch (error) {
                 console.error('Error in auto-saving answer:', error);
               } finally {
-                isSaving = false;
+                isSubmitting = false;
               }
             }
 
             async function saveAndNext(index) {
+              if (isSubmitting) return;
+              isSubmitting = true;
               try {
                 hasMovedToNext = true;
                 let answers = selectedOptions;
@@ -1641,6 +1659,8 @@ app.get('/test/question', checkAuth, (req, res) => {
               } catch (error) {
                 console.error('Error in saveAndNext:', error);
                 alert('Не вдалося зберегти відповідь. Перевірте ваше з’єднання з Інтернетом.');
+              } finally {
+                isSubmitting = false;
               }
             }
 
@@ -1653,6 +1673,8 @@ app.get('/test/question', checkAuth, (req, res) => {
             }
 
             async function finishTest(index) {
+              if (isSubmitting) return;
+              isSubmitting = true;
               try {
                 await saveCurrentAnswer(index);
                 let answers = selectedOptions;
@@ -1702,6 +1724,8 @@ app.get('/test/question', checkAuth, (req, res) => {
               } catch (error) {
                 console.error('Error in finishTest:', error);
                 alert('Не вдалося завершити тест. Перевірте ваше з’єднання з Інтернетом.');
+              } finally {
+                isSubmitting = false;
               }
             }
 
@@ -2106,7 +2130,7 @@ app.get('/result', checkAuth, async (req, res) => {
       return questionScore;
     });
 
-    score = scoresPerQuestion.reduce((sum, s) => sum + s, 0);
+        score = scoresPerQuestion.reduce((sum, s) => sum + s, 0);
     let endTime = Date.now();
     // Обрізаємо endTime, якщо він перевищує ліміт часу тесту
     const maxEndTime = testStartTime + timeLimit;
@@ -2192,7 +2216,7 @@ app.get('/result', checkAuth, async (req, res) => {
       <html lang="uk">
         <head>
           <meta charset="UTF-8">
-          <title>Результати ${testNames[testNumber].name}</title>
+          <title>Результати ${testNames[testNumber].name.replace(/"/g, '\\"')}</title>
           <style>
             body { font-family: Arial, sans-serif; text-align: center; padding: 20px; background-color: #f5f5f5; }
             .result-container { margin: 20px auto; width: 150px; height: 150px; position: relative; }
@@ -2209,8 +2233,8 @@ app.get('/result', checkAuth, async (req, res) => {
               }
             }
           </style>
-          <script src="https://cdnjs.cloudflare.com/ajax/libs/pdfmake/0.2.7/pdfmake.min.js"></script>
-          <script src="https://cdnjs.cloudflare.com/ajax/libs/pdfmake/0.2.7/vfs_fonts.js"></script>
+          <script src="/pdfmake/pdfmake.min.js"></script>
+          <script src="/pdfmake/vfs_fonts.js"></script>
         </head>
         <body>
           <h1>Результат тесту</h1>
@@ -2232,49 +2256,84 @@ app.get('/result', checkAuth, async (req, res) => {
             <button id="restart">Вихід</button>
           </div>
           <script>
-            const user = "${req.user}";
-            const testName = "${testNames[testNumber].name}";
+            const user = "${req.user.replace(/"/g, '\\"')}";
+            const testName = "${testNames[testNumber].name.replace(/"/g, '\\"')}";
             const totalQuestions = ${totalQuestions};
             const correctClicks = ${correctClicks};
             const score = ${score};
             const totalPoints = ${totalPoints};
             const percentage = ${Math.round(percentage)};
-            const time = "${formattedTime}";
-            const date = "${formattedDate}";
-            const imageBase64 = "${imageBase64}";
+            const time = "${formattedTime.replace(/"/g, '\\"')}";
+            const date = "${formattedDate.replace(/"/g, '\\"')}";
+            const imageBase64 = "${imageBase64.replace(/"/g, '\\"')}";
 
-            document.getElementById('exportPDF').addEventListener('click', () => {
-              const docDefinition = {
-                content: [
-                  imageBase64 ? {
-                    image: 'data:image/png;base64,' + imageBase64,
-                    width: 50,
-                    alignment: 'center',
-                    margin: [0, 0, 0, 20]
-                  } : { text: 'Логотип відсутній', alignment: 'center', margin: [0, 0, 0, 20], lineHeight: 2 },
-                  { text: 'Результат тесту користувача ' + user + ' з тесту ' + testName + ' складає ' + percentage + '%', style: 'header' },
-                  { text: 'Кількість питань: ' + totalQuestions, lineHeight: 2 },
-                  { text: 'Правильних відповідей: ' + correctClicks, lineHeight: 2 },
-                  { text: 'Набрано балів: ' + score, lineHeight: 2 },
-                  { text: 'Максимально можлива кількість балів: ' + totalPoints, lineHeight: 2 },
-                  {
-                    columns: [
-                      { text: 'Час: ' + time, width: '50%', lineHeight: 2 },
-                      { text: 'Дата: ' + date, width: '50%', alignment: 'right', lineHeight: 2 }
+            // Логування для діагностики
+            console.log('Result page loaded with data:', {
+              user: user,
+              testName: testName,
+              totalQuestions: totalQuestions,
+              correctClicks: correctClicks,
+              score: score,
+              totalPoints: totalPoints,
+              percentage: percentage,
+              time: time,
+              date: date,
+              imageBase64Length: imageBase64.length
+            });
+
+            const exportPDFButton = document.getElementById('exportPDF');
+            const restartButton = document.getElementById('restart');
+
+            if (!exportPDFButton) {
+              console.error('Export PDF button not found!');
+            } else {
+              console.log('Export PDF button found, adding event listener.');
+              exportPDFButton.addEventListener('click', () => {
+                try {
+                  console.log('Export PDF button clicked, generating PDF...');
+                  const docDefinition = {
+                    content: [
+                      imageBase64 ? {
+                        image: 'data:image/png;base64,' + imageBase64,
+                        width: 50,
+                        alignment: 'center',
+                        margin: [0, 0, 0, 20]
+                      } : { text: 'Логотип відсутній', alignment: 'center', margin: [0, 0, 0, 20], lineHeight: 2 },
+                      { text: 'Результат тесту користувача ' + user + ' з тесту ' + testName + ' складає ' + percentage + '%', style: 'header' },
+                      { text: 'Кількість питань: ' + totalQuestions, lineHeight: 2 },
+                      { text: 'Правильних відповідей: ' + correctClicks, lineHeight: 2 },
+                      { text: 'Набрано балів: ' + score, lineHeight: 2 },
+                      { text: 'Максимально можлива кількість балів: ' + totalPoints, lineHeight: 2 },
+                      {
+                        columns: [
+                          { text: 'Час: ' + time, width: '50%', lineHeight: 2 },
+                          { text: 'Дата: ' + date, width: '50%', alignment: 'right', lineHeight: 2 }
+                        ],
+                        margin: [0, 10, 0, 0]
+                      }
                     ],
-                    margin: [0, 10, 0, 0]
-                  }
-                ],
-                styles: {
-                  header: { fontSize: 14, bold: true, margin: [0, 0, 0, 10], lineHeight: 2 }
+                    styles: {
+                      header: { fontSize: 14, bold: true, margin: [0, 0, 0, 10], lineHeight: 2 }
+                    }
+                  };
+                  pdfMake.createPdf(docDefinition).download('result.pdf');
+                  console.log('PDF generated successfully.');
+                } catch (error) {
+                  console.error('Error generating PDF:', error);
+                  alert('Не вдалося згенерувати PDF. Перевірте консоль браузера для деталей.');
                 }
-              };
-              pdfMake.createPdf(docDefinition).download('result.pdf');
-            });
+              });
+            }
 
-            document.getElementById('restart').addEventListener('click', () => {
-              window.location.href = '/select-test';
-            });
+            if (!restartButton) {
+              console.error('Restart button not found!');
+            } else {
+              console.log('Restart button found, adding event listener.');
+              restartButton.addEventListener('click', () => {
+                console.log('Restart button clicked, redirecting to /select-test');
+                window.location.href = '/select-test';
+              });
+            }
           </script>
         </body>
       </html>
@@ -2475,19 +2534,19 @@ app.get('/results', checkAuth, async (req, res) => {
           <button id="exportPDF">Експортувати в PDF</button>
           <button id="restart">Повернутися на головну</button>
         </div>
-        <script src="https://cdnjs.cloudflare.com/ajax/libs/pdfmake/0.2.7/pdfmake.min.js"></script>
-        <script src="https://cdnjs.cloudflare.com/ajax/libs/pdfmake/0.2.7/vfs_fonts.js"></script>
+        <script src="/pdfmake/pdfmake.min.js"></script>
+        <script src="/pdfmake/vfs_fonts.js"></script>
         <script>
-          const user = "${req.user}";
-          const testName = "${testNames[testNumber].name}";
+          const user = "${req.user.replace(/"/g, '\\"')}";
+          const testName = "${testNames[testNumber].name.replace(/"/g, '\\"')}";
           const totalQuestions = ${totalQuestions};
           const correctClicks = ${correctClicks};
           const score = ${score};
           const totalPoints = ${totalPoints};
           const percentage = ${Math.round(percentage)};
-          const time = "${formattedTime}";
-          const date = "${formattedDate}";
-          const imageBase64 = "${imageBase64}";
+          const time = "${formattedTime.replace(/"/g, '\\"')}";
+          const date = "${formattedDate.replace(/"/g, '\\"')}";
+          const imageBase64 = "${imageBase64.replace(/"/g, '\\"')}";
 
           document.getElementById('exportPDF').addEventListener('click', () => {
             const docDefinition = {
@@ -2575,6 +2634,7 @@ app.get('/admin', checkAuth, checkAdmin, (req, res) => {
           <button id="logout" onclick="logout()">Вийти</button>
           <script>
             async function logout() {
+              console.log('Attempting to logout, CSRF token:', '${res.locals._csrf}');
               const formData = new URLSearchParams();
               formData.append('_csrf', '${res.locals._csrf}');
               try {
@@ -2583,13 +2643,20 @@ app.get('/admin', checkAuth, checkAdmin, (req, res) => {
                   headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
                   body: formData
                 });
+                console.log('Logout response status:', response.status);
                 if (!response.ok) {
                   throw new Error('HTTP error! status: ' + response.status);
                 }
-                window.location.href = '/';
+                const result = await response.json();
+                console.log('Logout response:', result);
+                if (result.success) {
+                  window.location.href = '/';
+                } else {
+                  throw new Error('Logout failed: ' + result.message);
+                }
               } catch (error) {
                 console.error('Error during logout:', error);
-                alert('Не вдалося вийти. Перевірте ваше з’єднання з Інтернетом.');
+                alert('Не вдалося вийти. Перевірте консоль браузера для деталей.');
               }
             }
           </script>
@@ -3072,7 +3139,7 @@ app.get('/admin/questions', checkAuth, checkAdmin, async (req, res) => {
       questions.forEach(question => {
         adminHtml += `
           <tr>
-            <td>${testNames[question.testNumber]?.name || 'Невідомий тест'}</td>
+            <td>${testNames[question.testNumber]?.name.replace(/"/g, '\\"') || 'Невідомий тест'}</td>
             <td>${question.text}</td>
             <td>${question.type}</td>
             <td>${question.variant || 'Немає'}</td>
@@ -3162,7 +3229,7 @@ app.get('/admin/add-question', checkAuth, checkAdmin, (req, res) => {
             <input type="hidden" name="_csrf" value="${res.locals._csrf || ''}">
             <label for="testNumber">Номер тесту:</label>
             <select id="testNumber" name="testNumber" required>
-              ${Object.keys(testNames).map(num => `<option value="${num}">${testNames[num].name}</option>`).join('')}
+              ${Object.keys(testNames).map(num => `<option value="${num}">${testNames[num].name.replace(/"/g, '\\"')}</option>`).join('')}
             </select>
             <label for="picture">Назва файлу зображення (опціонально, наприклад, Picture1.png):</label>
             <p class="note">Файл зображення має бути у папці public/images.</p>
@@ -3513,7 +3580,7 @@ app.get('/admin/edit-question', checkAuth, checkAdmin, async (req, res) => {
             <input type="hidden" name="id" value="${id}">
             <label for="testNumber">Номер тесту:</label>
             <select id="testNumber" name="testNumber" required>
-              ${Object.keys(testNames).map(num => `<option value="${num}" ${num === question.testNumber ? 'selected' : ''}>${testNames[num].name}</option>`).join('')}
+              ${Object.keys(testNames).map(num => `<option value="${num}" ${num === question.testNumber ? 'selected' : ''}>${testNames[num].name.replace(/"/g, '\\"')}</option>`).join('')}
             </select>
             <label for="picture">Назва файлу зображення (опціонально, наприклад, Picture1.png):</label>
             <p class="note">Файл зображення має бути у папці public/images.</p>
@@ -3979,9 +4046,8 @@ app.post('/admin/import-users', checkAuth, checkAdmin, upload.single('file'), as
       return res.status(400).send('Файл не завантажено');
     }
 
-    const filePath = req.file.path;
-    const importedCount = await importUsersToMongoDB(filePath);
-    fs.unlinkSync(filePath);
+    // Файл тепер у пам’яті (req.file.buffer)
+    const importedCount = await importUsersToMongoDB(req.file.buffer);
     logger.info(`Успішно імпортовано ${importedCount} користувачів`);
     res.send(`
       <!DOCTYPE html>
@@ -3998,9 +4064,6 @@ app.post('/admin/import-users', checkAuth, checkAdmin, upload.single('file'), as
     `);
   } catch (error) {
     logger.error('Error importing users', { message: error.message, stack: error.stack });
-    if (req.file && fs.existsSync(req.file.path)) {
-      fs.unlinkSync(req.file.path);
-    }
     res.status(500).send('Помилка при імпорті користувачів: ' + error.message);
   } finally {
     const endTime = Date.now();
@@ -4106,38 +4169,33 @@ app.post('/admin/import-questions', checkAuth, checkAdmin, upload.single('file')
     });
 
     if (!req.file) {
-      logger.warn('Файл не завантажено: req.file отсутствует');
+      logger.warn('Файл не завантажено: req.file відсутній');
       return res.status(400).json({ success: false, message: 'Файл не завантажено' });
     }
 
-    logger.info('File uploaded successfully', { path: req.file.path, size: req.file.size });
+    logger.info('File uploaded successfully', { size: req.file.size });
 
     const testNumber = req.file.originalname.match(/^questions(\d+)\.xlsx$/)?.[1];
     if (!testNumber) {
       logger.warn(`Неверное имя файла: ${req.file.originalname}. Ожидается формат questionsX.xlsx`);
-      fs.unlinkSync(req.file.path);
       return res.status(400).json({ success: false, message: 'Файл повинен мати назву у форматі questionsX.xlsx, де X — номер тесту' });
     }
 
-    logger.info(`Загружаем файл ${req.file.originalname} для теста ${testNumber}`);
+    logger.info(`Завантажуємо файл ${req.file.originalname} для тесту ${testNumber}`);
 
     const timeoutPromise = new Promise((_, reject) => {
       setTimeout(() => reject(new Error('Перевищено час обробки файлу (20 секунд). Спробуйте завантажити менший файл.')), 20000);
     });
 
     logger.info('Starting questions import from file');
-    const importPromise = importQuestionsToMongoDB(req.file.path, testNumber);
+    const importPromise = importQuestionsToMongoDB(req.file.buffer, testNumber);
     const importedCount = await Promise.race([importPromise, timeoutPromise]);
     logger.info('Questions import completed', { importedCount });
 
-    fs.unlinkSync(req.file.path);
-    logger.info(`Успешно импортировано ${importedCount} вопросов для теста ${testNumber}`);
+    logger.info(`Успішно імпортовано ${importedCount} питань для тесту ${testNumber}`);
     res.json({ success: true, message: `Імпортовано ${importedCount} питань для тесту ${testNumber}`, redirect: '/admin/questions' });
   } catch (error) {
     logger.error('Error importing questions', { message: error.message, stack: error.stack });
-    if (req.file && fs.existsSync(req.file.path)) {
-      fs.unlinkSync(req.file.path);
-    }
     res.status(500).json({ success: false, message: `Помилка при імпорті питань: ${error.message}` });
   } finally {
     const endTime = Date.now();
@@ -4171,8 +4229,8 @@ app.get('/admin/results', checkAuth, async (req, res) => {
         .limit(limit)
         .toArray();
     } catch (fetchError) {
-      logger.error('Ошибка при получении данных из MongoDB в /admin/results', { message: fetchError.message, stack: fetchError.stack });
-      errorMessage = `Ошибка MongoDB: ${fetchError.message}`;
+      logger.error('Помилка при отриманні даних із MongoDB в /admin/results', { message: fetchError.message, stack: fetchError.stack });
+      errorMessage = `Помилка MongoDB: ${fetchError.message}`;
     }
 
     let adminHtml = `
@@ -4359,7 +4417,7 @@ app.get('/admin/results', checkAuth, async (req, res) => {
         adminHtml += `
           <tr>
             <td>${r.user || 'N/A'}</td>
-            <td>${testNames[r.testNumber]?.name || 'N/A'}</td>
+            <td>${testNames[r.testNumber]?.name.replace(/"/g, '\\"') || 'N/A'}</td>
             <td>${r.variant || 'N/A'}</td>
             <td>${r.score || '0'} / ${percentage}%</td>
             <td>${r.totalPoints || '0'}</td>
@@ -4369,8 +4427,8 @@ app.get('/admin/results', checkAuth, async (req, res) => {
             <td>${suspiciousActivityPercent}%</td>
             <td class="details">${activityDetails}</td>
             <td>
-              <button class="view-btn" onclick="showAnswersModal('answers-${index}', '${r.user || 'N/A'}', '${testNames[r.testNumber]?.name || 'N/A'}')">Перегляд</button>
-              <input type="hidden" id="answers-${index}" value="${answersDisplay.replace(/"/g, '"').replace(/\n/g, '<br>')}">
+              <button class="view-btn" onclick="showAnswersModal('answers-${index}', '${r.user || 'N/A'}', '${testNames[r.testNumber]?.name.replace(/"/g, '\\"') || 'N/A'}')">Перегляд</button>
+              <input type="hidden" id="answers-${index}" value="${answersDisplay.replace(/"/g, '\\"').replace(/\n/g, '<br>')}">
             </td>
             ${req.userRole === 'admin' ? `
               <td><button class="delete-btn" onclick="deleteResult('${r._id}')">🗑️ Видалити</button></td>
@@ -4491,7 +4549,7 @@ app.post('/admin/delete-all-results', checkAuth, checkAdmin, async (req, res) =>
     logger.info(`Deleted ${deleteResult.deletedCount} results from test_results collection`);
     res.json({ success: true, message: `Успішно видалено ${deleteResult.deletedCount} результатів` });
   } catch (error) {
-    logger.error('Ошибка при удалении всех результатов', { message: error.message, stack: error.stack });
+    logger.error('Помилка при видаленні всіх результатів', { message: error.message, stack: error.stack });
     res.status(500).json({ success: false, message: 'Помилка при видаленні всіх результатів' });
   } finally {
     const endTime = Date.now();
@@ -4506,7 +4564,7 @@ app.post('/admin/delete-result', checkAuth, checkAdmin, async (req, res) => {
     await db.collection('test_results').deleteOne({ _id: new ObjectId(id) });
     res.json({ success: true });
   } catch (error) {
-    logger.error('Ошибка при удалении результата', { message: error.message, stack: error.stack });
+    logger.error('Помилка при видаленні результату', { message: error.message, stack: error.stack });
     res.status(500).json({ success: false, message: 'Помилка при видаленні результату' });
   } finally {
     const endTime = Date.now();
@@ -4540,7 +4598,7 @@ app.get('/admin/edit-tests', checkAuth, checkAdmin, (req, res) => {
             ${Object.entries(testNames).map(([num, data]) => `
               <div class="test-row">
                 <label for="test${num}">Назва Тесту ${num}:</label>
-                <input type="text" id="test${num}" name="test${num}" value="${data.name}" required>
+                <input type="text" id="test${num}" name="test${num}" value="${data.name.replace(/"/g, '\\"')}" required>
                 <label for="time${num}">Час (сек):</label>
                 <input type="number" id="time${num}" name="time${num}" value="${data.timeLimit}" required min="1">
                 <label for="quickTest${num}">Quick Test:</label>
@@ -4664,7 +4722,7 @@ app.post('/admin/edit-tests', checkAuth, checkAdmin, async (req, res) => {
       </html>
     `);
   } catch (error) {
-    logger.error('Ошибка при редактировании названий тестов', { message: error.message, stack: error.stack });
+    logger.error('Помилка при редагуванні назв тестів', { message: error.message, stack: error.stack });
     res.status(500).send('Помилка при оновленні назв тестів');
   } finally {
     const endTime = Date.now();
@@ -4690,7 +4748,7 @@ app.post('/admin/delete-test', checkAuth, checkAdmin, async (req, res) => {
     });
     res.json({ success: true });
   } catch (error) {
-    logger.error('Ошибка при удалении теста', { message: error.message, stack: error.stack });
+    logger.error('Помилка при видаленні тесту', { message: error.message, stack: error.stack });
     res.status(500).json({ success: false, message: 'Помилка при видаленні тесту' });
   } finally {
     await session.endSession();
@@ -4783,7 +4841,7 @@ app.post('/admin/create-test', checkAuth, checkAdmin, [
           </style>
         </head>
         <body>
-          <h1>Новий тест "${testName}" створено (Тест ${testNumber})</h1>
+          <h1>Новий тест "${testName.replace(/"/g, '\\"')}" створено (Тест ${testNumber})</h1>
           <p>Скачайте шаблон для додавання питань:</p>
           <a href="/download-template?testNumber=${testNumber}" download="questions${testNumber}.xlsx">Скачати questions${testNumber}.xlsx</a>
           <p>Після заповнення шаблону завантажте його:</p>
@@ -4794,7 +4852,7 @@ app.post('/admin/create-test', checkAuth, checkAdmin, [
       </html>
     `);
   } catch (error) {
-    logger.error('Ошибка при создании нового теста', { message: error.message, stack: error.stack });
+    logger.error('Помилка при створенні нового тесту', { message: error.message, stack: error.stack });
     res.status(500).send(`Помилка при створенні тесту: ${error.message}`);
   } finally {
     const endTime = Date.now();
@@ -4894,8 +4952,8 @@ app.get('/admin/activity-log', checkAuth, checkAdmin, async (req, res) => {
         .limit(limit)
         .toArray();
     } catch (fetchError) {
-      logger.error('Ошибка при получении данных из MongoDB в /admin/activity-log', { message: fetchError.message, stack: fetchError.stack });
-      errorMessage = `Ошибка MongoDB: ${fetchError.message}`;
+      logger.error('Помилка при отриманні даних із MongoDB в /admin/activity-log', { message: fetchError.message, stack: fetchError.stack });
+      errorMessage = `Помилка MongoDB: ${fetchError.message}`;
     }
     let adminHtml = `
       <!DOCTYPE html>
@@ -5003,7 +5061,7 @@ app.post('/admin/delete-activity-log', checkAuth, checkAdmin, async (req, res) =
     await db.collection('activity_log').deleteMany({});
     res.json({ success: true });
   } catch (error) {
-    logger.error('Ошибка при удалении записей журнала действий', { message: error.message, stack: error.stack });
+    logger.error('Помилка при видаленні записів журналу дій', { message: error.message, stack: error.stack });
     res.status(500).json({ success: false, message: 'Помилка при видаленні записів журналу' });
   } finally {
     const endTime = Date.now();
