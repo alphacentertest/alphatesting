@@ -4,6 +4,7 @@ const cookieParser = require('cookie-parser');
 const path = require('path');
 const ExcelJS = require('exceljs');
 const { MongoClient, ObjectId } = require('mongodb');
+const MongoStore = require('connect-mongo');
 const bcrypt = require('bcrypt');
 const fs = require('fs');
 const multer = require('multer');
@@ -218,16 +219,22 @@ app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
 app.use(cookieParser());
 
-// Setup express-session
+// Налаштування express-session із MongoStore
 app.use(session({
   secret: process.env.SESSION_SECRET || 'your-secret-key',
   resave: false,
   saveUninitialized: false,
+  store: MongoStore.create({
+    client: client, // Використовуємо існуючий MongoClient
+    dbName: 'alpha',
+    collectionName: 'sessions',
+    ttl: 24 * 60 * 60 // 24 години
+  }),
   cookie: {
     secure: process.env.NODE_ENV === 'production',
     httpOnly: true,
     sameSite: process.env.NODE_ENV === 'production' ? 'none' : 'lax',
-    maxAge: 24 * 60 * 60 * 1000 // 24 hours
+    maxAge: 24 * 60 * 60 * 1000 // 24 години
   }
 }));
 
@@ -235,10 +242,12 @@ app.use(session({
 app.use((req, res, next) => {
   if (!req.session.csrfSecret) {
     req.session.csrfSecret = tokens.secretSync();
+    logger.info('Generated new CSRF secret', { secret: req.session.csrfSecret });
   }
   const token = tokens.create(req.session.csrfSecret);
   res.locals._csrf = token;
   res.cookie('XSRF-TOKEN', token, { httpOnly: false });
+  logger.info('CSRF token generated', { token });
   next();
 });
 
@@ -246,13 +255,22 @@ app.use((req, res, next) => {
 app.use((req, res, next) => {
   if (['POST', 'PUT', 'DELETE'].includes(req.method)) {
     const token = req.body._csrf || req.headers['x-csrf-token'];
-    if (!token || !tokens.verify(req.session.csrfSecret, token)) {
+    if (!token) {
+      logger.error('CSRF token missing in request', { method: req.method, url: req.url });
+      return res.status(403).json({ success: false, message: 'CSRF-токен відсутній' });
+    }
+    if (!req.session.csrfSecret) {
+      logger.error('CSRF secret missing in session', { sessionId: req.sessionID });
+      return res.status(403).json({ success: false, message: 'Помилка сесії: CSRF секрет відсутній' });
+    }
+    if (!tokens.verify(req.session.csrfSecret, token)) {
       logger.error('CSRF token validation failed', {
         expectedSecret: req.session.csrfSecret,
-        receivedToken: token || 'not provided'
+        receivedToken: token
       });
       return res.status(403).json({ success: false, message: 'Недійсний CSRF-токен' });
     }
+    logger.info('CSRF token validated successfully', { token });
   }
   next();
 });
@@ -787,7 +805,9 @@ app.get('/', (req, res) => {
             const formData = new URLSearchParams();
             formData.append('username', username);
             formData.append('password', password);
-            formData.append('_csrf', document.querySelector('input[name="_csrf"]').value);
+            const csrfToken = document.querySelector('input[name="_csrf"]').value;
+            console.log('Sending CSRF token:', csrfToken);
+            formData.append('_csrf', csrfToken);
 
             try {
               const response = await fetch('/login', {
@@ -797,6 +817,7 @@ app.get('/', (req, res) => {
               });
 
               const result = await response.json();
+              console.log('Login response:', result);
 
               if (result.success) {
                 window.location.href = result.redirect + '?nocache=' + Date.now();
