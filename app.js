@@ -4,7 +4,6 @@ const cookieParser = require('cookie-parser');
 const path = require('path');
 const ExcelJS = require('exceljs');
 const { MongoClient, ObjectId } = require('mongodb');
-const MongoStore = require('connect-mongo');
 const bcrypt = require('bcrypt');
 const fs = require('fs');
 const multer = require('multer');
@@ -15,6 +14,7 @@ const winston = require('winston');
 const session = require('express-session');
 const Tokens = require('csrf');
 const tokens = new Tokens();
+const MongoStore = require('connect-mongo');
 
 const app = express();
 
@@ -225,7 +225,7 @@ app.use(session({
   resave: false,
   saveUninitialized: false,
   store: MongoStore.create({
-    client: client, // Використовуємо існуючий MongoClient
+    client: client,
     dbName: 'alpha',
     collectionName: 'sessions',
     ttl: 24 * 60 * 60 // 24 години
@@ -590,6 +590,8 @@ const initializeServer = async () => {
     await db.collection('test_attempts').createIndex({ user: 1, testNumber: 1, attemptDate: 1 });
     await db.collection('login_attempts').createIndex({ ipAddress: 1, lastAttempt: 1 });
     await db.collection('tests').createIndex({ testNumber: 1 }, { unique: true });
+    // Додаємо індекс для активних тестів
+    await db.collection('active_tests').createIndex({ user: 1 }, { unique: true });
     logger.info('MongoDB indexes created successfully');
 
     // Міграція ролей для існуючих користувачів
@@ -650,14 +652,29 @@ const cleanupActivityLog = async () => {
   }
 };
 
+// Очистка старих записів active_tests (старше 24 годин)
+const cleanupActiveTests = async () => {
+  try {
+    const twentyFourHoursAgo = new Date(Date.now() - 24 * 60 * 60 * 1000);
+    const result = await db.collection('active_tests').deleteMany({
+      startTime: { $lt: twentyFourHoursAgo.getTime() }
+    });
+    logger.info('Cleaned up old active tests', { deletedCount: result.deletedCount });
+  } catch (error) {
+    logger.error('Error cleaning up active tests', { message: error.message, stack: error.stack });
+  }
+};
+
 // Запуск задачи очистки раз в день
 setInterval(cleanupActivityLog, 24 * 60 * 60 * 1000);
+setInterval(cleanupActiveTests, 24 * 60 * 60 * 1000);
 
 (async () => {
   try {
     await initializeServer();
     app.use(ensureInitialized);
     await cleanupActivityLog();
+    await cleanupActiveTests();
   } catch (error) {
     logger.error('Failed to start server due to initialization error', { message: error.message, stack: error.stack });
     process.exit(1);
@@ -1052,8 +1069,6 @@ app.post('/logout', checkAuth, (req, res) => {
   }
 });
 
-const userTests = new Map();
-
 const saveResult = async (user, testNumber, score, totalPoints, startTime, endTime, totalClicks, correctClicks, totalQuestions, percentage, suspiciousActivity, answers, scoresPerQuestion, variant, ipAddress, testSessionId) => {
   const startTimeLog = Date.now();
   const session = client.startSession();
@@ -1080,7 +1095,7 @@ const saveResult = async (user, testNumber, score, totalPoints, startTime, endTi
         scoresPerQuestion,
         suspiciousActivity,
         variant: `Variant ${variant}`,
-        testSessionId // Додаємо testSessionId
+        testSessionId
       };
       logger.info('Saving result to MongoDB with answers', { answers: result.answers });
       if (!db) {
@@ -1206,9 +1221,11 @@ app.get('/test', checkAuth, async (req, res) => {
     }
 
     const testStartTime = Date.now();
-    // Генеруємо унікальний testSessionId для запобігання дублювання результатів
     const testSessionId = `${req.user}_${testNumber}_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
-    userTests.set(req.user, {
+
+    // Зберігаємо стан тесту у MongoDB
+    const testData = {
+      user: req.user,
       testNumber,
       questions,
       answers: {},
@@ -1219,8 +1236,17 @@ app.get('/test', checkAuth, async (req, res) => {
       isQuickTest: testNames[testNumber].isQuickTest,
       timePerQuestion: testNames[testNumber].timePerQuestion,
       testSessionId: testSessionId,
-      isSavingResult: false
-    });
+      isSavingResult: false,
+      answerTimestamps: {},
+      questionStartTime: {},
+      suspiciousActivity: { timeAway: 0, switchCount: 0, responseTimes: [], activityCounts: [] }
+    };
+
+    await db.collection('active_tests').updateOne(
+      { user: req.user },
+      { $set: testData },
+      { upsert: true }
+    );
 
     const ipAddress = req.headers['x-forwarded-for'] || req.socket.remoteAddress;
     await logActivity(req.user, `розпочав тест ${testNames[testNumber].name.replace(/"/g, '\\"')}`, ipAddress);
@@ -1234,12 +1260,12 @@ app.get('/test', checkAuth, async (req, res) => {
   }
 });
 
-app.get('/test/question', checkAuth, (req, res) => {
+app.get('/test/question', checkAuth, async (req, res) => {
   const startTime = Date.now();
   try {
     if (req.userRole === 'admin') return res.redirect('/admin');
 
-    const userTest = userTests.get(req.user);
+    const userTest = await db.collection('active_tests').findOne({ user: req.user });
     if (!userTest) {
       return res.status(400).send('Тест не розпочато');
     }
@@ -1251,9 +1277,16 @@ app.get('/test/question', checkAuth, (req, res) => {
       return res.status(400).send('Невірний номер питання');
     }
 
-    userTest.currentQuestion = index;
-    userTest.answerTimestamps = userTest.answerTimestamps || {};
-    userTest.answerTimestamps[index] = Date.now();
+    // Оновлюємо answerTimestamps та currentQuestion у MongoDB
+    const updateData = {
+      currentQuestion: index,
+      answerTimestamps: userTest.answerTimestamps || {}
+    };
+    updateData.answerTimestamps[index] = Date.now();
+    await db.collection('active_tests').updateOne(
+      { user: req.user },
+      { $set: updateData }
+    );
 
     const q = questions[index];
     const progress = Array.from({ length: questions.length }, (_, i) => ({
@@ -1273,9 +1306,14 @@ app.get('/test/question', checkAuth, (req, res) => {
     const selectedOptions = answers[index] || [];
     const selectedOptionsString = JSON.stringify(selectedOptions).replace(/'/g, "\\'");
 
-    userTest.questionStartTime = userTest.questionStartTime || {};
-    if (!userTest.questionStartTime[index]) {
-      userTest.questionStartTime[index] = Date.now();
+    // Оновлюємо questionStartTime
+    const questionStartTime = userTest.questionStartTime || {};
+    if (!questionStartTime[index]) {
+      questionStartTime[index] = Date.now();
+      await db.collection('active_tests').updateOne(
+        { user: req.user },
+        { $set: { questionStartTime } }
+      );
     }
 
     let html = `
@@ -1522,124 +1560,124 @@ app.get('/test/question', checkAuth, (req, res) => {
             `).join('')}
           </div>
           <div id="question-container">
-`;
+    `;
 
-if (isQuickTest) {
-  html += `
-    <div id="question-timer">
-      <svg viewBox="0 0 80 80">
-        <circle class="timer-circle-bg" cx="40" cy="40" r="36" />
-        <circle class="timer-circle" cx="40" cy="40" r="36" />
-      </svg>
-      <div class="timer-text" id="timer-text">${timePerQuestion}</div>
-    </div>
-  `;
-}
+    if (isQuickTest) {
+      html += `
+        <div id="question-timer">
+          <svg viewBox="0 0 80 80">
+            <circle class="timer-circle-bg" cx="40" cy="40" r="36" />
+            <circle class="timer-circle" cx="40" cy="40" r="36" />
+          </svg>
+          <div class="timer-text" id="timer-text">${timePerQuestion}</div>
+        </div>
+      `;
+    }
 
-if (q.picture && q.picture.trim() !== '') {
-  html += `
-    <div id="image-container">
-      <img src="${q.picture}" alt="Picture" onerror="this.style.display='none'; document.getElementById('image-error').style.display='block';">
-      <div id="image-error" class="image-error" style="display: none;">Зображення недоступне</div>
-    </div>
-  `;
-}
+    if (q.picture && q.picture.trim() !== '') {
+      html += `
+        <div id="image-container">
+          <img src="${q.picture}" alt="Picture" onerror="this.style.display='none'; document.getElementById('image-error').style.display='block';">
+          <div id="image-error" class="image-error" style="display: none;">Зображення недоступне</div>
+        </div>
+      `;
+    }
 
-const instructionText = q.type === 'multiple' ? 'Виберіть усі правильні відповіді' :
-                       q.type === 'input' ? 'Введіть правильну відповідь' :
-                       q.type === 'ordering' ? 'Розташуйте відповіді у правильній послідовності' :
-                       q.type === 'matching' ? 'Складіть правильні пари, перетягуючи елементи' :
-                       q.type === 'fillblank' ? 'Заповніть пропуски у реченні' :
-                       q.type === 'singlechoice' ? 'Виберіть правильну відповідь' : '';
-html += `
+    const instructionText = q.type === 'multiple' ? 'Виберіть усі правильні відповіді' :
+                           q.type === 'input' ? 'Введіть правильну відповідь' :
+                           q.type === 'ordering' ? 'Розташуйте відповіді у правильній послідовності' :
+                           q.type === 'matching' ? 'Складіть правильні пари, перетягуючи елементи' :
+                           q.type === 'fillblank' ? 'Заповніть пропуски у реченні' :
+                           q.type === 'singlechoice' ? 'Виберіть правильну відповідь' : '';
+    html += `
             <div class="question-box">
               <h2 id="question-text">${index + 1}. `;
-
-if (q.type === 'fillblank') {
-  const userAnswers = Array.isArray(answers[index]) ? answers[index] : [];
-  logger.info(`Fillblank question parts for index ${index}`, { parts: q.text.split('___') });
-  const parts = q.text.split('___');
-  let inputHtml = '';
-  parts.forEach((part, i) => {
-    inputHtml += `<span class="question-text">${part}</span>`;
-    if (i < parts.length - 1) {
-      const userAnswer = userAnswers[i] || '';
-      inputHtml += `<input type="text" class="blank-input" id="blank_${i}" value="${userAnswer.replace(/"/g, '\\"')}" placeholder="Введіть відповідь" autocomplete="off">`;
+    
+    if (q.type === 'fillblank') {
+      const userAnswers = Array.isArray(answers[index]) ? answers[index] : [];
+      logger.info(`Fillblank question parts for index ${index}`, { parts: q.text.split('___') });
+      const parts = q.text.split('___');
+      let inputHtml = '';
+      parts.forEach((part, i) => {
+        inputHtml += `<span class="question-text">${part}</span>`;
+        if (i < parts.length - 1) {
+          const userAnswer = userAnswers[i] || '';
+          inputHtml += `<input type="text" class="blank-input" id="blank_${i}" value="${userAnswer.replace(/"/g, '\\"')}" placeholder="Введіть відповідь" autocomplete="off">`;
+        }
+      });
+      html += inputHtml;
+    } else {
+      html += q.text;
     }
-  });
-  html += inputHtml;
-} else {
-  html += q.text;
-}
 
-html += `
+    html += `
               </h2>
             </div>
             <p id="instruction" class="instruction">${instructionText}</p>
             <div id="answers">
-`;
-
-if (q.type === 'matching' && q.pairs) {
-  const leftItems = shuffleArray([...q.pairs.map(p => p.left)]);
-  const rightItems = shuffleArray([...q.pairs.map(p => p.right)]);
-  const userPairs = Array.isArray(answers[index]) ? answers[index] : [];
-  html += `
-    <div class="matching-container">
-      <div class="matching-column" id="left-column">
-        ${leftItems.map((item, idx) => {
-          const escapedItem = item.replace(/'/g, "\\'").replace(/"/g, '\\"');
-          return `<div class="matching-item draggable" data-value="${escapedItem}">${item}</div>`;
-        }).join('')}
-      </div>
-      <div class="matching-column" id="right-column">
-        ${rightItems.map((item, idx) => {
-          const escapedItem = item.replace(/'/g, "\\'").replace(/"/g, '\\"');
-          const matchedLeft = userPairs.find(pair => pair[1] === item)?.[0] || '';
-          return `
-            <div class="matching-item droppable" data-value="${escapedItem}">
-              ${item}${matchedLeft ? `<span class="matched"> (Зіставлено: ${matchedLeft})</span>` : ''}
-            </div>
-          `;
-        }).join('')}
-      </div>
-    </div>
-    <button onclick="resetMatchingPairs()">Скинути зіставлення</button>
-  `;
-} else if (!q.options || q.options.length === 0) {
-  if (q.type !== 'fillblank') {
-    const userAnswer = answers[index] || '';
-    html += `
-      <input type="text" name="q${index}" id="q${index}_input" value="${userAnswer}" placeholder="Введіть відповідь" class="answer-option" autocomplete="off"><br>
     `;
-  }
-} else {
-  if (q.type === 'ordering') {
-    html += `
-      <div id="sortable-options">
-        ${(answers[index] || q.options).map((option, optIndex) => {
+
+    if (q.type === 'matching' && q.pairs) {
+      const leftItems = shuffleArray([...q.pairs.map(p => p.left)]);
+      const rightItems = shuffleArray([...q.pairs.map(p => p.right)]);
+      const userPairs = Array.isArray(answers[index]) ? answers[index] : [];
+      html += `
+        <div class="matching-container">
+          <div class="matching-column" id="left-column">
+            ${leftItems.map((item, idx) => {
+              const escapedItem = item.replace(/'/g, "\\'").replace(/"/g, '\\"');
+              return `<div class="matching-item draggable" data-value="${escapedItem}">${item}</div>`;
+            }).join('')}
+          </div>
+          <div class="matching-column" id="right-column">
+            ${rightItems.map((item, idx) => {
+              const escapedItem = item.replace(/'/g, "\\'").replace(/"/g, '\\"');
+              const matchedLeft = userPairs.find(pair => pair[1] === item)?.[0] || '';
+              return `
+                <div class="matching-item droppable" data-value="${escapedItem}">
+                  ${item}${matchedLeft ? `<span class="matched"> (Зіставлено: ${matchedLeft})</span>` : ''}
+                </div>
+              `;
+            }).join('')}
+          </div>
+        </div>
+        <button onclick="resetMatchingPairs()">Скинути зіставлення</button>
+      `;
+    } else if (!q.options || q.options.length === 0) {
+      if (q.type !== 'fillblank') {
+        const userAnswer = answers[index] || '';
+        html += `
+          <input type="text" name="q${index}" id="q${index}_input" value="${userAnswer}" placeholder="Введіть відповідь" class="answer-option" autocomplete="off"><br>
+        `;
+      }
+    } else {
+      if (q.type === 'ordering') {
+        html += `
+          <div id="sortable-options">
+            ${(answers[index] || q.options).map((option, optIndex) => {
+              const escapedOption = option.replace(/'/g, "\\'").replace(/"/g, '\\"');
+              return `
+                <div class="option-box draggable" data-index="${optIndex}" data-value="${escapedOption}">
+                  ${option}
+                </div>
+              `;
+            }).join('')}
+          </div>
+        `;
+      } else {
+        q.options.forEach((option, optIndex) => {
+          const selected = selectedOptions.includes(option) ? 'selected' : '';
           const escapedOption = option.replace(/'/g, "\\'").replace(/"/g, '\\"');
-          return `
-            <div class="option-box draggable" data-index="${optIndex}" data-value="${escapedOption}">
+          html += `
+            <div class="option-box ${selected}" data-value="${escapedOption}">
               ${option}
             </div>
           `;
-        }).join('')}
-      </div>
-    `;
-  } else {
-    q.options.forEach((option, optIndex) => {
-      const selected = selectedOptions.includes(option) ? 'selected' : '';
-      const escapedOption = option.replace(/'/g, "\\'").replace(/"/g, '\\"');
-      html += `
-        <div class="option-box ${selected}" data-value="${escapedOption}">
-          ${option}
-        </div>
-      `;
-    });
-  }
-}
+        });
+      }
+    }
 
-html += `
+    html += `
             </div>
           </div>
           <div class="button-container">
@@ -1677,7 +1715,7 @@ html += `
             let lastGlobalUpdateTime = Date.now();
             let isSubmitting = false;
             let hasMovedToNext = false;
-            let questionStartTime = ${userTest.questionStartTime[index]};
+            let questionStartTime = ${questionStartTime[index]};
 
             async function saveCurrentAnswer(index) {
               if (isSubmitting) return;
@@ -1701,14 +1739,15 @@ html += `
 
                 const formData = new URLSearchParams();
                 formData.append('index', index);
-                formData.append('answer', JSON.stringify(answers));
+                const safeAnswer = JSON.stringify(answers).replace(/'/g, "\\'").replace(/"/g, '\\"');
+                formData.append('answer', safeAnswer);
                 formData.append('timeAway', timeAway);
                 formData.append('switchCount', switchCount);
                 formData.append('responseTime', responseTime);
                 formData.append('activityCount', activityCount);
                 formData.append('_csrf', '${res.locals._csrf}');
 
-                console.log('Auto-saving answer before test completion:', { index, answers, responseTime });
+                console.log('Auto-saving answer before test completion:', { index, answers: safeAnswer, responseTime });
 
                 const response = await fetch('/answer', {
                   method: 'POST',
@@ -1726,6 +1765,7 @@ html += `
                 }
               } catch (error) {
                 console.error('Error in auto-saving answer:', error);
+                alert('Не вдалося зберегти відповідь: ' + error.message);
               } finally {
                 isSubmitting = false;
               }
@@ -1754,14 +1794,15 @@ html += `
 
                 const formData = new URLSearchParams();
                 formData.append('index', index);
-                formData.append('answer', JSON.stringify(answers));
+                const safeAnswer = JSON.stringify(answers).replace(/'/g, "\\'").replace(/"/g, '\\"');
+                formData.append('answer', safeAnswer);
                 formData.append('timeAway', timeAway);
                 formData.append('switchCount', switchCount);
                 formData.append('responseTime', responseTime);
                 formData.append('activityCount', activityCount);
                 formData.append('_csrf', '${res.locals._csrf}');
 
-                console.log('Saving data in saveAndNext:', { timeAway, switchCount, responseTime });
+                console.log('Saving data in saveAndNext:', { timeAway, switchCount, responseTime, answer: safeAnswer });
 
                 const response = await fetch('/answer', {
                   method: 'POST',
@@ -1789,11 +1830,11 @@ html += `
                   });
                 } else {
                   console.error('Error saving answer:', result.error);
-                  alert('Помилка збереження відповіді');
+                  alert('Помилка збереження відповіді: ' + result.error);
                 }
               } catch (error) {
                 console.error('Error in saveAndNext:', error);
-                alert('Не вдалося зберегти відповідь. Перевірте ваше з’єднання з Інтернетом.');
+                alert('Не вдалося зберегти відповідь: ' + error.message);
               } finally {
                 isSubmitting = false;
               }
@@ -1830,14 +1871,15 @@ html += `
 
                 const formData = new URLSearchParams();
                 formData.append('index', index);
-                formData.append('answer', JSON.stringify(answers));
+                const safeAnswer = JSON.stringify(answers).replace(/'/g, "\\'").replace(/"/g, '\\"');
+                formData.append('answer', safeAnswer);
                 formData.append('timeAway', timeAway);
                 formData.append('switchCount', switchCount);
                 formData.append('responseTime', responseTime);
                 formData.append('activityCount', activityCount);
                 formData.append('_csrf', '${res.locals._csrf}');
 
-                console.log('Saving data in finishTest:', { timeAway, switchCount, responseTime });
+                console.log('Saving data in finishTest:', { timeAway, switchCount, responseTime, answer: safeAnswer });
 
                 const response = await fetch('/answer', {
                   method: 'POST',
@@ -1854,11 +1896,11 @@ html += `
                   window.location.href = '/result';
                 } else {
                   console.error('Error finishing test:', result.error);
-                  alert('Помилка завершення тесту');
+                  alert('Помилка завершення тесту: ' + result.error);
                 }
               } catch (error) {
                 console.error('Error in finishTest:', error);
-                alert('Не вдалося завершити тест. Перевірте ваше з’єднання з Інтернетом.');
+                alert('Не вдалося завершити тест: ' + error.message);
               } finally {
                 isSubmitting = false;
               }
@@ -2080,17 +2122,21 @@ html += `
 });
 
 // Новий маршрут для оновлення часу початку питання
-app.post('/set-question-start-time', checkAuth, (req, res) => {
+app.post('/set-question-start-time', checkAuth, async (req, res) => {
   const startTime = Date.now();
   try {
-    const userTest = userTests.get(req.user);
+    const userTest = await db.collection('active_tests').findOne({ user: req.user });
     if (!userTest) {
       return res.status(400).json({ success: false, error: 'Тест не розпочато' });
     }
     const index = parseInt(req.query.index);
     if (index >= 0 && index < userTest.questions.length) {
-      userTest.questionStartTime = userTest.questionStartTime || {};
-      userTest.questionStartTime[index] = Date.now();
+      const questionStartTime = userTest.questionStartTime || {};
+      questionStartTime[index] = Date.now();
+      await db.collection('active_tests').updateOne(
+        { user: req.user },
+        { $set: { questionStartTime } }
+      );
       res.json({ success: true });
     } else {
       res.status(400).json({ success: false, error: 'Невірний номер питання' });
@@ -2111,6 +2157,7 @@ app.post('/answer', checkAuth, express.urlencoded({ extended: true }), async (re
     const { index, answer, timeAway, switchCount, responseTime, activityCount } = req.body;
 
     if (!index || !answer) {
+      logger.error('Missing required parameters in /answer', { index, answer });
       return res.status(400).json({ success: false, error: 'Необхідно надати index та answer' });
     }
 
@@ -2120,30 +2167,22 @@ app.post('/answer', checkAuth, express.urlencoded({ extended: true }), async (re
         if (answer.trim() === '') {
           parsedAnswer = [];
         } else {
+          logger.info('Parsing answer in /answer', { answer });
           parsedAnswer = JSON.parse(answer);
         }
       } else {
         parsedAnswer = answer;
       }
     } catch (error) {
-      logger.error('Ошибка парсинга ответа в /answer', { message: error.message, stack: error.stack });
+      logger.error('Ошибка парсинга ответа в /answer', { answer, message: error.message, stack: error.stack });
       return res.status(400).json({ success: false, error: 'Невірний формат відповіді' });
     }
 
-    const userTest = userTests.get(req.user);
+    const userTest = await db.collection('active_tests').findOne({ user: req.user });
     if (!userTest) {
+      logger.error('Test not started in /answer', { user: req.user });
       return res.status(400).json({ success: false, error: 'Тест не розпочато' });
     }
-
-    // Додаткове логування для діагностики
-    logger.info('Received response time data', {
-      index,
-      responseTime: parseFloat(responseTime),
-      startTime: userTest.startTime,
-      currentTime: Date.now(),
-      timePerQuestion: userTest.timePerQuestion,
-      isQuickTest: userTest.isQuickTest
-    });
 
     userTest.answers[index] = parsedAnswer;
     userTest.suspiciousActivity = userTest.suspiciousActivity || { timeAway: 0, switchCount: 0, responseTimes: [], activityCounts: [] };
@@ -2151,6 +2190,11 @@ app.post('/answer', checkAuth, express.urlencoded({ extended: true }), async (re
     userTest.suspiciousActivity.switchCount = (userTest.suspiciousActivity.switchCount || 0) + (parseInt(switchCount) || 0);
     userTest.suspiciousActivity.responseTimes[index] = Math.max(0, parseFloat(responseTime) || 0);
     userTest.suspiciousActivity.activityCounts[index] = parseInt(activityCount) || 0;
+
+    await db.collection('active_tests').updateOne(
+      { user: req.user },
+      { $set: { answers: userTest.answers, suspiciousActivity: userTest.suspiciousActivity } }
+    );
 
     res.json({ success: true });
   } catch (error) {
@@ -2166,7 +2210,7 @@ app.get('/result', checkAuth, async (req, res) => {
   const startTime = Date.now();
   try {
     if (req.user === 'admin') return res.redirect('/admin');
-    const userTest = userTests.get(req.user);
+    const userTest = await db.collection('active_tests').findOne({ user: req.user });
     if (!userTest) {
       return res.status(400).json({ error: 'Тест не розпочато' });
     }
@@ -2265,9 +2309,8 @@ app.get('/result', checkAuth, async (req, res) => {
       return questionScore;
     });
 
-        score = scoresPerQuestion.reduce((sum, s) => sum + s, 0);
+    score = scoresPerQuestion.reduce((sum, s) => sum + s, 0);
     let endTime = Date.now();
-    // Обрізаємо endTime, якщо він перевищує ліміт часу тесту
     const maxEndTime = testStartTime + timeLimit;
     if (endTime > maxEndTime) {
       endTime = maxEndTime;
@@ -2309,7 +2352,10 @@ app.get('/result', checkAuth, async (req, res) => {
     } else if (userTest.isSavingResult) {
       logger.info(`Result is already being saved for testSessionId: ${testSessionId}, skipping save.`);
     } else {
-      userTest.isSavingResult = true;
+      await db.collection('active_tests').updateOne(
+        { user: req.user },
+        { $set: { isSavingResult: true } }
+      );
       await saveResult(
         req.user,
         testNumber,
@@ -2331,8 +2377,8 @@ app.get('/result', checkAuth, async (req, res) => {
       logger.info(`Result saved for testSessionId: ${testSessionId}`);
     }
 
-    userTest.isSavingResult = false;
-    userTests.delete(req.user);
+    // Видаляємо тест із active_tests після збереження результату
+    await db.collection('active_tests').deleteOne({ user: req.user });
 
     const endDateTime = new Date(endTime);
     const formattedTime = endDateTime.toLocaleTimeString('uk-UA', { hour12: false });
@@ -2402,7 +2448,6 @@ app.get('/result', checkAuth, async (req, res) => {
             const date = "${formattedDate.replace(/"/g, '\\"')}";
             const imageBase64 = "${imageBase64.replace(/"/g, '\\"')}";
 
-            // Логування для діагностики
             console.log('Result page loaded with data:', {
               user: user,
               testName: testName,
@@ -2484,7 +2529,7 @@ app.get('/results', checkAuth, async (req, res) => {
   const startTime = Date.now();
   try {
     if (req.user === 'admin') return res.redirect('/admin');
-    const userTest = userTests.get(req.user);
+    const userTest = await db.collection('active_tests').findOne({ user: req.user });
     let resultsHtml = `
       <!DOCTYPE html>
       <html lang="uk">
@@ -2717,7 +2762,9 @@ app.get('/results', checkAuth, async (req, res) => {
           });
         </script>
       `;
-      userTests.delete(req.user);
+
+      // Видаляємо тест із active_tests після перегляду результатів
+      await db.collection('active_tests').deleteOne({ user: req.user });
     } else {
       resultsHtml += '<p>Немає завершених тестів</p>';
     }
@@ -3334,7 +3381,6 @@ app.get('/admin/questions', checkAuth, checkAdmin, async (req, res) => {
 app.get('/admin/add-question', checkAuth, checkAdmin, (req, res) => {
   const startTime = Date.now();
   try {
-    // Перевірка, чи всі необхідні змінні доступні
     if (!testNames || !Object.keys(testNames).length) {
       throw new Error('Список тестів недоступний');
     }
@@ -3587,7 +3633,6 @@ app.post('/admin/add-question', checkAuth, checkAdmin, [
       }
       questionData.blankCount = blankCount;
 
-      // Валідація правильних відповідей для fillblank (вже перевірено в клієнтській частині, але додаємо для безпеки)
       questionData.correctAnswers.forEach((correctAnswer, idx) => {
         if (correctAnswer.includes('-')) {
           const [min, max] = correctAnswer.split('-').map(val => parseFloat(val.trim()));
@@ -3949,105 +3994,112 @@ app.post('/admin/edit-question', checkAuth, checkAdmin, [
       }
     } else {
       logger.info(`Picture field unchanged, keeping existing picture: ${questionData.picture}`);
-    }
-
-    if (type === 'truefalse') {
-      questionData.options = ["Правда", "Неправда"];
-    }
-
-    if (type === 'matching') {
-      questionData.pairs = questionData.options.map((opt, idx) => ({
-        left: opt || '',
-        right: questionData.correctAnswers[idx] || ''
-      })).filter(pair => pair.left && pair.right);
-      if (questionData.pairs.length === 0) {
-        return res.status(400).send('Для типу Matching потрібні пари відповідей');
       }
-      questionData.correctPairs = questionData.pairs.map(pair => [pair.left, pair.right]);
-    }
 
-    if (type === 'fillblank') {
-      questionData.text = questionData.text.replace(/\s*___\s*/g, '___');
-      const blankCount = (questionData.text.match(/___/g) || []).length;
-      if (blankCount === 0 || blankCount !== questionData.correctAnswers.length) {
-        return res.status(400).send('Кількість пропусків у тексті питання не відповідає кількості правильних відповідей');
+      if (type === 'truefalse') {
+        questionData.options = ["Правда", "Неправда"];
       }
-      questionData.blankCount = blankCount;
 
-      // Валідація правильних відповідей для fillblank
-      questionData.correctAnswers.forEach((correctAnswer, idx) => {
+      if (type === 'matching') {
+        questionData.pairs = questionData.options.map((opt, idx) => ({
+          left: opt || '',
+          right: questionData.correctAnswers[idx] || ''
+        })).filter(pair => pair.left && pair.right);
+        if (questionData.pairs.length === 0) {
+          logger.warn('Matching question requires pairs', { testNumber, text });
+          return res.status(400).send('Для типу Matching потрібні пари відповідей');
+        }
+        questionData.correctPairs = questionData.pairs.map(pair => [pair.left, pair.right]);
+      }
+
+      if (type === 'fillblank') {
+        questionData.text = questionData.text.replace(/\s*___\s*/g, '___');
+        const blankCount = (questionData.text.match(/___/g) || []).length;
+        if (blankCount === 0 || blankCount !== questionData.correctAnswers.length) {
+          logger.warn('Fillblank question mismatch between blanks and answers', { blankCount, correctAnswersLength: questionData.correctAnswers.length });
+          return res.status(400).send('Кількість пропусків у тексті питання не відповідає кількості правильних відповідей');
+        }
+        questionData.blankCount = blankCount;
+
+        questionData.correctAnswers.forEach((correctAnswer, idx) => {
+          if (correctAnswer.includes('-')) {
+            const [min, max] = correctAnswer.split('-').map(val => parseFloat(val.trim()));
+            if (isNaN(min) || isNaN(max) || min > max) {
+              return res.status(400).send(`Невірний формат діапазону для правильної відповіді ${idx + 1}. Використовуйте формат "число1-число2", наприклад, "12-14", де число1 <= число2.`);
+            }
+          } else {
+            const value = parseFloat(correctAnswer);
+            if (isNaN(value)) {
+              return res.status(400).send(`Правильна відповідь ${idx + 1} для типу Fillblank має бути числом або діапазоном у форматі "число1-число2".`);
+            }
+          }
+        });
+      }
+
+      if (type === 'singlechoice') {
+        if (questionData.correctAnswers.length !== 1 || questionData.options.length < 2) {
+          logger.warn('Single choice question requires one correct answer and at least 2 options', {
+            correctAnswersLength: questionData.correctAnswers.length,
+            optionsLength: questionData.options.length
+          });
+          return res.status(400).send('Для типу Single Choice потрібна одна правильна відповідь і мінімум 2 варіанти');
+        }
+        questionData.correctAnswer = questionData.correctAnswers[0];
+      }
+
+      if (type === 'input') {
+        if (questionData.correctAnswers.length !== 1) {
+          return res.status(400).send('Для типу Input потрібна одна правильна відповідь');
+        }
+        const correctAnswer = questionData.correctAnswers[0];
         if (correctAnswer.includes('-')) {
           const [min, max] = correctAnswer.split('-').map(val => parseFloat(val.trim()));
           if (isNaN(min) || isNaN(max) || min > max) {
-            return res.status(400).send(`Невірний формат діапазону для правильної відповіді ${idx + 1}. Використовуйте формат "число1-число2", наприклад, "12-14", де число1 <= число2.`);
+            return res.status(400).send('Невірний формат діапазону для правильної відповіді. Використовуйте формат "число1-число2", наприклад, "12-14", де число1 <= число2.');
           }
         } else {
           const value = parseFloat(correctAnswer);
           if (isNaN(value)) {
-            return res.status(400).send(`Правильна відповідь ${idx + 1} для типу Fillblank має бути числом або діапазоном у форматі "число1-число2".`);
+            return res.status(400).send('Правильна відповідь для типу Input має бути числом або діапазоном у форматі "число1-число2".');
           }
         }
-      });
-    }
-
-    if (type === 'singlechoice') {
-      if (questionData.correctAnswers.length !== 1 || questionData.options.length < 2) {
-        return res.status(400).send('Для типу Single Choice потрібна одна правильна відповідь і мінімум 2 варіанти');
       }
-      questionData.correctAnswer = questionData.correctAnswers[0];
-    }
 
-    if (type === 'input') {
-      if (questionData.correctAnswers.length !== 1) {
-        return res.status(400).send('Для типу Input потрібна одна правильна відповідь');
-      }
-      const correctAnswer = questionData.correctAnswers[0];
-      if (correctAnswer.includes('-')) {
-        const [min, max] = correctAnswer.split('-').map(val => parseFloat(val.trim()));
-        if (isNaN(min) || isNaN(max) || min > max) {
-          return res.status(400).send('Невірний формат діапазону для правильної відповіді. Використовуйте формат "число1-число2", наприклад, "12-14", де число1 <= число2.');
-        }
-      } else {
-        const value = parseFloat(correctAnswer);
-        if (isNaN(value)) {
-          return res.status(400).send('Правильна відповідь для типу Input має бути числом або діапазоном у форматі "число1-число2".');
-        }
-      }
-    }
+      await db.collection('questions').updateOne(
+        { _id: new ObjectId(id) },
+        { $set: questionData }
+      );
+      logger.info('Question updated in MongoDB', { id, testNumber, text, type });
 
-    const oldTestNumber = oldQuestion.testNumber;
-
-    await db.collection('questions').updateOne(
-      { _id: new ObjectId(id) },
-      { $set: questionData }
-    );
-
-    await CacheManager.invalidateCache('questions', oldTestNumber);
-    if (testNumber !== oldTestNumber) {
       await CacheManager.invalidateCache('questions', testNumber);
-    }
-    await CacheManager.invalidateCache('allQuestions', 'all');
+      await CacheManager.invalidateCache('allQuestions', 'all');
+      logger.info('Cache invalidated after updating question', { testNumber });
 
-    res.send(`
-      <!DOCTYPE html>
-      <html lang="uk">
-        <head>
-          <meta charset="UTF-8">
-          <title>Питання оновлено</title>
-        </head>
-        <body>
-          <h1>Питання успішно оновлено</h1>
-          <button onclick="window.location.href='/admin/questions'">Повернутися до списку питань</button>
-        </body>
-      </html>
-    `);
-  } catch (error) {
-    logger.error('Error editing question', { message: error.message, stack: error.stack });
-    res.status(500).send('Помилка при редагуванні питання');
-  } finally {
-    const endTime = Date.now();
-    logger.info('Route /admin/edit-question (POST) executed', { duration: `${endTime - startTime} ms` });
-  }
+      res.send(`
+        <!DOCTYPE html>
+        <html lang="uk">
+          <head>
+            <meta charset="UTF-8">
+            <title>Питання оновлено</title>
+            <style>
+              body { font-family: Arial, sans-serif; padding: 20px; text-align: center; }
+              button { padding: 10px 20px; margin: 5px; cursor: pointer; border: none; border-radius: 5px; background-color: #4CAF50; color: white; }
+              button:hover { background-color: #45a049; }
+            </style>
+          </head>
+          <body>
+            <h1>Питання успішно оновлено</h1>
+            <button onclick="window.location.href='/admin/questions'">Повернутися до списку питань</button>
+          </body>
+        </html>
+      `);
+    } catch (error) {
+      logger.error('Error updating question in /admin/edit-question', { message: error.message, stack: error.stack });
+      res.status(500).send('Помилка при редагуванні питання: ' + error.message);
+    } finally {
+      const endTime = Date.now();
+      logger.info('Route /admin/edit-question (POST) executed', { duration: `${endTime - startTime} ms` });
+    }
 });
 
 app.post('/admin/delete-question', checkAuth, checkAdmin, async (req, res) => {
@@ -4058,17 +4110,9 @@ app.post('/admin/delete-question', checkAuth, checkAdmin, async (req, res) => {
     if (!question) {
       return res.status(404).json({ success: false, message: 'Питання не знайдено' });
     }
-    const testNumber = question.testNumber;
-    const deletedOrder = question.order;
-
     await db.collection('questions').deleteOne({ _id: new ObjectId(id) });
-
-    await db.collection('questions').updateMany(
-      { testNumber, order: { $gt: deletedOrder } },
-      { $inc: { order: -1 } }
-    );
-
-    await CacheManager.invalidateCache('questions', testNumber);
+    await CacheManager.invalidateCache('questions', question.testNumber);
+    await CacheManager.invalidateCache('allQuestions', 'all');
     res.json({ success: true });
   } catch (error) {
     logger.error('Error deleting question', { message: error.message, stack: error.stack });
@@ -4101,7 +4145,7 @@ app.get('/admin/import-users', checkAuth, checkAdmin, (req, res) => {
         </head>
         <body>
           <h1>Імпорт користувачів із Excel</h1>
-          <form id="import-users-form">
+          <form id="import-form">
             <input type="hidden" name="_csrf" id="_csrf" value="${res.locals._csrf}">
             <label for="file">Виберіть файл users.xlsx:</label>
             <input type="file" id="file" name="file" accept=".xlsx" required>
@@ -4110,7 +4154,7 @@ app.get('/admin/import-users', checkAuth, checkAdmin, (req, res) => {
           <div id="error-message" class="error"></div>
           <button class="nav-btn" onclick="window.location.href='/admin'">Повернутися до адмін-панелі</button>
           <script>
-            document.getElementById('import-users-form').addEventListener('submit', async (e) => {
+            document.getElementById('import-form').addEventListener('submit', async (e) => {
               e.preventDefault();
               const fileInput = document.getElementById('file');
               const errorMessage = document.getElementById('error-message');
@@ -4142,15 +4186,16 @@ app.get('/admin/import-users', checkAuth, checkAdmin, (req, res) => {
                   }
                 });
 
-                const result = await response.text();
-                if (response.ok) {
-                  document.body.innerHTML = result;
-                } else {
-                  errorMessage.textContent = 'Помилка при завантаженні файлу: ' + result;
+                if (!response.ok) {
+                  const result = await response.json();
+                  throw new Error(result.message || 'HTTP error! status: ' + response.status);
                 }
+
+                const result = await response.text();
+                document.body.innerHTML = result;
               } catch (error) {
                 console.error('Error during file upload:', error);
-                errorMessage.textContent = 'Не вдалося підключитися до сервера. Перевірте ваше з’єднання з Інтернетом.';
+                errorMessage.textContent = 'Помилка при завантаженні файлу: ' + error.message;
               } finally {
                 submitBtn.disabled = false;
                 submitBtn.textContent = 'Завантажити';
@@ -4181,7 +4226,6 @@ app.post('/admin/import-users', checkAuth, checkAdmin, upload.single('file'), as
       return res.status(400).send('Файл не завантажено');
     }
 
-    // Файл тепер у пам’яті (req.file.buffer)
     const importedCount = await importUsersToMongoDB(req.file.buffer);
     logger.info(`Успішно імпортовано ${importedCount} користувачів`);
     res.send(`
