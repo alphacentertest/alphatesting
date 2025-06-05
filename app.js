@@ -1522,152 +1522,124 @@ app.get('/test/question', checkAuth, (req, res) => {
             `).join('')}
           </div>
           <div id="question-container">
-    `;
+`;
 
-    if (progress.length <= 10) {
-      html += `
-        <div class="progress-row">
-          ${progress.map((p, j) => `
-            <div class="progress-circle ${p.answered ? 'answered' : 'unanswered'}">${p.number}</div>
-            ${j < progress.length - 1 ? '<div class="progress-line ' + (p.answered ? 'answered' : '') + '"></div>' : ''}
-          `).join('')}
-        </div>
-      `;
-    } else {
-      for (let i = 0; i < progress.length; i += 10) {
-        const rowCircles = progress.slice(i, i + 10);
-        html += `
-          <div class="progress-row">
-            ${rowCircles.map((p, j) => `
-              <div class="progress-circle ${p.answered ? 'answered' : 'unanswered'}">${p.number}</div>
-              ${j < rowCircles.length - 1 ? '<div class="progress-line ' + (p.answered ? 'answered' : '') + '"></div>' : ''}
-            `).join('')}
-          </div>
-        `;
-      }
-    }
+if (isQuickTest) {
+  html += `
+    <div id="question-timer">
+      <svg viewBox="0 0 80 80">
+        <circle class="timer-circle-bg" cx="40" cy="40" r="36" />
+        <circle class="timer-circle" cx="40" cy="40" r="36" />
+      </svg>
+      <div class="timer-text" id="timer-text">${timePerQuestion}</div>
+    </div>
+  `;
+}
 
-    html += `
-          </div>
-          <div id="question-container">
-    `;
+if (q.picture && q.picture.trim() !== '') {
+  html += `
+    <div id="image-container">
+      <img src="${q.picture}" alt="Picture" onerror="this.style.display='none'; document.getElementById('image-error').style.display='block';">
+      <div id="image-error" class="image-error" style="display: none;">Зображення недоступне</div>
+    </div>
+  `;
+}
 
-    if (isQuickTest) {
-      html += `
-        <div id="question-timer">
-          <svg viewBox="0 0 80 80">
-            <circle class="timer-circle-bg" cx="40" cy="40" r="36" />
-            <circle class="timer-circle" cx="40" cy="40" r="36" />
-          </svg>
-          <div class="timer-text" id="timer-text">${timePerQuestion}</div>
-        </div>
-      `;
-    }
-
-    if (q.picture && q.picture.trim() !== '') {
-      html += `
-        <div id="image-container">
-          <img src="${q.picture}" alt="Picture" onerror="this.style.display='none'; document.getElementById('image-error').style.display='block';">
-          <div id="image-error" class="image-error" style="display: none;">Зображення недоступне</div>
-        </div>
-      `;
-    }
-
-    const instructionText = q.type === 'multiple' ? 'Виберіть усі правильні відповіді' :
-                           q.type === 'input' ? 'Введіть правильну відповідь' :
-                           q.type === 'ordering' ? 'Розташуйте відповіді у правильній послідовності' :
-                           q.type === 'matching' ? 'Складіть правильні пари, перетягуючи елементи' :
-                           q.type === 'fillblank' ? 'Заповніть пропуски у реченні' :
-                           q.type === 'singlechoice' ? 'Виберіть правильну відповідь' : '';
-    html += `
+const instructionText = q.type === 'multiple' ? 'Виберіть усі правильні відповіді' :
+                       q.type === 'input' ? 'Введіть правильну відповідь' :
+                       q.type === 'ordering' ? 'Розташуйте відповіді у правильній послідовності' :
+                       q.type === 'matching' ? 'Складіть правильні пари, перетягуючи елементи' :
+                       q.type === 'fillblank' ? 'Заповніть пропуски у реченні' :
+                       q.type === 'singlechoice' ? 'Виберіть правильну відповідь' : '';
+html += `
             <div class="question-box">
               <h2 id="question-text">${index + 1}. `;
-    
-    if (q.type === 'fillblank') {
-      const userAnswers = Array.isArray(answers[index]) ? answers[index] : [];
-      logger.info(`Fillblank question parts for index ${index}`, { parts: q.text.split('___') });
-      const parts = q.text.split('___');
-      let inputHtml = '';
-      parts.forEach((part, i) => {
-        inputHtml += `<span class="question-text">${part}</span>`;
-        if (i < parts.length - 1) {
-          const userAnswer = userAnswers[i] || '';
-          inputHtml += `<input type="text" class="blank-input" id="blank_${i}" value="${userAnswer.replace(/"/g, '\\"')}" placeholder="Введіть відповідь" autocomplete="off">`;
-        }
-      });
-      html += inputHtml;
-    } else {
-      html += q.text;
-    }
 
-    html += `
+if (q.type === 'fillblank') {
+  const userAnswers = Array.isArray(answers[index]) ? answers[index] : [];
+  logger.info(`Fillblank question parts for index ${index}`, { parts: q.text.split('___') });
+  const parts = q.text.split('___');
+  let inputHtml = '';
+  parts.forEach((part, i) => {
+    inputHtml += `<span class="question-text">${part}</span>`;
+    if (i < parts.length - 1) {
+      const userAnswer = userAnswers[i] || '';
+      inputHtml += `<input type="text" class="blank-input" id="blank_${i}" value="${userAnswer.replace(/"/g, '\\"')}" placeholder="Введіть відповідь" autocomplete="off">`;
+    }
+  });
+  html += inputHtml;
+} else {
+  html += q.text;
+}
+
+html += `
               </h2>
             </div>
             <p id="instruction" class="instruction">${instructionText}</p>
             <div id="answers">
-    `;
+`;
 
-    if (q.type === 'matching' && q.pairs) {
-      const leftItems = shuffleArray([...q.pairs.map(p => p.left)]);
-      const rightItems = shuffleArray([...q.pairs.map(p => p.right)]);
-      const userPairs = Array.isArray(answers[index]) ? answers[index] : [];
-      html += `
-        <div class="matching-container">
-          <div class="matching-column" id="left-column">
-            ${leftItems.map((item, idx) => {
-              const escapedItem = item.replace(/'/g, "\\'").replace(/"/g, '\\"');
-              return `<div class="matching-item draggable" data-value="${escapedItem}">${item}</div>`;
-            }).join('')}
-          </div>
-          <div class="matching-column" id="right-column">
-            ${rightItems.map((item, idx) => {
-              const escapedItem = item.replace(/'/g, "\\'").replace(/"/g, '\\"');
-              const matchedLeft = userPairs.find(pair => pair[1] === item)?.[0] || '';
-              return `
-                <div class="matching-item droppable" data-value="${escapedItem}">
-                  ${item}${matchedLeft ? `<span class="matched"> (Зіставлено: ${matchedLeft})</span>` : ''}
-                </div>
-              `;
-            }).join('')}
-          </div>
-        </div>
-        <button onclick="resetMatchingPairs()">Скинути зіставлення</button>
-      `;
-    } else if (!q.options || q.options.length === 0) {
-      if (q.type !== 'fillblank') {
-        const userAnswer = answers[index] || '';
-        html += `
-          <input type="text" name="q${index}" id="q${index}_input" value="${userAnswer}" placeholder="Введіть відповідь" class="answer-option" autocomplete="off"><br>
-        `;
-      }
-    } else {
-      if (q.type === 'ordering') {
-        html += `
-          <div id="sortable-options">
-            ${(answers[index] || q.options).map((option, optIndex) => {
-              const escapedOption = option.replace(/'/g, "\\'").replace(/"/g, '\\"');
-              return `
-                <div class="option-box draggable" data-index="${optIndex}" data-value="${escapedOption}">
-                  ${option}
-                </div>
-              `;
-            }).join('')}
-          </div>
-        `;
-      } else {
-        q.options.forEach((option, optIndex) => {
-          const selected = selectedOptions.includes(option) ? 'selected' : '';
+if (q.type === 'matching' && q.pairs) {
+  const leftItems = shuffleArray([...q.pairs.map(p => p.left)]);
+  const rightItems = shuffleArray([...q.pairs.map(p => p.right)]);
+  const userPairs = Array.isArray(answers[index]) ? answers[index] : [];
+  html += `
+    <div class="matching-container">
+      <div class="matching-column" id="left-column">
+        ${leftItems.map((item, idx) => {
+          const escapedItem = item.replace(/'/g, "\\'").replace(/"/g, '\\"');
+          return `<div class="matching-item draggable" data-value="${escapedItem}">${item}</div>`;
+        }).join('')}
+      </div>
+      <div class="matching-column" id="right-column">
+        ${rightItems.map((item, idx) => {
+          const escapedItem = item.replace(/'/g, "\\'").replace(/"/g, '\\"');
+          const matchedLeft = userPairs.find(pair => pair[1] === item)?.[0] || '';
+          return `
+            <div class="matching-item droppable" data-value="${escapedItem}">
+              ${item}${matchedLeft ? `<span class="matched"> (Зіставлено: ${matchedLeft})</span>` : ''}
+            </div>
+          `;
+        }).join('')}
+      </div>
+    </div>
+    <button onclick="resetMatchingPairs()">Скинути зіставлення</button>
+  `;
+} else if (!q.options || q.options.length === 0) {
+  if (q.type !== 'fillblank') {
+    const userAnswer = answers[index] || '';
+    html += `
+      <input type="text" name="q${index}" id="q${index}_input" value="${userAnswer}" placeholder="Введіть відповідь" class="answer-option" autocomplete="off"><br>
+    `;
+  }
+} else {
+  if (q.type === 'ordering') {
+    html += `
+      <div id="sortable-options">
+        ${(answers[index] || q.options).map((option, optIndex) => {
           const escapedOption = option.replace(/'/g, "\\'").replace(/"/g, '\\"');
-          html += `
-            <div class="option-box ${selected}" data-value="${escapedOption}">
+          return `
+            <div class="option-box draggable" data-index="${optIndex}" data-value="${escapedOption}">
               ${option}
             </div>
           `;
-        });
-      }
-    }
+        }).join('')}
+      </div>
+    `;
+  } else {
+    q.options.forEach((option, optIndex) => {
+      const selected = selectedOptions.includes(option) ? 'selected' : '';
+      const escapedOption = option.replace(/'/g, "\\'").replace(/"/g, '\\"');
+      html += `
+        <div class="option-box ${selected}" data-value="${escapedOption}">
+          ${option}
+        </div>
+      `;
+    });
+  }
+}
 
-    html += `
+html += `
             </div>
           </div>
           <div class="button-container">
