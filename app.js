@@ -1290,13 +1290,47 @@ app.get('/test/question', checkAuth, (req, res) => {
             body { font-family: Arial, sans-serif; margin: 0; padding: 20px; padding-bottom: 80px; background-color: #f0f0f0; }
             h1 { font-size: 24px; text-align: center; }
             img { max-width: 100%; margin-bottom: 10px; display: block; margin-left: auto; margin-right: auto; }
-            .progress-bar { display: flex; flex-direction: column; gap: 5px; margin-bottom: 20px; width: calc(100% - 40px); margin-left: auto; margin-right: auto; box-sizing: border-box; }
-            .progress-circle { width: 40px; height: 40px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 14px; flex-shrink: 0; }
-            .progress-circle.unanswered { background-color: red; color: white; }
-            .progress-circle.answered { background-color: green; color: white; }
-            .progress-line { width: 5px; height: 2px; background-color: #ccc; margin: 0 2px; align-self: center; flex-shrink: 0; }
-            .progress-line.answered { background-color: green; }
-            .progress-row { display: flex; align-items: center; justify-content: space-around; gap: 2px; flex-wrap: wrap; }
+            .progress-bar { 
+              display: flex; 
+              flex-wrap: wrap; 
+              gap: 5px; 
+              margin-bottom: 20px; 
+              width: calc(100% - 40px); 
+              margin-left: auto; 
+              margin-right: auto; 
+              box-sizing: border-box; 
+              justify-content: center; 
+              align-items: center; 
+            }
+            .progress-circle { 
+              width: 40px; 
+              height: 40px; 
+              border-radius: 50%; 
+              display: flex; 
+              align-items: center; 
+              justify-content: center; 
+              font-size: 14px; 
+              flex-shrink: 0; 
+            }
+            .progress-circle.unanswered { 
+              background-color: red; 
+              color: white; 
+            }
+            .progress-circle.answered { 
+              background-color: green; 
+              color: white; 
+            }
+            .progress-line { 
+              width: 5px; 
+              height: 2px; 
+              background-color: #ccc; 
+              margin: 0 2px; 
+              align-self: center; 
+              flex-shrink: 0; 
+            }
+            .progress-line.answered { 
+              background-color: green; 
+            }
             .option-box { border: 2px solid #ccc; padding: 10px; margin: 5px 0; border-radius: 5px; cursor: pointer; font-size: 16px; user-select: none; }
             .option-box.selected { background-color: #90ee90; }
             .button-container { position: fixed; bottom: 20px; left: 20px; right: 20px; display: flex; justify-content: space-between; }
@@ -1349,17 +1383,44 @@ app.get('/test/question', checkAuth, (req, res) => {
             .blank-input { width: 100px; margin: 0 5px; padding: 5px; border: 1px solid #ccc; border-radius: 4px; display: inline-block; }
             .question-text { display: inline; }
             .image-error { color: red; font-style: italic; text-align: center; margin-bottom: 10px; }
-            @media (max-width: 600px) {
-              h1 { font-size: 28px; }
-              .progress-bar { flex-direction: column; }
-              .progress-circle { width: 20px; height: 20px; font-size: 10px; }
-              .progress-line { width: 5px; }
-              .progress-row { justify-content: center; gap: 2px; flex-wrap: wrap; }
+            @media (max-width: 400px) {
+              h1 { font-size: 24px; }
+              .progress-bar { 
+                gap: 2px; 
+              }
+              .progress-circle { 
+                width: 20px; 
+                height: 20px; 
+                font-size: 8px; 
+              }
+              .progress-line { 
+                width: 3px; 
+              }
+              button { font-size: 16px; padding: 10px; }
+              #timer { font-size: 20px; }
+              .question-box h2 { font-size: 18px; }
+              .matching-container { flex-direction: column; }
+              .matching-column { width: 100%; }
+              .blank-input { width: 80px; }
               .option-box, .matching-item { 
-                font-size: 18px; 
-                padding: 10px; 
-                min-height: 50px; 
+                font-size: 14px; 
+                padding: 8px; 
+                min-height: 40px; 
                 line-height: 1.5; 
+              }
+            }
+            @media (min-width: 401px) and (max-width: 600px) {
+              h1 { font-size: 28px; }
+              .progress-bar { 
+                gap: 3px; 
+              }
+              .progress-circle { 
+                width: 25px; 
+                height: 25px; 
+                font-size: 10px; 
+              }
+              .progress-line { 
+                width: 4px; 
               }
               button { font-size: 18px; padding: 15px; }
               #timer { font-size: 20px; }
@@ -1367,12 +1428,87 @@ app.get('/test/question', checkAuth, (req, res) => {
               .matching-container { flex-direction: column; }
               .matching-column { width: 100%; }
               .blank-input { width: 80px; }
+              .option-box, .matching-item { 
+                font-size: 18px; 
+                padding: 10px; 
+                min-height: 50px; 
+                line-height: 1.5; 
+              }
             }
-            @media (min-width: 601px) {
-              .progress-bar { flex-direction: row; justify-content: center; }
-              .progress-circle { width: 40px; height: 40px; font-size: 14px; }
-              .progress-line { width: 5px; }
-              .progress-row { justify-content: space-around; }
+            @media (min-width: 601px) and (max-width: 900px) {
+              h1 { font-size: 30px; }
+              .progress-bar { 
+                gap: 4px; 
+              }
+              .progress-circle { 
+                width: 30px; 
+                height: 30px; 
+                font-size: 12px; 
+              }
+              .progress-line { 
+                width: 5px; 
+              }
+              button { font-size: 18px; padding: 15px; }
+              #timer { font-size: 22px; }
+              .question-box h2 { font-size: 22px; }
+              .matching-column { width: 45%; }
+              .blank-input { width: 100px; }
+              .option-box, .matching-item { 
+                font-size: 18px; 
+                padding: 10px; 
+                min-height: 50px; 
+                line-height: 1.5; 
+              }
+            }
+            @media (min-width: 901px) and (max-width: 1200px) {
+              h1 { font-size: 32px; }
+              .progress-bar { 
+                gap: 5px; 
+              }
+              .progress-circle { 
+                width: 35px; 
+                height: 35px; 
+                font-size: 14px; 
+              }
+              .progress-line { 
+                width: 5px; 
+              }
+              button { font-size: 18px; padding: 15px; }
+              #timer { font-size: 24px; }
+              .question-box h2 { font-size: 24px; }
+              .matching-column { width: 45%; }
+              .blank-input { width: 100px; }
+              .option-box, .matching-item { 
+                font-size: 18px; 
+                padding: 10px; 
+                min-height: 50px; 
+                line-height: 1.5; 
+              }
+            }
+            @media (min-width: 1201px) {
+              h1 { font-size: 36px; }
+              .progress-bar { 
+                gap: 6px; 
+              }
+              .progress-circle { 
+                width: 40px; 
+                height: 40px; 
+                font-size: 16px; 
+              }
+              .progress-line { 
+                width: 6px; 
+              }
+              button { font-size: 20px; padding: 15px; }
+              #timer { font-size: 26px; }
+              .question-box h2 { font-size: 26px; }
+              .matching-column { width: 45%; }
+              .blank-input { width: 120px; }
+              .option-box, .matching-item { 
+                font-size: 20px; 
+                padding: 12px; 
+                min-height: 60px; 
+                line-height: 1.5; 
+              }
             }
           </style>
         </head>
@@ -1380,6 +1516,12 @@ app.get('/test/question', checkAuth, (req, res) => {
           <h1>${testNames[testNumber].name.replace(/"/g, '\\"')}</h1>
           <div id="timer">Залишилось часу: ${minutes} хв ${seconds} с</div>
           <div class="progress-bar">
+            ${progress.map((p, j) => `
+              <div class="progress-circle ${p.answered ? 'answered' : 'unanswered'}">${p.number}</div>
+              ${j < progress.length - 1 ? '<div class="progress-line ' + (p.answered ? 'answered' : '') + '"></div>' : ''}
+            `).join('')}
+          </div>
+          <div id="question-container">
     `;
 
     if (progress.length <= 10) {
