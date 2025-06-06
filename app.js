@@ -275,7 +275,7 @@ app.use((req, res, next) => {
   next();
 });
 
-// Middleware для предотвращения кэширования
+// Middleware для запобігання кешуванню
 app.use((req, res, next) => {
   res.set('Cache-Control', 'no-store, no-cache, must-revalidate, private');
   res.set('Pragma', 'no-cache');
@@ -283,7 +283,7 @@ app.use((req, res, next) => {
   next();
 });
 
-// Middleware для обработки ошибок MongoDB
+// Middleware для обробки помилок MongoDB
 app.use((err, req, res, next) => {
   if (err.name === 'MongoNetworkError' || err.name === 'MongoServerError') {
     logger.error('MongoDB error', { message: err.message, stack: err.stack });
@@ -291,6 +291,51 @@ app.use((err, req, res, next) => {
   } else {
     next(err);
   }
+});
+
+// Middleware для додавання водяного знака та блокування скріншотів
+app.use((req, res, next) => {
+  const originalSend = res.send;
+  res.send = function (body) {
+    if (typeof body === 'string' && body.includes('</body>') && req.user) {
+      const watermarkScript = `
+        <style>
+          .watermark {
+            position: fixed;
+            top: 10px;
+            right: 10px;
+            color: rgba(255, 0, 0, 0.3);
+            font-size: 24px;
+            pointer-events: none;
+            z-index: 10000;
+          }
+        </style>
+        <div class="watermark">Користувач: ${req.user}</div>
+        <script>
+          document.addEventListener('keydown', (e) => {
+            // Блокуємо PrintScreen (PrtSc)
+            if (e.key === 'PrintScreen') {
+              e.preventDefault();
+              alert('Знімки екрана заборонені!');
+            }
+            // Блокуємо комбінації типу Alt + PrintScreen, Ctrl + PrintScreen
+            if ((e.altKey || e.ctrlKey) && e.key === 'PrintScreen') {
+              e.preventDefault();
+              alert('Знімки екрана заборонені!');
+            }
+          });
+          // Блокуємо контекстне меню (правий клік)
+          document.addEventListener('contextmenu', (e) => {
+            e.preventDefault();
+            alert('Контекстне меню заборонене для захисту вмісту.');
+          });
+        </script>
+      `;
+      body = body.replace('</body>', `${watermarkScript}</body>`);
+    }
+    return originalSend.call(this, body);
+  };
+  next();
 });
 
 const importUsersToMongoDB = async (buffer) => {
@@ -522,6 +567,7 @@ const loadUsersToCache = async () => {
     logger.info(`Refreshed user cache with ${userCache.length} users in ${endTime - startTime} ms`);
   } catch (error) {
     logger.error('Error refreshing user cache', { message: error.message, stack: error.stack });
+    throw error;
   }
 };
 
@@ -590,11 +636,9 @@ const initializeServer = async () => {
     await db.collection('test_attempts').createIndex({ user: 1, testNumber: 1, attemptDate: 1 });
     await db.collection('login_attempts').createIndex({ ipAddress: 1, lastAttempt: 1 });
     await db.collection('tests').createIndex({ testNumber: 1 }, { unique: true });
-    // Додаємо індекс для активних тестів
     await db.collection('active_tests').createIndex({ user: 1 }, { unique: true });
     logger.info('MongoDB indexes created successfully');
 
-    // Міграція ролей для існуючих користувачів
     const userCount = await db.collection('users').countDocuments();
     if (userCount > 0) {
       await db.collection('users').updateMany(
@@ -612,7 +656,6 @@ const initializeServer = async () => {
       logger.info('Migrated roles to existing users');
     }
 
-    // Міграція тестов, якщо колекція пуста
     const testCount = await db.collection('tests').countDocuments();
     if (testCount === 0) {
       const defaultTests = {
@@ -894,6 +937,16 @@ app.post('/login', [
       return res.status(400).json({ success: false, message: 'Логін або пароль не вказано' });
     }
 
+    // Перевіряємо, чи userCache порожній, і якщо так, повторно завантажуємо
+    if (userCache.length === 0) {
+      logger.warn('userCache is empty, reloading from MongoDB');
+      await loadUsersToCache();
+      if (userCache.length === 0) {
+        logger.error('No users found in MongoDB after reload');
+        throw new Error('Не вдалося завантажити користувачів з бази даних');
+      }
+    }
+
     const foundUser = userCache.find(user => user.username === username);
     logger.info('User found in cache', { username, cachedPassword: foundUser?.password });
 
@@ -964,11 +1017,20 @@ const checkAdmin = (req, res, next) => {
   next();
 };
 
-app.get('/select-test', checkAuth, (req, res) => {
+app.get('/select-test', checkAuth, async (req, res) => {
   const startTime = Date.now();
   try {
     if (req.userRole === 'admin') {
       return res.redirect('/admin');
+    }
+    // Перевіряємо, чи testNames порожній, і якщо так, повторно завантажуємо
+    if (Object.keys(testNames).length === 0) {
+      logger.warn('testNames is empty, reloading from MongoDB');
+      await loadTestsFromMongoDB();
+      if (Object.keys(testNames).length === 0) {
+        logger.error('No tests found in MongoDB after reload');
+        throw new Error('Не вдалося завантажити тести з бази даних');
+      }
     }
     const html = `
       <!DOCTYPE html>
@@ -1039,6 +1101,9 @@ app.get('/select-test', checkAuth, (req, res) => {
       </html>
     `;
     res.send(html);
+  } catch (error) {
+    logger.error('Error in /select-test', { message: error.message, stack: error.stack });
+    res.status(500).send('Помилка при завантаженні сторінки вибору тесту');
   } finally {
     const endTime = Date.now();
     logger.info('Route /select-test executed', { duration: `${endTime - startTime} ms` });
@@ -1277,7 +1342,6 @@ app.get('/test/question', checkAuth, async (req, res) => {
       return res.status(400).send('Невірний номер питання');
     }
 
-    // Оновлюємо answerTimestamps та currentQuestion у MongoDB
     const updateData = {
       currentQuestion: index,
       answerTimestamps: userTest.answerTimestamps || {}
@@ -1306,7 +1370,6 @@ app.get('/test/question', checkAuth, async (req, res) => {
     const selectedOptions = answers[index] || [];
     const selectedOptionsString = JSON.stringify(selectedOptions).replace(/'/g, "\\'");
 
-    // Оновлюємо questionStartTime
     const questionStartTime = userTest.questionStartTime || {};
     if (!questionStartTime[index]) {
       questionStartTime[index] = Date.now();
@@ -1421,6 +1484,7 @@ app.get('/test/question', checkAuth, async (req, res) => {
             .blank-input { width: 100px; margin: 0 5px; padding: 5px; border: 1px solid #ccc; border-radius: 4px; display: inline-block; }
             .question-text { display: inline; }
             .image-error { color: red; font-style: italic; text-align: center; margin-bottom: 10px; }
+            .no-screenshot-notice { color: red; text-align: center; font-size: 18px; margin-bottom: 10px; }
             @media (max-width: 400px) {
               h1 { font-size: 24px; }
               .progress-bar { 
@@ -1514,7 +1578,7 @@ app.get('/test/question', checkAuth, async (req, res) => {
               button { font-size: 18px; padding: 15px; }
               #timer { font-size: 24px; }
               .question-box h2 { font-size: 24px; }
-              .matching-column { width: 45%; }
+                            .matching-column { width: 45%; }
               .blank-input { width: 100px; }
               .option-box, .matching-item { 
                 font-size: 18px; 
@@ -1551,6 +1615,7 @@ app.get('/test/question', checkAuth, async (req, res) => {
           </style>
         </head>
         <body>
+          <div class="no-screenshot-notice">Заборонено робити скріншоти!</div>
           <h1>${testNames[testNumber].name.replace(/"/g, '\\"')}</h1>
           <div id="timer">Залишилось часу: ${minutes} хв ${seconds} с</div>
           <div class="progress-bar">
@@ -2408,6 +2473,7 @@ app.get('/result', checkAuth, async (req, res) => {
             button { padding: 10px 20px; margin: 5px; cursor: pointer; border: none; border-radius: 5px; font-size: 16px; }
             #exportPDF { background-color: #ffeb3b; }
             #restart { background-color: #ef5350; }
+            .no-screenshot-notice { color: red; text-align: center; font-size: 18px; margin-bottom: 10px; }
             @keyframes fillCircle {
               to {
                 stroke-dashoffset: ${(440 * (100 - percentage)) / 100};
@@ -2418,6 +2484,7 @@ app.get('/result', checkAuth, async (req, res) => {
           <script src="/pdfmake/vfs_fonts.js"></script>
         </head>
         <body>
+          <div class="no-screenshot-notice">Заборонено робити скріншоти!</div>
           <h1>Результат тесту</h1>
           <div class="result-container">
             <svg width="150" height="150">
@@ -2547,9 +2614,11 @@ app.get('/results', checkAuth, async (req, res) => {
             button { padding: 10px 20px; margin: 5px; cursor: pointer; border: none; border-radius: 5px; font-size: 16px; }
             #exportPDF { background-color: #ffeb3b; }
             #restart { background-color: #ef5350; }
+            .no-screenshot-notice { color: red; text-align: center; font-size: 18px; margin-bottom: 10px; }
           </style>
         </head>
         <body>
+          <div class="no-screenshot-notice">Заборонено робити скріншоти!</div>
           <h1>Результати</h1>
     `;
     if (userTest) {
@@ -2795,6 +2864,7 @@ app.get('/admin', checkAuth, checkAdmin, (req, res) => {
             button { padding: 15px 30px; margin: 10px; font-size: 24px; cursor: pointer; width: 300px; border: none; border-radius: 5px; background-color: #4CAF50; color: white; }
             button:hover { background-color: #45a049; }
             #logout { background-color: #ef5350; color: white; }
+            .no-screenshot-notice { color: red; text-align: center; font-size: 18px; margin-bottom: 10px; }
             @media (max-width: 600px) {
               body { padding: 20px; padding-bottom: 80px; }
               h1 { font-size: 32px; }
@@ -2804,6 +2874,7 @@ app.get('/admin', checkAuth, checkAdmin, (req, res) => {
           </style>
         </head>
         <body>
+          <div class="no-screenshot-notice">Заборонено робити скріншоти!</div>
           <h1>Адмін-панель</h1>
           <button onclick="window.location.href='/admin/users'">Керування користувачами</button><br>
           <button onclick="window.location.href='/admin/questions'">Керування питаннями</button><br>
@@ -2881,9 +2952,11 @@ app.get('/admin/users', checkAuth, checkAdmin, async (req, res) => {
             .action-btn.edit { background-color: #4CAF50; color: white; }
             .action-btn.delete { background-color: #ff4d4d; color: white; }
             .nav-btn { background-color: #007bff; color: white; }
+            .no-screenshot-notice { color: red; text-align: center; font-size: 18px; margin-bottom: 10px; }
           </style>
         </head>
         <body>
+          <div class="no-screenshot-notice">Заборонено робити скріншоти!</div>
           <h1>Керування користувачами</h1>
           <button class="nav-btn" onclick="window.location.href='/admin'">Повернутися до адмін-панелі</button>
           <button class="nav-btn" onclick="window.location.href='/admin/add-user'">Додати користувача</button>
@@ -2970,9 +3043,11 @@ app.get('/admin/add-user', checkAuth, checkAdmin, (req, res) => {
             .nav-btn { background-color: #007bff; color: white; }
             .submit-btn { background-color: #4CAF50; color: white; }
             .error { color: red; }
+            .no-screenshot-notice { color: red; text-align: center; font-size: 18px; margin-bottom: 10px; }
           </style>
         </head>
         <body>
+          <div class="no-screenshot-notice">Заборонено робити скріншоти!</div>
           <h1>Додати користувача</h1>
           <form method="POST" action="/admin/add-user" onsubmit="return validateForm()">
             <input type="hidden" name="_csrf" value="${res.locals._csrf}">
@@ -3084,9 +3159,11 @@ app.get('/admin/edit-user', checkAuth, checkAdmin, async (req, res) => {
             .nav-btn { background-color: #007bff; color: white; }
             .submit-btn { background-color: #4CAF50; color: white; }
             .error { color: red; }
+            .no-screenshot-notice { color: red; text-align: center; font-size: 18px; margin-bottom: 10px; }
           </style>
         </head>
         <body>
+          <div class="no-screenshot-notice">Заборонено робити скріншоти!</div>
           <h1>Редагувати користувача: ${username}</h1>
           <form method="POST" action="/admin/edit-user" onsubmit="return validateForm()">
             <input type="hidden" name="_csrf" value="${res.locals._csrf}">
@@ -3291,9 +3368,11 @@ app.get('/admin/questions', checkAuth, checkAdmin, async (req, res) => {
             .pagination { margin-top: 20px; }
             .pagination a { margin: 0 5px; padding: 5px 10px; background-color: #007bff; color: white; text-decoration: none; border-radius: 5px; }
             .pagination a:hover { background-color: #0056b3; }
+            .no-screenshot-notice { color: red; text-align: center; font-size: 18px; margin-bottom: 10px; }
           </style>
         </head>
         <body>
+          <div class="no-screenshot-notice">Заборонено робити скріншоти!</div>
           <h1>Керування питаннями</h1>
           <button class="nav-btn" onclick="window.location.href='/admin'">Повернутися до адмін-панелі</button>
           <button class="nav-btn" onclick="window.location.href='/admin/add-question'">Додати питання</button>
@@ -3402,9 +3481,11 @@ app.get('/admin/add-question', checkAuth, checkAdmin, (req, res) => {
             .submit-btn { background-color: #4CAF50; color: white; }
             .error { color: red; }
             .note { color: blue; font-style: italic; }
+            .no-screenshot-notice { color: red; text-align: center; font-size: 18px; margin-bottom: 10px; }
           </style>
         </head>
         <body>
+          <div class="no-screenshot-notice">Заборонено робити скріншоти!</div>
           <h1>Додати питання</h1>
           <form method="POST" action="/admin/add-question" onsubmit="return validateForm()">
             <input type="hidden" name="_csrf" value="${res.locals._csrf || ''}">
@@ -3751,9 +3832,11 @@ app.get('/admin/edit-question', checkAuth, checkAdmin, async (req, res) => {
             .warning { color: orange; margin-bottom: 10px; }
             .note { color: blue; font-style: italic; }
             img#image-preview { max-width: 200px; margin-top: 10px; }
+            .no-screenshot-notice { color: red; text-align: center; font-size: 18px; margin-bottom: 10px; }
           </style>
         </head>
         <body>
+          <div class="no-screenshot-notice">Заборонено робити скріншоти!</div>
           <h1>Редагувати питання</h1>
           <form method="POST" action="/admin/edit-question" onsubmit="return validateForm()">
             <input type="hidden" name="_csrf" value="${res.locals._csrf || ''}">
@@ -3785,7 +3868,7 @@ app.get('/admin/edit-question', checkAuth, checkAdmin, async (req, res) => {
               <textarea id="options" name="options" placeholder="Введіть варіанти через крапку з комою">${question.options.join('; ')}</textarea>
             </div>
             <label for="correctAnswers">Правильні відповіді (через крапку з комою):</label>
-            <p id="correctAnswersNote" class="note">Для типів Input і Fillblank можна вказати діапазон у форматі "число1-число2", наприклад, "12-14".</p>
+            <p id="correctAnswersNote" class="note">Для типів Input і Fillblank             можна вказати діапазон у форматі "число1-число2", наприклад, "12-14".</p>
             <textarea id="correctAnswers" name="correctAnswers" required placeholder="Введіть правильні відповіді через крапку з комою">${question.correctAnswers.join('; ')}</textarea>
             <label for="points">Бали за питання:</label>
             <input type="number" id="points" name="points" value="${question.points}" min="1" required>
@@ -3994,112 +4077,112 @@ app.post('/admin/edit-question', checkAuth, checkAdmin, [
       }
     } else {
       logger.info(`Picture field unchanged, keeping existing picture: ${questionData.picture}`);
+    }
+
+    if (type === 'truefalse') {
+      questionData.options = ["Правда", "Неправда"];
+    }
+
+    if (type === 'matching') {
+      questionData.pairs = questionData.options.map((opt, idx) => ({
+        left: opt || '',
+        right: questionData.correctAnswers[idx] || ''
+      })).filter(pair => pair.left && pair.right);
+      if (questionData.pairs.length === 0) {
+        logger.warn('Matching question requires pairs', { testNumber, text });
+        return res.status(400).send('Для типу Matching потрібні пари відповідей');
       }
+      questionData.correctPairs = questionData.pairs.map(pair => [pair.left, pair.right]);
+    }
 
-      if (type === 'truefalse') {
-        questionData.options = ["Правда", "Неправда"];
+    if (type === 'fillblank') {
+      questionData.text = questionData.text.replace(/\s*___\s*/g, '___');
+      const blankCount = (questionData.text.match(/___/g) || []).length;
+      if (blankCount === 0 || blankCount !== questionData.correctAnswers.length) {
+        logger.warn('Fillblank question mismatch between blanks and answers', { blankCount, correctAnswersLength: questionData.correctAnswers.length });
+        return res.status(400).send('Кількість пропусків у тексті питання не відповідає кількості правильних відповідей');
       }
+      questionData.blankCount = blankCount;
 
-      if (type === 'matching') {
-        questionData.pairs = questionData.options.map((opt, idx) => ({
-          left: opt || '',
-          right: questionData.correctAnswers[idx] || ''
-        })).filter(pair => pair.left && pair.right);
-        if (questionData.pairs.length === 0) {
-          logger.warn('Matching question requires pairs', { testNumber, text });
-          return res.status(400).send('Для типу Matching потрібні пари відповідей');
-        }
-        questionData.correctPairs = questionData.pairs.map(pair => [pair.left, pair.right]);
-      }
-
-      if (type === 'fillblank') {
-        questionData.text = questionData.text.replace(/\s*___\s*/g, '___');
-        const blankCount = (questionData.text.match(/___/g) || []).length;
-        if (blankCount === 0 || blankCount !== questionData.correctAnswers.length) {
-          logger.warn('Fillblank question mismatch between blanks and answers', { blankCount, correctAnswersLength: questionData.correctAnswers.length });
-          return res.status(400).send('Кількість пропусків у тексті питання не відповідає кількості правильних відповідей');
-        }
-        questionData.blankCount = blankCount;
-
-        questionData.correctAnswers.forEach((correctAnswer, idx) => {
-          if (correctAnswer.includes('-')) {
-            const [min, max] = correctAnswer.split('-').map(val => parseFloat(val.trim()));
-            if (isNaN(min) || isNaN(max) || min > max) {
-              return res.status(400).send(`Невірний формат діапазону для правильної відповіді ${idx + 1}. Використовуйте формат "число1-число2", наприклад, "12-14", де число1 <= число2.`);
-            }
-          } else {
-            const value = parseFloat(correctAnswer);
-            if (isNaN(value)) {
-              return res.status(400).send(`Правильна відповідь ${idx + 1} для типу Fillblank має бути числом або діапазоном у форматі "число1-число2".`);
-            }
-          }
-        });
-      }
-
-      if (type === 'singlechoice') {
-        if (questionData.correctAnswers.length !== 1 || questionData.options.length < 2) {
-          logger.warn('Single choice question requires one correct answer and at least 2 options', {
-            correctAnswersLength: questionData.correctAnswers.length,
-            optionsLength: questionData.options.length
-          });
-          return res.status(400).send('Для типу Single Choice потрібна одна правильна відповідь і мінімум 2 варіанти');
-        }
-        questionData.correctAnswer = questionData.correctAnswers[0];
-      }
-
-      if (type === 'input') {
-        if (questionData.correctAnswers.length !== 1) {
-          return res.status(400).send('Для типу Input потрібна одна правильна відповідь');
-        }
-        const correctAnswer = questionData.correctAnswers[0];
+      questionData.correctAnswers.forEach((correctAnswer, idx) => {
         if (correctAnswer.includes('-')) {
           const [min, max] = correctAnswer.split('-').map(val => parseFloat(val.trim()));
           if (isNaN(min) || isNaN(max) || min > max) {
-            return res.status(400).send('Невірний формат діапазону для правильної відповіді. Використовуйте формат "число1-число2", наприклад, "12-14", де число1 <= число2.');
+            return res.status(400).send(`Невірний формат діапазону для правильної відповіді ${idx + 1}. Використовуйте формат "число1-число2", наприклад, "12-14", де число1 <= число2.`);
           }
         } else {
           const value = parseFloat(correctAnswer);
           if (isNaN(value)) {
-            return res.status(400).send('Правильна відповідь для типу Input має бути числом або діапазоном у форматі "число1-число2".');
+            return res.status(400).send(`Правильна відповідь ${idx + 1} для типу Fillblank має бути числом або діапазоном у форматі "число1-число2".`);
           }
         }
-      }
-
-      await db.collection('questions').updateOne(
-        { _id: new ObjectId(id) },
-        { $set: questionData }
-      );
-      logger.info('Question updated in MongoDB', { id, testNumber, text, type });
-
-      await CacheManager.invalidateCache('questions', testNumber);
-      await CacheManager.invalidateCache('allQuestions', 'all');
-      logger.info('Cache invalidated after updating question', { testNumber });
-
-      res.send(`
-        <!DOCTYPE html>
-        <html lang="uk">
-          <head>
-            <meta charset="UTF-8">
-            <title>Питання оновлено</title>
-            <style>
-              body { font-family: Arial, sans-serif; padding: 20px; text-align: center; }
-              button { padding: 10px 20px; margin: 5px; cursor: pointer; border: none; border-radius: 5px; background-color: #4CAF50; color: white; }
-              button:hover { background-color: #45a049; }
-            </style>
-          </head>
-          <body>
-            <h1>Питання успішно оновлено</h1>
-            <button onclick="window.location.href='/admin/questions'">Повернутися до списку питань</button>
-          </body>
-        </html>
-      `);
-    } catch (error) {
-      logger.error('Error updating question in /admin/edit-question', { message: error.message, stack: error.stack });
-      res.status(500).send('Помилка при редагуванні питання: ' + error.message);
-    } finally {
-      const endTime = Date.now();
-      logger.info('Route /admin/edit-question (POST) executed', { duration: `${endTime - startTime} ms` });
+      });
     }
+
+    if (type === 'singlechoice') {
+      if (questionData.correctAnswers.length !== 1 || questionData.options.length < 2) {
+        logger.warn('Single choice question requires one correct answer and at least 2 options', {
+          correctAnswersLength: questionData.correctAnswers.length,
+          optionsLength: questionData.options.length
+        });
+        return res.status(400).send('Для типу Single Choice потрібна одна правильна відповідь і мінімум 2 варіанти');
+      }
+      questionData.correctAnswer = questionData.correctAnswers[0];
+    }
+
+    if (type === 'input') {
+      if (questionData.correctAnswers.length !== 1) {
+        return res.status(400).send('Для типу Input потрібна одна правильна відповідь');
+      }
+      const correctAnswer = questionData.correctAnswers[0];
+      if (correctAnswer.includes('-')) {
+        const [min, max] = correctAnswer.split('-').map(val => parseFloat(val.trim()));
+        if (isNaN(min) || isNaN(max) || min > max) {
+          return res.status(400).send('Невірний формат діапазону для правильної відповіді. Використовуйте формат "число1-число2", наприклад, "12-14", де число1 <= число2.');
+        }
+      } else {
+        const value = parseFloat(correctAnswer);
+        if (isNaN(value)) {
+          return res.status(400).send('Правильна відповідь для типу Input має бути числом або діапазоном у форматі "число1-число2".');
+        }
+      }
+    }
+
+    await db.collection('questions').updateOne(
+      { _id: new ObjectId(id) },
+      { $set: questionData }
+    );
+    logger.info('Question updated in MongoDB', { id, testNumber, text, type });
+
+    await CacheManager.invalidateCache('questions', testNumber);
+    await CacheManager.invalidateCache('allQuestions', 'all');
+    logger.info('Cache invalidated after updating question', { testNumber });
+
+    res.send(`
+      <!DOCTYPE html>
+      <html lang="uk">
+        <head>
+          <meta charset="UTF-8">
+          <title>Питання оновлено</title>
+          <style>
+            body { font-family: Arial, sans-serif; padding: 20px; text-align: center; }
+            button { padding: 10px 20px; margin: 5px; cursor: pointer; border: none; border-radius: 5px; background-color: #4CAF50; color: white; }
+            button:hover { background-color: #45a049; }
+          </style>
+        </head>
+        <body>
+          <h1>Питання успішно оновлено</h1>
+          <button onclick="window.location.href='/admin/questions'">Повернутися до списку питань</button>
+        </body>
+      </html>
+    `);
+  } catch (error) {
+    logger.error('Error updating question in /admin/edit-question', { message: error.message, stack: error.stack });
+    res.status(500).send('Помилка при редагуванні питання: ' + error.message);
+  } finally {
+    const endTime = Date.now();
+    logger.info('Route /admin/edit-question (POST) executed', { duration: `${endTime - startTime} ms` });
+  }
 });
 
 app.post('/admin/delete-question', checkAuth, checkAdmin, async (req, res) => {
@@ -4141,9 +4224,11 @@ app.get('/admin/import-users', checkAuth, checkAdmin, (req, res) => {
             .submit-btn { background-color: #4CAF50; color: white; }
             .submit-btn:disabled { background-color: #cccccc; cursor: not-allowed; }
             .error { color: red; }
+            .no-screenshot-notice { color: red; text-align: center; font-size: 18px; margin-bottom: 10px; }
           </style>
         </head>
         <body>
+          <div class="no-screenshot-notice">Заборонено робити скріншоти!</div>
           <h1>Імпорт користувачів із Excel</h1>
           <form id="import-form">
             <input type="hidden" name="_csrf" id="_csrf" value="${res.locals._csrf}">
@@ -4268,9 +4353,11 @@ app.get('/admin/import-questions', checkAuth, checkAdmin, (req, res) => {
             .submit-btn { background-color: #4CAF50; color: white; }
             .submit-btn:disabled { background-color: #cccccc; cursor: not-allowed; }
             .error { color: red; }
+            .no-screenshot-notice { color: red; text-align: center; font-size: 18px; margin-bottom: 10px; }
           </style>
         </head>
         <body>
+          <div class="no-screenshot-notice">Заборонено робити скріншоти!</div>
           <h1>Імпорт питань із Excel</h1>
           <form id="import-form">
             <input type="hidden" name="_csrf" id="_csrf" value="${res.locals._csrf}">
@@ -4504,9 +4591,11 @@ app.get('/admin/results', checkAuth, async (req, res) => {
             #modal-content::-webkit-scrollbar-thumb:hover {
               background: #555;
             }
+            .no-screenshot-notice { color: red; text-align: center; font-size: 18px; margin-bottom: 10px; }
           </style>
         </head>
         <body>
+          <div class="no-screenshot-notice">Заборонено робити скріншоти!</div>
           <h1>Результати всіх користувачів</h1>
           ${req.userRole === 'admin' ? `
             <button class="nav-btn" onclick="window.location.href='/admin'">Повернутися до адмін-панелі</button>
@@ -4768,9 +4857,11 @@ app.get('/admin/edit-tests', checkAuth, checkAdmin, (req, res) => {
             .delete-btn { background-color: #ff4d4d; color: white; }
             .test-row { display: flex; align-items: center; margin-bottom: 10px; flex-wrap: wrap; }
             label { margin-right: 10px; }
+            .no-screenshot-notice { color: red; text-align: center; font-size: 18px; margin-bottom: 10px; }
           </style>
         </head>
         <body>
+          <div class="no-screenshot-notice">Заборонено робити скріншоти!</div>
           <h1>Редагувати назви та налаштування тестів</h1>
           <form method="POST" action="/admin/edit-tests">
             <input type="hidden" name="_csrf" value="${res.locals._csrf}">
@@ -4951,9 +5042,11 @@ app.get('/admin/create-test', checkAuth, checkAdmin, (req, res) => {
             input { font-size: 24px; padding: 5px; margin: 5px; }
             select { font-size: 24px; padding: 5px; margin: 5px; }
             button { font-size: 24px; padding: 10px 20px; margin: 5px; }
+            .no-screenshot-notice { color: red; text-align: center; font-size: 18px; margin-bottom: 10px; }
           </style>
         </head>
         <body>
+          <div class="no-screenshot-notice">Заборонено робити скріншоти!</div>
           <h1>Створити новий тест</h1>
           <form method="POST" action="/admin/create-test">
             <input type="hidden" name="_csrf" value="${res.locals._csrf}">
@@ -5152,9 +5245,11 @@ app.get('/admin/activity-log', checkAuth, checkAdmin, async (req, res) => {
             .pagination { margin-top: 20px; }
             .pagination a { margin: 0 5px; padding: 5px 10px; background-color: #007bff; color: white; text-decoration: none; border-radius: 5px; }
             .pagination a:hover { background-color: #0056b3; }
+            .no-screenshot-notice { color: red; text-align: center; font-size: 18px; margin-bottom: 10px; }
           </style>
         </head>
         <body>
+          <div class="no-screenshot-notice">Заборонено робити скріншоти!</div>
           <h1>Журнал дій</h1>
           <button class="nav-btn" onclick="window.location.href='/admin'">Повернутися до адмін-панелі</button>
     `;
