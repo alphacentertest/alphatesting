@@ -1080,7 +1080,7 @@ app.get('/select-test', checkAuth, async (req, res) => {
         </head>
         <body>
           <h1>Виберіть тест</h1>
-          <div class="test-buttons">
+                    <div class="test-buttons">
             ${Object.entries(testNames).length > 0
               ? Object.entries(testNames).map(([num, data]) => `
                   <button onclick="window.location.href='/test?test=${num}'">${data.name.replace(/"/g, '\\"')}</button>
@@ -1507,7 +1507,6 @@ app.get('/test/question', checkAuth, async (req, res) => {
             .blank-input { width: 100px; margin: 0 5px; padding: 5px; border: 1px solid #ccc; border-radius: 4px; display: inline-block; }
             .question-text { display: inline; }
             .image-error { color: red; font-style: italic; text-align: center; margin-bottom: 10px; }
-            .no-screenshot-notice { color: red; text-align: center; font-size: 18px; margin-bottom: 10px; }
             @media (max-width: 400px) {
               h1 { font-size: 24px; }
               .progress-bar { 
@@ -1601,7 +1600,7 @@ app.get('/test/question', checkAuth, async (req, res) => {
               button { font-size: 18px; padding: 15px; }
               #timer { font-size: 24px; }
               .question-box h2 { font-size: 24px; }
-                            .matching-column { width: 45%; }
+              .matching-column { width: 45%; }
               .blank-input { width: 100px; }
               .option-box, .matching-item { 
                 font-size: 18px; 
@@ -1638,7 +1637,6 @@ app.get('/test/question', checkAuth, async (req, res) => {
           </style>
         </head>
         <body>
-          
           <h1>${testNames[testNumber].name.replace(/"/g, '\\"')}</h1>
           <div id="timer">Залишилось часу: ${minutes} хв ${seconds} с</div>
           <div class="progress-bar">
@@ -2419,8 +2417,7 @@ app.get('/result', checkAuth, async (req, res) => {
       ? (suspiciousActivity.responseTimes.reduce((sum, time) => sum + (time || 0), 0) / suspiciousActivity.responseTimes.length).toFixed(2)
       : 0;
     const totalActivityCount = suspiciousActivity && suspiciousActivity.activityCounts
-      ? suspiciousActivity.activityCounts.reduce((sum, count) => sum + (count || 0), 0).toFixed(0)
-      : 0;
+      ? suspiciousActivity.activityCounts.reduce((sum, count) => sum + (count || 0),       : 0;
 
     if (timeAwayPercent > config.suspiciousActivity.timeAwayThreshold || switchCount > config.suspiciousActivity.switchCountThreshold) {
       const activityDetails = {
@@ -2496,7 +2493,6 @@ app.get('/result', checkAuth, async (req, res) => {
             button { padding: 10px 20px; margin: 5px; cursor: pointer; border: none; border-radius: 5px; font-size: 16px; }
             #exportPDF { background-color: #ffeb3b; }
             #restart { background-color: #ef5350; }
-            .no-screenshot-notice { color: red; text-align: center; font-size: 18px; margin-bottom: 10px; }
             @keyframes fillCircle {
               to {
                 stroke-dashoffset: ${(440 * (100 - percentage)) / 100};
@@ -2507,7 +2503,6 @@ app.get('/result', checkAuth, async (req, res) => {
           <script src="/pdfmake/vfs_fonts.js"></script>
         </head>
         <body>
-          
           <h1>Результат тесту</h1>
           <div class="result-container">
             <svg width="150" height="150">
@@ -2637,11 +2632,9 @@ app.get('/results', checkAuth, async (req, res) => {
             button { padding: 10px 20px; margin: 5px; cursor: pointer; border: none; border-radius: 5px; font-size: 16px; }
             #exportPDF { background-color: #ffeb3b; }
             #restart { background-color: #ef5350; }
-            .no-screenshot-notice { color: red; text-align: center; font-size: 18px; margin-bottom: 10px; }
           </style>
         </head>
         <body>
-          
           <h1>Результати</h1>
     `;
     if (userTest) {
@@ -2887,7 +2880,6 @@ app.get('/admin', checkAuth, checkAdmin, (req, res) => {
             button { padding: 15px 30px; margin: 10px; font-size: 24px; cursor: pointer; width: 300px; border: none; border-radius: 5px; background-color: #4CAF50; color: white; }
             button:hover { background-color: #45a049; }
             #logout { background-color: #ef5350; color: white; }
-            .no-screenshot-notice { color: red; text-align: center; font-size: 18px; margin-bottom: 10px; }
             @media (max-width: 600px) {
               body { padding: 20px; padding-bottom: 80px; }
               h1 { font-size: 32px; }
@@ -2897,7 +2889,6 @@ app.get('/admin', checkAuth, checkAdmin, (req, res) => {
           </style>
         </head>
         <body>
-          
           <h1>Адмін-панель</h1>
           <button onclick="window.location.href='/admin/users'">Керування користувачами</button><br>
           <button onclick="window.location.href='/admin/questions'">Керування питаннями</button><br>
@@ -2975,11 +2966,9 @@ app.get('/admin/users', checkAuth, checkAdmin, async (req, res) => {
             .action-btn.edit { background-color: #4CAF50; color: white; }
             .action-btn.delete { background-color: #ff4d4d; color: white; }
             .nav-btn { background-color: #007bff; color: white; }
-            .no-screenshot-notice { color: red; text-align: center; font-size: 18px; margin-bottom: 10px; }
           </style>
         </head>
         <body>
-          
           <h1>Керування користувачами</h1>
           <button class="nav-btn" onclick="window.location.href='/admin'">Повернутися до адмін-панелі</button>
           <button class="nav-btn" onclick="window.location.href='/admin/add-user'">Додати користувача</button>
@@ -3066,11 +3055,9 @@ app.get('/admin/add-user', checkAuth, checkAdmin, (req, res) => {
             .nav-btn { background-color: #007bff; color: white; }
             .submit-btn { background-color: #4CAF50; color: white; }
             .error { color: red; }
-            .no-screenshot-notice { color: red; text-align: center; font-size: 18px; margin-bottom: 10px; }
           </style>
         </head>
         <body>
-          
           <h1>Додати користувача</h1>
           <form method="POST" action="/admin/add-user" onsubmit="return validateForm()">
             <input type="hidden" name="_csrf" value="${res.locals._csrf}">
@@ -3182,11 +3169,9 @@ app.get('/admin/edit-user', checkAuth, checkAdmin, async (req, res) => {
             .nav-btn { background-color: #007bff; color: white; }
             .submit-btn { background-color: #4CAF50; color: white; }
             .error { color: red; }
-            .no-screenshot-notice { color: red; text-align: center; font-size: 18px; margin-bottom: 10px; }
           </style>
         </head>
         <body>
-          
           <h1>Редагувати користувача: ${username}</h1>
           <form method="POST" action="/admin/edit-user" onsubmit="return validateForm()">
             <input type="hidden" name="_csrf" value="${res.locals._csrf}">
@@ -3391,11 +3376,9 @@ app.get('/admin/questions', checkAuth, checkAdmin, async (req, res) => {
             .pagination { margin-top: 20px; }
             .pagination a { margin: 0 5px; padding: 5px 10px; background-color: #007bff; color: white; text-decoration: none; border-radius: 5px; }
             .pagination a:hover { background-color: #0056b3; }
-            .no-screenshot-notice { color: red; text-align: center; font-size: 18px; margin-bottom: 10px; }
           </style>
         </head>
         <body>
-          
           <h1>Керування питаннями</h1>
           <button class="nav-btn" onclick="window.location.href='/admin'">Повернутися до адмін-панелі</button>
           <button class="nav-btn" onclick="window.location.href='/admin/add-question'">Додати питання</button>
@@ -3504,11 +3487,9 @@ app.get('/admin/add-question', checkAuth, checkAdmin, (req, res) => {
             .submit-btn { background-color: #4CAF50; color: white; }
             .error { color: red; }
             .note { color: blue; font-style: italic; }
-            .no-screenshot-notice { color: red; text-align: center; font-size: 18px; margin-bottom: 10px; }
           </style>
         </head>
         <body>
-          
           <h1>Додати питання</h1>
           <form method="POST" action="/admin/add-question" onsubmit="return validateForm()">
             <input type="hidden" name="_csrf" value="${res.locals._csrf || ''}">
@@ -3855,11 +3836,9 @@ app.get('/admin/edit-question', checkAuth, checkAdmin, async (req, res) => {
             .warning { color: orange; margin-bottom: 10px; }
             .note { color: blue; font-style: italic; }
             img#image-preview { max-width: 200px; margin-top: 10px; }
-            .no-screenshot-notice { color: red; text-align: center; font-size: 18px; margin-bottom: 10px; }
           </style>
         </head>
         <body>
-          
           <h1>Редагувати питання</h1>
           <form method="POST" action="/admin/edit-question" onsubmit="return validateForm()">
             <input type="hidden" name="_csrf" value="${res.locals._csrf || ''}">
@@ -3869,7 +3848,7 @@ app.get('/admin/edit-question', checkAuth, checkAdmin, async (req, res) => {
               ${Object.keys(testNames).map(num => `<option value="${num}" ${num === question.testNumber ? 'selected' : ''}>${testNames[num].name.replace(/"/g, '\\"')}</option>`).join('')}
             </select>
             <label for="picture">Назва файлу зображення (опціонально, наприклад, Picture1.png):</label>
-            <p class="note">Файл зображення має бути у папці public/images.</p>
+            <p class="note">Файл зображення має бути у папці             public/images.</p>
             <input type="text" id="picture" name="picture" value="${pictureName}" placeholder="Picture1.png">
             ${warningMessage ? `<p class="warning">${warningMessage}</p>` : ''}
             ${pictureName ? `<img id="image-preview" src="/images/${pictureName}" alt="Зображення питання" onerror="this.onerror=null;this.src='';this.alt='Зображення недоступне';">` : ''}
@@ -3891,7 +3870,7 @@ app.get('/admin/edit-question', checkAuth, checkAdmin, async (req, res) => {
               <textarea id="options" name="options" placeholder="Введіть варіанти через крапку з комою">${question.options.join('; ')}</textarea>
             </div>
             <label for="correctAnswers">Правильні відповіді (через крапку з комою):</label>
-            <p id="correctAnswersNote" class="note">Для типів Input і Fillblank             можна вказати діапазон у форматі "число1-число2", наприклад, "12-14".</p>
+            <p id="correctAnswersNote" class="note">Для типів Input і Fillblank можна вказати діапазон у форматі "число1-число2", наприклад, "12-14".</p>
             <textarea id="correctAnswers" name="correctAnswers" required placeholder="Введіть правильні відповіді через крапку з комою">${question.correctAnswers.join('; ')}</textarea>
             <label for="points">Бали за питання:</label>
             <input type="number" id="points" name="points" value="${question.points}" min="1" required>
@@ -4247,11 +4226,9 @@ app.get('/admin/import-users', checkAuth, checkAdmin, (req, res) => {
             .submit-btn { background-color: #4CAF50; color: white; }
             .submit-btn:disabled { background-color: #cccccc; cursor: not-allowed; }
             .error { color: red; }
-            .no-screenshot-notice { color: red; text-align: center; font-size: 18px; margin-bottom: 10px; }
           </style>
         </head>
         <body>
-          
           <h1>Імпорт користувачів із Excel</h1>
           <form id="import-form">
             <input type="hidden" name="_csrf" id="_csrf" value="${res.locals._csrf}">
@@ -4376,11 +4353,9 @@ app.get('/admin/import-questions', checkAuth, checkAdmin, (req, res) => {
             .submit-btn { background-color: #4CAF50; color: white; }
             .submit-btn:disabled { background-color: #cccccc; cursor: not-allowed; }
             .error { color: red; }
-            .no-screenshot-notice { color: red; text-align: center; font-size: 18px; margin-bottom: 10px; }
           </style>
         </head>
         <body>
-          
           <h1>Імпорт питань із Excel</h1>
           <form id="import-form">
             <input type="hidden" name="_csrf" id="_csrf" value="${res.locals._csrf}">
@@ -4614,11 +4589,9 @@ app.get('/admin/results', checkAuth, async (req, res) => {
             #modal-content::-webkit-scrollbar-thumb:hover {
               background: #555;
             }
-            .no-screenshot-notice { color: red; text-align: center; font-size: 18px; margin-bottom: 10px; }
           </style>
         </head>
         <body>
-          
           <h1>Результати всіх користувачів</h1>
           ${req.userRole === 'admin' ? `
             <button class="nav-btn" onclick="window.location.href='/admin'">Повернутися до адмін-панелі</button>
@@ -4880,11 +4853,9 @@ app.get('/admin/edit-tests', checkAuth, checkAdmin, (req, res) => {
             .delete-btn { background-color: #ff4d4d; color: white; }
             .test-row { display: flex; align-items: center; margin-bottom: 10px; flex-wrap: wrap; }
             label { margin-right: 10px; }
-            .no-screenshot-notice { color: red; text-align: center; font-size: 18px; margin-bottom: 10px; }
           </style>
         </head>
         <body>
-          
           <h1>Редагувати назви та налаштування тестів</h1>
           <form method="POST" action="/admin/edit-tests">
             <input type="hidden" name="_csrf" value="${res.locals._csrf}">
@@ -4930,7 +4901,22 @@ app.get('/admin/edit-tests', checkAuth, checkAdmin, (req, res) => {
                   window.location.reload();
                 } catch (error) {
                   console.error('Error deleting test:', error);
-                  alert('Не вдалося видалити тест. Перевірте ваше з’єднання з Інтернетом.');
+                  alert('Не вдалося видалити тест. ПереПродовжую код із маршруту /admin/edit-tests, де ми зупинилися на JavaScript-сценарії для обробки видалення тестів. Я завершу цей маршрут, а потім додам решту коду для app.js, щоб він був повним і включав усі зміни, які ми обговорили:
+
+Вдосконалений захист від скріншотів (додаткові комбінації клавіш, блокування копіювання, відстеження visibilitychange).
+Видалення надпису "Заборонено робити скріншоти!" з усіх сторінок.
+Збереження водяного знака з ім’ям користувача.
+Продовження маршруту /admin/edit-tests
+javascript
+
+Свернуть
+
+Перенос
+
+Исполнить
+
+Копировать
+перевірте ваше з’єднання з Інтернетом.');
                 }
               }
             }
@@ -5065,11 +5051,9 @@ app.get('/admin/create-test', checkAuth, checkAdmin, (req, res) => {
             input { font-size: 24px; padding: 5px; margin: 5px; }
             select { font-size: 24px; padding: 5px; margin: 5px; }
             button { font-size: 24px; padding: 10px 20px; margin: 5px; }
-            .no-screenshot-notice { color: red; text-align: center; font-size: 18px; margin-bottom: 10px; }
           </style>
         </head>
         <body>
-          
           <h1>Створити новий тест</h1>
           <form method="POST" action="/admin/create-test">
             <input type="hidden" name="_csrf" value="${res.locals._csrf}">
@@ -5268,11 +5252,9 @@ app.get('/admin/activity-log', checkAuth, checkAdmin, async (req, res) => {
             .pagination { margin-top: 20px; }
             .pagination a { margin: 0 5px; padding: 5px 10px; background-color: #007bff; color: white; text-decoration: none; border-radius: 5px; }
             .pagination a:hover { background-color: #0056b3; }
-            .no-screenshot-notice { color: red; text-align: center; font-size: 18px; margin-bottom: 10px; }
           </style>
         </head>
         <body>
-          
           <h1>Журнал дій</h1>
           <button class="nav-btn" onclick="window.location.href='/admin'">Повернутися до адмін-панелі</button>
     `;
