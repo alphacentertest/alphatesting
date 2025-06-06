@@ -1358,12 +1358,134 @@ app.get('/test/question', checkAuth, async (req, res) => {
       return res.status(400).send('Тест не розпочато');
     }
 
-    const { questions, testNumber, answers, currentQuestion, startTime: testStartTime, timeLimit, isQuickTest, timePerQuestion } = userTest;
+    const { questions, testNumber, answers, currentQuestion, startTime: testStartTime, timeLimit, isQuickTest, timePerQuestion, suspiciousActivity, variant, testSessionId } = userTest;
 
     // Перевірка, чи існує testNumber у testNames
     if (!testNames[testNumber]) {
-      // Видаляємо тест із active_tests, оскільки він недійсний
+      // Зберігаємо результати перед видаленням
+      let score = 0;
+      const totalPoints = questions.reduce((sum, q) => sum + q.points, 0);
+      const scoresPerQuestion = questions.map((q, index) => {
+        const userAnswer = answers[index];
+        let questionScore = 0;
+
+        const normalizeAnswer = (answer) => {
+          if (!answer) return '';
+          return String(answer)
+            .trim()
+            .toLowerCase()
+            .replace(/\s+/g, '')
+            .replace(',', '.')
+            .replace(/\\'/g, "'")
+            .replace(/°/g, 'deg');
+        };
+
+        if (q.type === 'multiple' && userAnswer && Array.isArray(userAnswer)) {
+          const correctAnswers = q.correctAnswers.map(val => normalizeAnswer(val));
+          const userAnswers = userAnswer.map(val => normalizeAnswer(val));
+          const isCorrect = correctAnswers.length === userAnswers.length &&
+            correctAnswers.every(val => userAnswers.includes(val)) &&
+            userAnswers.every(val => correctAnswers.includes(val));
+          if (isCorrect) {
+            questionScore = q.points;
+          }
+        } else if (q.type === 'input' && userAnswer) {
+          const normalizedUserAnswer = normalizeAnswer(userAnswer);
+          const normalizedCorrectAnswer = normalizeAnswer(q.correctAnswers[0]);
+          if (normalizedCorrectAnswer.includes('-')) {
+            const [min, max] = normalizedCorrectAnswer.split('-').map(val => parseFloat(val.trim()));
+            const userValue = parseFloat(normalizedUserAnswer);
+            const isCorrect = !isNaN(userValue) && userValue >= min && userValue <= max;
+            if (isCorrect) {
+              questionScore = q.points;
+            }
+          } else {
+            const isCorrect = normalizedUserAnswer === normalizedCorrectAnswer;
+            if (isCorrect) {
+              questionScore = q.points;
+            }
+          }
+        } else if (q.type === 'ordering' && userAnswer && Array.isArray(userAnswer)) {
+          const userAnswers = userAnswer.map(val => normalizeAnswer(val));
+          const correctAnswers = q.correctAnswers.map(val => normalizeAnswer(val));
+          const isCorrect = userAnswers.join(',') === correctAnswers.join(',');
+          if (isCorrect) {
+            questionScore = q.points;
+          }
+        } else if (q.type === 'matching' && userAnswer && Array.isArray(userAnswer)) {
+          const userPairs = userAnswer.map(pair => [normalizeAnswer(pair[0]), normalizeAnswer(pair[1])]);
+          const correctPairs = q.correctPairs.map(pair => [normalizeAnswer(pair[0]), normalizeAnswer(pair[1])]);
+          const isCorrect = userPairs.length === correctPairs.length &&
+            userPairs.every(userPair => correctPairs.some(correctPair => userPair[0] === correctPair[0] && userPair[1] === correctPair[1]));
+          if (isCorrect) {
+            questionScore = q.points;
+          }
+        } else if (q.type === 'fillblank' && userAnswer && Array.isArray(userAnswer)) {
+          const userAnswers = userAnswer.map(val => normalizeAnswer(val));
+          const correctAnswers = q.correctAnswers.map(val => normalizeAnswer(val));
+          const isCorrect = userAnswers.length === correctAnswers.length &&
+            userAnswers.every((answer, idx) => {
+              const correctAnswer = correctAnswers[idx];
+              if (correctAnswer.includes('-')) {
+                const [min, max] = correctAnswer.split('-').map(val => parseFloat(val.trim()));
+                const userValue = parseFloat(answer);
+                return !isNaN(userValue) && userValue >= min && userValue <= max;
+              } else {
+                return answer === correctAnswer;
+              }
+            });
+          if (isCorrect) {
+            questionScore = q.points;
+          }
+        } else if (q.type === 'singlechoice' && userAnswer && Array.isArray(userAnswer)) {
+          const userAnswers = userAnswer.map(val => normalizeAnswer(val));
+          const correctAnswer = normalizeAnswer(q.correctAnswer);
+          const isCorrect = userAnswers.length === 1 && userAnswers[0] === correctAnswer;
+          if (isCorrect) {
+            questionScore = q.points;
+          }
+        }
+        return questionScore;
+      });
+
+      score = scoresPerQuestion.reduce((sum, s) => sum + s, 0);
+      const endTime = Date.now();
+      const percentage = (score / totalPoints) * 100;
+      const totalClicks = Object.keys(answers).length;
+      const correctClicks = scoresPerQuestion.filter(s => s > 0).length;
+      const totalQuestions = questions.length;
+      const ipAddress = req.headers['x-forwarded-for'] || req.socket.remoteAddress;
+
+      const existingResult = await db.collection('test_results').findOne({ testSessionId });
+      if (!existingResult && !userTest.isSavingResult) {
+        await db.collection('active_tests').updateOne(
+          { user: req.user },
+          { $set: { isSavingResult: true } }
+        );
+        await saveResult(
+          req.user,
+          testNumber,
+          score,
+          totalPoints,
+          testStartTime,
+          endTime,
+          totalClicks,
+          correctClicks,
+          totalQuestions,
+          percentage,
+          suspiciousActivity,
+          answers,
+          scoresPerQuestion,
+          variant,
+          ipAddress,
+          testSessionId
+        );
+        logger.info(`Result saved for testSessionId: ${testSessionId} due to test unavailability`);
+      }
+
+      // Видаляємо тест із active_tests
       await db.collection('active_tests').deleteOne({ user: req.user });
+
       return res.send(`
         <!DOCTYPE html>
         <html lang="uk">
@@ -1379,7 +1501,7 @@ app.get('/test/question', checkAuth, async (req, res) => {
             </style>
           </head>
           <body>
-            <h2>Цей тест більше недоступний. Оберіть інший тест.</h2>
+            <h2>Цей тест більше недоступний. Ваші відповіді збережено. Оберіть інший тест.</h2>
             <button onclick="window.location.href='/select-test'">Повернутися до вибору тестів</button>
           </body>
         </html>
@@ -5098,9 +5220,16 @@ app.post('/admin/delete-test', checkAuth, checkAdmin, async (req, res) => {
       return res.status(404).json({ success: false, message: 'Тест не знайдено' });
     }
     await session.withTransaction(async () => {
+      // Видаляємо тест із testNames
       delete testNames[testNumber];
+      // Видаляємо тест із бази даних
       await deleteTestFromMongoDB(testNumber);
+      // Видаляємо пов’язані питання
       await db.collection('questions').deleteMany({ testNumber }, { session });
+      // Видаляємо всі активні тести для цього testNumber
+      const deletedActiveTests = await db.collection('active_tests').deleteMany({ testNumber }, { session });
+      logger.info(`Deleted ${deletedActiveTests.deletedCount} active tests for testNumber ${testNumber}`);
+      // Очищаємо кеш
       if (questionsCache[testNumber]) {
         delete questionsCache[testNumber];
       }
