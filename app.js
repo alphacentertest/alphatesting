@@ -1359,6 +1359,33 @@ app.get('/test/question', checkAuth, async (req, res) => {
     }
 
     const { questions, testNumber, answers, currentQuestion, startTime: testStartTime, timeLimit, isQuickTest, timePerQuestion } = userTest;
+
+    // Перевірка, чи існує testNumber у testNames
+    if (!testNames[testNumber]) {
+      // Видаляємо тест із active_tests, оскільки він недійсний
+      await db.collection('active_tests').deleteOne({ user: req.user });
+      return res.send(`
+        <!DOCTYPE html>
+        <html lang="uk">
+          <head>
+            <meta charset="UTF-8">
+            <meta name="viewport" content="width=device-width, initial-scale=1.0">
+            <title>Помилка</title>
+            <style>
+              body { font-family: Arial, sans-serif; text-align: center; padding: 50px; background-color: #f5f5f5; margin: 0; }
+              h2 { font-size: 24px; margin-bottom: 20px; }
+              button { padding: 10px 20px; cursor: pointer; border: none; border-radius: 5px; background-color: #4CAF50; color: white; }
+              button:hover { background-color: #45a049; }
+            </style>
+          </head>
+          <body>
+            <h2>Цей тест більше недоступний. Оберіть інший тест.</h2>
+            <button onclick="window.location.href='/select-test'">Повернутися до вибору тестів</button>
+          </body>
+        </html>
+      `);
+    }
+
     const index = parseInt(req.query.index) || 0;
 
     if (index < 0 || index >= questions.length) {
@@ -2273,8 +2300,18 @@ app.post('/answer', checkAuth, express.urlencoded({ extended: true }), async (re
 
     const userTest = await db.collection('active_tests').findOne({ user: req.user });
     if (!userTest) {
-      logger.error('Test not started in /answer', { user: req.user });
-      return res.status(400).json({ success: false, error: 'Тест не розпочато' });
+      // Перевіряємо, чи тест уже завершено
+      const recentResult = await db.collection('test_results').findOne(
+        { user: req.user },
+        { sort: { endTime: -1 } }
+      );
+      if (recentResult) {
+        // Тест завершено, повертаємо success, щоб уникнути сповіщення про помилку
+        return res.json({ success: true });
+      } else {
+        logger.error('Test not started in /answer', { user: req.user });
+        return res.status(400).json({ success: false, error: 'Тест не розпочато' });
+      }
     }
 
     userTest.answers[index] = parsedAnswer;
