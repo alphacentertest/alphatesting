@@ -317,17 +317,17 @@ app.use((req, res, next) => {
             // Блокуємо PrintScreen (PrtSc)
             if (e.key === 'PrintScreen') {
               e.preventDefault();
-              alert('Скріншоти заборонені!');
+              alert('Знімки екрана заборонені!');
             }
             // Блокуємо комбінації типу Ctrl + PrintScreen, Alt + PrintScreen, Win + PrintScreen
             if ((e.ctrlKey || e.altKey || e.metaKey) && e.key === 'PrintScreen') {
               e.preventDefault();
-              alert('Скріншоти заборонені!');
+              alert('Знімки екрана заборонені!');
             }
             // Блокуємо інші комбінації, які можуть використовуватися для скріншотів
             if (e.key === 'PrintScreen' && (e.metaKey || e.shiftKey)) {
               e.preventDefault();
-              alert('Скріншоти заборонені!');
+              alert('Знімки екрана заборонені!');
             }
           });
 
@@ -1911,7 +1911,9 @@ app.get('/test/question', checkAuth, async (req, res) => {
                     if (nextIndex < ${questions.length}) {
                       window.location.href = '/test/question?index=' + nextIndex;
                     } else {
-                      window.location.href = '/result';
+                      setTimeout(() => {
+                        window.location.href = '/result';
+                      }, 1000); // Додаємо затримку для завершення всіх операцій
                     }
                   });
                 } else {
@@ -1979,7 +1981,10 @@ app.get('/test/question', checkAuth, async (req, res) => {
 
                 const result = await response.json();
                 if (result.success) {
-                  window.location.href = '/result';
+                  // Додаємо затримку, щоб переконатися, що збереження завершено
+                  setTimeout(() => {
+                    window.location.href = '/result';
+                  }, 1000);
                 } else {
                   console.error('Error finishing test:', result.error);
                   alert('Помилка завершення тесту: ' + result.error);
@@ -2005,7 +2010,7 @@ app.get('/test/question', checkAuth, async (req, res) => {
                 saveCurrentAnswer(currentQuestionIndex).then(() => {
                   setTimeout(() => {
                     window.location.href = '/result';
-                  }, 500);
+                  }, 1000); // Додаємо затримку для завершення всіх операцій
                 });
               }
             }
@@ -2040,7 +2045,7 @@ app.get('/test/question', checkAuth, async (req, res) => {
                   saveCurrentAnswer(currentQuestionIndex).then(() => {
                     setTimeout(() => {
                       window.location.href = '/result';
-                    }, 500);
+                    }, 1000); // Додаємо затримку для завершення всіх операцій
                   });
                 }
               }, 50);
@@ -2068,6 +2073,8 @@ app.get('/test/question', checkAuth, async (req, res) => {
                 timeAway += awayDuration;
                 console.log('Tab focused, time away accumulated:', awayDuration, 'Total timeAway:', timeAway);
                 lastBlurTime = 0;
+                // Зберігаємо дані при поверненні на вкладку
+                saveCurrentAnswer(currentQuestionIndex);
               }
             });
 
@@ -2296,10 +2303,42 @@ app.get('/result', checkAuth, async (req, res) => {
   const startTime = Date.now();
   try {
     if (req.user === 'admin') return res.redirect('/admin');
+
     const userTest = await db.collection('active_tests').findOne({ user: req.user });
     if (!userTest) {
-      return res.status(400).json({ error: 'Тест не розпочато' });
+      // Якщо тест не знайдено у active_tests, перевіряємо test_results
+      const recentResult = await db.collection('test_results').findOne(
+        { user: req.user },
+        { sort: { endTime: -1 } }
+      );
+      if (recentResult) {
+        // Якщо результат уже збережено, перенаправляємо на /select-test із повідомленням
+        return res.send(`
+          <!DOCTYPE html>
+          <html lang="uk">
+            <head>
+              <meta charset="UTF-8">
+              <meta name="viewport" content="width=device-width, initial-scale=1.0">
+              <title>Тест завершено</title>
+              <style>
+                body { font-family: Arial, sans-serif; text-align: center; padding: 50px; background-color: #f5f5f5; margin: 0; }
+                h2 { font-size: 24px; margin-bottom: 20px; }
+                button { padding: 10px 20px; cursor: pointer; border: none; border-radius: 5px; background-color: #4CAF50; color: white; }
+                button:hover { background-color: #45a049; }
+              </style>
+            </head>
+            <body>
+              <h2>Ваш тест уже завершено. Перегляньте результати або розпочніть новий тест.</h2>
+              <button onclick="window.location.href='/select-test'">Повернутися до вибору тестів</button>
+            </body>
+          </html>
+        `);
+      } else {
+        // Якщо результат не знайдено, тест, можливо, був перерваний
+        return res.status(400).send('Тест не розпочато або перерваний. Розпочніть новий тест.');
+      }
     }
+
     const { questions, answers, testNumber, startTime: testStartTime, suspiciousActivity, variant, testSessionId, timeLimit } = userTest;
     let score = 0;
     const totalPoints = questions.reduce((sum, q) => sum + q.points, 0);
@@ -2417,7 +2456,8 @@ app.get('/result', checkAuth, async (req, res) => {
       ? (suspiciousActivity.responseTimes.reduce((sum, time) => sum + (time || 0), 0) / suspiciousActivity.responseTimes.length).toFixed(2)
       : 0;
     const totalActivityCount = suspiciousActivity && suspiciousActivity.activityCounts
-      ? suspiciousActivity.activityCounts.reduce((sum, count) => sum + (count || 0),       : 0;
+      ? suspiciousActivity.activityCounts.reduce((sum, count) => sum + (count || 0), 0)
+      : 0;
 
     if (timeAwayPercent > config.suspiciousActivity.timeAwayThreshold || switchCount > config.suspiciousActivity.switchCountThreshold) {
       const activityDetails = {
@@ -2604,6 +2644,9 @@ app.get('/result', checkAuth, async (req, res) => {
       </html>
     `;
     res.send(resultHtml);
+  } catch (error) {
+    logger.error('Error in /result', { message: error.message, stack: error.stack });
+    res.status(500).send('Помилка при завантаженні результатів: ' + error.message);
   } finally {
     const endTime = Date.now();
     logger.info('Route /result executed', { duration: `${endTime - startTime} ms` });
