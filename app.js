@@ -1557,7 +1557,7 @@ app.get('/test/question', checkAuth, async (req, res) => {
         <head>
           <meta charset="UTF-8">
           <meta name="viewport" content="width=device-width, initial-scale=1.0">
-          <title>${testNames[testNumber].name.replace(/"/g, '\\"')}</title>
+          <title>${testNames[testNumber]?.name.replace(/"/g, '\\"') || 'Невідомий тест'}</title>
           <script src="https://cdnjs.cloudflare.com/ajax/libs/Sortable/1.15.0/Sortable.min.js"></script>
           <style>
             body { font-family: Arial, sans-serif; margin: 0; padding: 20px; padding-bottom: 80px; background-color: #f0f0f0; }
@@ -2218,8 +2218,10 @@ app.get('/test/question', checkAuth, async (req, res) => {
               if (lastBlurTime > 0) {
                 const now = performance.now();
                 const awayDuration = (now - lastBlurTime) / 1000;
-                timeAway += awayDuration;
-                console.log('Tab focused, time away accumulated:', awayDuration, 'Total timeAway:', timeAway);
+                // Обмежуємо timeAway, щоб він не перевищував загальний час тесту
+                const maxTimeAway = (Date.now() - startTime) / 1000;
+                timeAway = Math.min(timeAway + awayDuration, maxTimeAway);
+                console.log('Tab focused, time away accumulated:', awayDuration, 'Total timeAway:', timeAway, 'Max timeAway:', maxTimeAway);
                 lastBlurTime = 0;
                 // Зберігаємо дані при поверненні на вкладку
                 saveCurrentAnswer(currentQuestionIndex);
@@ -2340,9 +2342,9 @@ app.get('/test/question', checkAuth, async (req, res) => {
                         const rightItems = Array.from(rightColumn.children);
                         const rightIndex = rightItems.indexOf(item);
                         if (leftItems[rightIndex]) {
-                          leftColumn.insertBefore(dragging, leftItems[rightIndex]);
+                          leftColumn.insertBefore(draggable, leftItems[rightIndex]);
                         } else {
-                          leftColumn.appendChild(dragging);
+                          leftColumn.appendChild(draggable);
                         }
                         updateMatchingPairs();
                       }
@@ -2596,9 +2598,9 @@ app.get('/result', checkAuth, async (req, res) => {
     const totalQuestions = testData.totalQuestions || (questions ? questions.length : 0);
 
     const duration = testData.duration || Math.round((endTime - testStartTime) / 1000);
-    const timeAwayPercent = testData.timeAwayPercent || (suspiciousActivity && suspiciousActivity.timeAway
-      ? Math.round((suspiciousActivity.timeAway / (duration * 1000)) * 100)
-      : 0);
+    const timeAway = testData.timeAway || (suspiciousActivity ? suspiciousActivity.timeAway || 0 : 0);
+    // Обмежуємо timeAwayPercent до 100%
+    const timeAwayPercent = Math.min(100, timeAway ? Math.round((timeAway / duration) * 100) : 0);
     const switchCount = testData.switchCount || (suspiciousActivity ? suspiciousActivity.switchCount || 0 : 0);
     const avgResponseTime = testData.avgResponseTime || (suspiciousActivity && suspiciousActivity.responseTimes
       ? (suspiciousActivity.responseTimes.reduce((sum, time) => sum + (time || 0), 0) / suspiciousActivity.responseTimes.length).toFixed(2)
@@ -2664,7 +2666,9 @@ app.get('/result', checkAuth, async (req, res) => {
           answers,
           scoresPerQuestion,
           variant,
-          ipAddress
+          ipAddress,
+          timeAwayPercent,
+          timeAway
         } },
         { upsert: true }
       );
@@ -2726,6 +2730,7 @@ app.get('/result', checkAuth, async (req, res) => {
             Правильних відповідей: ${correctClicks}<br>
             Набрано балів: ${score}<br>
             Максимально можлива кількість балів: ${totalPoints}<br>
+            Час проведений поза вкладкою: ${timeAwayPercent}%<br>
           </p>
           <div class="buttons">
             <button id="exportPDF">Експортувати в PDF</button>
@@ -2779,6 +2784,7 @@ app.get('/result', checkAuth, async (req, res) => {
                       { text: 'Правильних відповідей: ' + correctClicks, lineHeight: 2 },
                       { text: 'Набрано балів: ' + score, lineHeight: 2 },
                       { text: 'Максимально можлива кількість балів: ' + totalPoints, lineHeight: 2 },
+                      { text: 'Час проведений поза вкладкою: ' + ${timeAwayPercent} + '%', lineHeight: 2 },
                       {
                         columns: [
                           { text: 'Час: ' + time, width: '50%', lineHeight: 2 },
