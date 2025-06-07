@@ -1991,7 +1991,8 @@ app.get('/test/question', checkAuth, async (req, res) => {
                 });
 
                 if (!response.ok) {
-                  throw new Error('HTTP error! status: ' + response.status);
+                  const errorText = await response.text();
+                  throw new Error('HTTP error! status: ' + response.status + ' - ' + errorText);
                 }
 
                 const result = await response.json();
@@ -2000,7 +2001,7 @@ app.get('/test/question', checkAuth, async (req, res) => {
                 }
               } catch (error) {
                 console.error('Error in auto-saving answer:', error);
-                alert('Не вдалося зберегти відповідь: ' + error.message);
+                // Прибираємо сповіщення, щоб уникнути "Failed to fetch"
               } finally {
                 isSubmitting = false;
               }
@@ -2062,7 +2063,7 @@ app.get('/test/question', checkAuth, async (req, res) => {
                     } else {
                       setTimeout(() => {
                         window.location.href = '/result';
-                      }, 1000); // Додаємо затримку для завершення всіх операцій
+                      }, 500); // Зменшуємо затримку
                     }
                   });
                 } else {
@@ -2130,10 +2131,9 @@ app.get('/test/question', checkAuth, async (req, res) => {
 
                 const result = await response.json();
                 if (result.success) {
-                  // Додаємо затримку, щоб переконатися, що збереження завершено
                   setTimeout(() => {
                     window.location.href = '/result';
-                  }, 1000);
+                  }, 500); // Зменшуємо затримку
                 } else {
                   console.error('Error finishing test:', result.error);
                   alert('Помилка завершення тесту: ' + result.error);
@@ -2159,7 +2159,7 @@ app.get('/test/question', checkAuth, async (req, res) => {
                 saveCurrentAnswer(currentQuestionIndex).then(() => {
                   setTimeout(() => {
                     window.location.href = '/result';
-                  }, 1000); // Додаємо затримку для завершення всіх операцій
+                  }, 500); // Зменшуємо затримку
                 });
               }
             }
@@ -2194,7 +2194,7 @@ app.get('/test/question', checkAuth, async (req, res) => {
                   saveCurrentAnswer(currentQuestionIndex).then(() => {
                     setTimeout(() => {
                       window.location.href = '/result';
-                    }, 1000); // Додаємо затримку для завершення всіх операцій
+                    }, 500); // Зменшуємо затримку
                   });
                 }
               }, 50);
@@ -2464,161 +2464,149 @@ app.get('/result', checkAuth, async (req, res) => {
     if (req.user === 'admin') return res.redirect('/admin');
 
     const userTest = await db.collection('active_tests').findOne({ user: req.user });
+    let testData;
+
     if (!userTest) {
-      // Якщо тест не знайдено у active_tests, перевіряємо test_results
+      // Якщо тест не знайдено у active_tests, шукаємо останній результат у test_results
       const recentResult = await db.collection('test_results').findOne(
         { user: req.user },
         { sort: { endTime: -1 } }
       );
-      if (recentResult) {
-        // Якщо результат уже збережено, перенаправляємо на /select-test із повідомленням
-        return res.send(`
-          <!DOCTYPE html>
-          <html lang="uk">
-            <head>
-              <meta charset="UTF-8">
-              <meta name="viewport" content="width=device-width, initial-scale=1.0">
-              <title>Тест завершено</title>
-              <style>
-                body { font-family: Arial, sans-serif; text-align: center; padding: 50px; background-color: #f5f5f5; margin: 0; }
-                h2 { font-size: 24px; margin-bottom: 20px; }
-                button { padding: 10px 20px; cursor: pointer; border: none; border-radius: 5px; background-color: #4CAF50; color: white; }
-                button:hover { background-color: #45a049; }
-              </style>
-            </head>
-            <body>
-              <h2>Ваш тест уже завершено. Перегляньте результати або розпочніть новий тест.</h2>
-              <button onclick="window.location.href='/select-test'">Повернутися до вибору тестів</button>
-            </body>
-          </html>
-        `);
-      } else {
-        // Якщо результат не знайдено, тест, можливо, був перерваний
+      if (!recentResult) {
         return res.status(400).send('Тест не розпочато або перерваний. Розпочніть новий тест.');
       }
+      // Використовуємо дані з test_results
+      testData = recentResult;
+    } else {
+      testData = userTest;
     }
 
-    const { questions, answers, testNumber, startTime: testStartTime, suspiciousActivity, variant, testSessionId, timeLimit } = userTest;
-    let score = 0;
-    const totalPoints = questions.reduce((sum, q) => sum + q.points, 0);
-    const scoresPerQuestion = questions.map((q, index) => {
-      const userAnswer = answers[index];
-      let questionScore = 0;
+    const { questions, testNumber, answers, startTime: testStartTime, suspiciousActivity, variant, testSessionId, timeLimit } = userTest || testData;
+    let score = testData.score || 0;
+    const totalPoints = testData.totalPoints || questions.reduce((sum, q) => sum + q.points, 0);
+    let scoresPerQuestion = testData.scoresPerQuestion || [];
 
-      const normalizeAnswer = (answer) => {
-        if (!answer) return '';
-        return String(answer)
-          .trim()
-          .toLowerCase()
-          .replace(/\s+/g, '')
-          .replace(',', '.')
-          .replace(/\\'/g, "'")
-          .replace(/°/g, 'deg');
-      };
+    if (!scoresPerQuestion.length && questions) {
+      scoresPerQuestion = questions.map((q, index) => {
+        const userAnswer = answers[index];
+        let questionScore = 0;
 
-      if (q.type === 'multiple' && userAnswer && Array.isArray(userAnswer)) {
-        const correctAnswers = q.correctAnswers.map(val => normalizeAnswer(val));
-        const userAnswers = userAnswer.map(val => normalizeAnswer(val));
-        const isCorrect = correctAnswers.length === userAnswers.length &&
-          correctAnswers.every(val => userAnswers.includes(val)) &&
-          userAnswers.every(val => correctAnswers.includes(val));
-        if (isCorrect) {
-          questionScore = q.points;
-        }
-      } else if (q.type === 'input' && userAnswer) {
-        const normalizedUserAnswer = normalizeAnswer(userAnswer);
-        const normalizedCorrectAnswer = normalizeAnswer(q.correctAnswers[0]);
-        logger.info(`Comparing input answer for question ${index + 1}`, {
-          userAnswer: normalizedUserAnswer,
-          correctAnswer: normalizedCorrectAnswer
-        });
+        const normalizeAnswer = (answer) => {
+          if (!answer) return '';
+          return String(answer)
+            .trim()
+            .toLowerCase()
+            .replace(/\s+/g, '')
+            .replace(',', '.')
+            .replace(/\\'/g, "'")
+            .replace(/°/g, 'deg');
+        };
 
-        if (normalizedCorrectAnswer.includes('-')) {
-          const [min, max] = normalizedCorrectAnswer.split('-').map(val => parseFloat(val.trim()));
-          const userValue = parseFloat(normalizedUserAnswer);
-          const isCorrect = !isNaN(userValue) && userValue >= min && userValue <= max;
+        if (q.type === 'multiple' && userAnswer && Array.isArray(userAnswer)) {
+          const correctAnswers = q.correctAnswers.map(val => normalizeAnswer(val));
+          const userAnswers = userAnswer.map(val => normalizeAnswer(val));
+          const isCorrect = correctAnswers.length === userAnswers.length &&
+            correctAnswers.every(val => userAnswers.includes(val)) &&
+            userAnswers.every(val => correctAnswers.includes(val));
           if (isCorrect) {
             questionScore = q.points;
           }
-        } else {
-          const isCorrect = normalizedUserAnswer === normalizedCorrectAnswer;
-          if (isCorrect) {
-            questionScore = q.points;
-          }
-        }
-      } else if (q.type === 'ordering' && userAnswer && Array.isArray(userAnswer)) {
-        const userAnswers = userAnswer.map(val => normalizeAnswer(val));
-        const correctAnswers = q.correctAnswers.map(val => normalizeAnswer(val));
-        const isCorrect = userAnswers.join(',') === correctAnswers.join(',');
-        if (isCorrect) {
-          questionScore = q.points;
-        }
-      } else if (q.type === 'matching' && userAnswer && Array.isArray(userAnswer)) {
-        const userPairs = userAnswer.map(pair => [normalizeAnswer(pair[0]), normalizeAnswer(pair[1])]);
-        const correctPairs = q.correctPairs.map(pair => [normalizeAnswer(pair[0]), normalizeAnswer(pair[1])]);
-        const isCorrect = userPairs.length === correctPairs.length &&
-          userPairs.every(userPair => correctPairs.some(correctPair => userPair[0] === correctPair[0] && userPair[1] === correctPair[1]));
-        if (isCorrect) {
-          questionScore = q.points;
-        }
-      } else if (q.type === 'fillblank' && userAnswer && Array.isArray(userAnswer)) {
-        const userAnswers = userAnswer.map(val => normalizeAnswer(val));
-        const correctAnswers = q.correctAnswers.map(val => normalizeAnswer(val));
-        logger.info(`Fillblank question ${index + 1}`, { userAnswers, correctAnswers });
-
-        const isCorrect = userAnswers.length === correctAnswers.length &&
-          userAnswers.every((answer, idx) => {
-            const correctAnswer = correctAnswers[idx];
-            if (correctAnswer.includes('-')) {
-              const [min, max] = correctAnswer.split('-').map(val => parseFloat(val.trim()));
-              const userValue = parseFloat(answer);
-              return !isNaN(userValue) && userValue >= min && userValue <= max;
-            } else {
-              return answer === correctAnswer;
-            }
+        } else if (q.type === 'input' && userAnswer) {
+          const normalizedUserAnswer = normalizeAnswer(userAnswer);
+          const normalizedCorrectAnswer = normalizeAnswer(q.correctAnswers[0]);
+          logger.info(`Comparing input answer for question ${index + 1}`, {
+            userAnswer: normalizedUserAnswer,
+            correctAnswer: normalizedCorrectAnswer
           });
 
-        if (isCorrect) {
-          questionScore = q.points;
-        }
-      } else if (q.type === 'singlechoice' && userAnswer && Array.isArray(userAnswer)) {
-        const userAnswers = userAnswer.map(val => normalizeAnswer(val));
-        const correctAnswer = normalizeAnswer(q.correctAnswer);
-        logger.info(`Single choice question ${index + 1}`, { userAnswers, correctAnswer });
-        const isCorrect = userAnswers.length === 1 && userAnswers[0] === correctAnswer;
-        if (isCorrect) {
-          questionScore = q.points;
-        }
-      }
-      return questionScore;
-    });
+          if (normalizedCorrectAnswer.includes('-')) {
+            const [min, max] = normalizedCorrectAnswer.split('-').map(val => parseFloat(val.trim()));
+            const userValue = parseFloat(normalizedUserAnswer);
+            const isCorrect = !isNaN(userValue) && userValue >= min && userValue <= max;
+            if (isCorrect) {
+              questionScore = q.points;
+            }
+          } else {
+            const isCorrect = normalizedUserAnswer === normalizedCorrectAnswer;
+            if (isCorrect) {
+              questionScore = q.points;
+            }
+          }
+        } else if (q.type === 'ordering' && userAnswer && Array.isArray(userAnswer)) {
+          const userAnswers = userAnswer.map(val => normalizeAnswer(val));
+          const correctAnswers = q.correctAnswers.map(val => normalizeAnswer(val));
+          const isCorrect = userAnswers.join(',') === correctAnswers.join(',');
+          if (isCorrect) {
+            questionScore = q.points;
+          }
+        } else if (q.type === 'matching' && userAnswer && Array.isArray(userAnswer)) {
+          const userPairs = userAnswer.map(pair => [normalizeAnswer(pair[0]), normalizeAnswer(pair[1])]);
+          const correctPairs = q.correctPairs.map(pair => [normalizeAnswer(pair[0]), normalizeAnswer(pair[1])]);
+          const isCorrect = userPairs.length === correctPairs.length &&
+            userPairs.every(userPair => correctPairs.some(correctPair => userPair[0] === correctPair[0] && userPair[1] === correctPair[1]));
+          if (isCorrect) {
+            questionScore = q.points;
+          }
+        } else if (q.type === 'fillblank' && userAnswer && Array.isArray(userAnswer)) {
+          const userAnswers = userAnswer.map(val => normalizeAnswer(val));
+          const correctAnswers = q.correctAnswers.map(val => normalizeAnswer(val));
+          logger.info(`Fillblank question ${index + 1}`, { userAnswers, correctAnswers });
 
-    score = scoresPerQuestion.reduce((sum, s) => sum + s, 0);
-    let endTime = Date.now();
+          const isCorrect = userAnswers.length === correctAnswers.length &&
+            userAnswers.every((answer, idx) => {
+              const correctAnswer = correctAnswers[idx];
+              if (correctAnswer.includes('-')) {
+                const [min, max] = correctAnswer.split('-').map(val => parseFloat(val.trim()));
+                const userValue = parseFloat(answer);
+                return !isNaN(userValue) && userValue >= min && userValue <= max;
+              } else {
+                return answer === correctAnswer;
+              }
+            });
+
+          if (isCorrect) {
+            questionScore = q.points;
+          }
+        } else if (q.type === 'singlechoice' && userAnswer && Array.isArray(userAnswer)) {
+          const userAnswers = userAnswer.map(val => normalizeAnswer(val));
+          const correctAnswer = normalizeAnswer(q.correctAnswer);
+          logger.info(`Single choice question ${index + 1}`, { userAnswers, correctAnswer });
+          const isCorrect = userAnswers.length === 1 && userAnswers[0] === correctAnswer;
+          if (isCorrect) {
+            questionScore = q.points;
+          }
+        }
+        return questionScore;
+      });
+
+      score = scoresPerQuestion.reduce((sum, s) => sum + s, 0);
+    }
+
+    let endTime = testData.endTime ? new Date(testData.endTime).getTime() : Date.now();
     const maxEndTime = testStartTime + timeLimit;
     if (endTime > maxEndTime) {
       endTime = maxEndTime;
       logger.info(`Adjusted endTime to match timeLimit for testSessionId: ${testSessionId}`);
     }
 
-    const percentage = (score / totalPoints) * 100;
-    const totalClicks = Object.keys(answers).length;
-    const correctClicks = scoresPerQuestion.filter(s => s > 0).length;
-    const totalQuestions = questions.length;
+    const percentage = testData.percentage || (score / totalPoints) * 100;
+    const totalClicks = testData.totalClicks || Object.keys(answers).length;
+    const correctClicks = testData.correctClicks || scoresPerQuestion.filter(s => s > 0).length;
+    const totalQuestions = testData.totalQuestions || questions.length;
 
-    const duration = Math.round((endTime - testStartTime) / 1000);
-    const timeAwayPercent = suspiciousActivity && suspiciousActivity.timeAway
+    const duration = testData.duration || Math.round((endTime - testStartTime) / 1000);
+    const timeAwayPercent = testData.timeAwayPercent || (suspiciousActivity && suspiciousActivity.timeAway
       ? Math.round((suspiciousActivity.timeAway / (duration * 1000)) * 100)
-      : 0;
-    const switchCount = suspiciousActivity ? suspiciousActivity.switchCount || 0 : 0;
-    const avgResponseTime = suspiciousActivity && suspiciousActivity.responseTimes
+      : 0);
+    const switchCount = testData.switchCount || (suspiciousActivity ? suspiciousActivity.switchCount || 0 : 0);
+    const avgResponseTime = testData.avgResponseTime || (suspiciousActivity && suspiciousActivity.responseTimes
       ? (suspiciousActivity.responseTimes.reduce((sum, time) => sum + (time || 0), 0) / suspiciousActivity.responseTimes.length).toFixed(2)
-      : 0;
-    const totalActivityCount = suspiciousActivity && suspiciousActivity.activityCounts
+      : 0);
+    const totalActivityCount = testData.totalActivityCount || (suspiciousActivity && suspiciousActivity.activityCounts
       ? suspiciousActivity.activityCounts.reduce((sum, count) => sum + (count || 0), 0)
-      : 0;
+      : 0);
 
-    if (timeAwayPercent > config.suspiciousActivity.timeAwayThreshold || switchCount > config.suspiciousActivity.switchCountThreshold) {
+    if (!testData.suspiciousActivity && (timeAwayPercent > config.suspiciousActivity.timeAwayThreshold || switchCount > config.suspiciousActivity.switchCountThreshold)) {
       const activityDetails = {
         timeAwayPercent,
         switchCount,
@@ -2630,39 +2618,39 @@ app.get('/result', checkAuth, async (req, res) => {
 
     const ipAddress = req.headers['x-forwarded-for'] || req.socket.remoteAddress;
 
-    const existingResult = await db.collection('test_results').findOne({ testSessionId });
-    if (existingResult) {
-      logger.info(`Result already saved for testSessionId: ${testSessionId}, skipping save.`);
-    } else if (userTest.isSavingResult) {
-      logger.info(`Result is already being saved for testSessionId: ${testSessionId}, skipping save.`);
-    } else {
-      await db.collection('active_tests').updateOne(
-        { user: req.user },
-        { $set: { isSavingResult: true } }
-      );
-      await saveResult(
-        req.user,
-        testNumber,
-        score,
-        totalPoints,
-        testStartTime,
-        endTime,
-        totalClicks,
-        correctClicks,
-        totalQuestions,
-        percentage,
-        suspiciousActivity,
-        answers,
-        scoresPerQuestion,
-        variant,
-        ipAddress,
-        testSessionId
-      );
-      logger.info(`Result saved for testSessionId: ${testSessionId}`);
+    if (userTest && !testData.isSaved) {
+      const existingResult = await db.collection('test_results').findOne({ testSessionId });
+      if (!existingResult && !userTest.isSavingResult) {
+        await db.collection('active_tests').updateOne(
+          { user: req.user },
+          { $set: { isSavingResult: true } }
+        );
+        await saveResult(
+          req.user,
+          testNumber,
+          score,
+          totalPoints,
+          testStartTime,
+          endTime,
+          totalClicks,
+          correctClicks,
+          totalQuestions,
+          percentage,
+          suspiciousActivity,
+          answers,
+          scoresPerQuestion,
+          variant,
+          ipAddress,
+          testSessionId
+        );
+        logger.info(`Result saved for testSessionId: ${testSessionId}`);
+      }
     }
 
     // Видаляємо тест із active_tests після збереження результату
-    await db.collection('active_tests').deleteOne({ user: req.user });
+    if (userTest) {
+      await db.collection('active_tests').deleteOne({ user: req.user });
+    }
 
     const endDateTime = new Date(endTime);
     const formattedTime = endDateTime.toLocaleTimeString('uk-UA', { hour12: false });
