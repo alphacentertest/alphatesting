@@ -1935,11 +1935,11 @@ app.get('/test/question', checkAuth, async (req, res) => {
             const isQuickTest = ${isQuickTest};
             const timePerQuestion = ${timePerQuestion || 0};
             const totalQuestions = ${questions.length};
-            let timeAway = 0;
+            let timeAway = ${suspiciousActivity?.timeAway || 0};
             let lastBlurTime = 0;
-            let switchCount = 0;
+            let switchCount = ${suspiciousActivity?.switchCount || 0};
             let lastActivityTime = Date.now();
-            let activityCount = 0;
+            let activityCount = ${suspiciousActivity?.activityCounts?.[index] || 0};
             let lastMouseMoveTime = 0;
             let lastKeydownTime = 0;
             const debounceDelay = 100;
@@ -2218,7 +2218,7 @@ app.get('/test/question', checkAuth, async (req, res) => {
               if (lastBlurTime > 0) {
                 const now = performance.now();
                 const awayDuration = (now - lastBlurTime) / 1000;
-                // Обмежуємо timeAway, щоб він не перевищував загальний час тесту
+                // Обмежуємо timeAway до максимального часу тесту
                 const maxTimeAway = (Date.now() - startTime) / 1000;
                 timeAway = Math.min(timeAway + awayDuration, maxTimeAway);
                 console.log('Tab focused, time away accumulated:', awayDuration, 'Total timeAway:', timeAway, 'Max timeAway:', maxTimeAway);
@@ -2599,8 +2599,9 @@ app.get('/result', checkAuth, async (req, res) => {
 
     const duration = testData.duration || Math.round((endTime - testStartTime) / 1000);
     const timeAway = testData.timeAway || (suspiciousActivity ? suspiciousActivity.timeAway || 0 : 0);
-    // Обмежуємо timeAwayPercent до 100%
-    const timeAwayPercent = Math.min(100, timeAway ? Math.round((timeAway / duration) * 100) : 0);
+    // Обмежуємо timeAwayPercent до 100% і коректуємо timeAway, якщо він перевищує duration
+    const correctedTimeAway = Math.min(timeAway, duration);
+    const timeAwayPercent = Math.min(100, Math.round((correctedTimeAway / duration) * 100));
     const switchCount = testData.switchCount || (suspiciousActivity ? suspiciousActivity.switchCount || 0 : 0);
     const avgResponseTime = testData.avgResponseTime || (suspiciousActivity && suspiciousActivity.responseTimes
       ? (suspiciousActivity.responseTimes.reduce((sum, time) => sum + (time || 0), 0) / suspiciousActivity.responseTimes.length).toFixed(2)
@@ -2668,7 +2669,7 @@ app.get('/result', checkAuth, async (req, res) => {
           variant,
           ipAddress,
           timeAwayPercent,
-          timeAway
+          timeAway: correctedTimeAway
         } },
         { upsert: true }
       );
