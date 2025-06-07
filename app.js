@@ -1786,7 +1786,7 @@ app.get('/test/question', checkAuth, async (req, res) => {
           </style>
         </head>
         <body>
-          <h1>${testNames[testNumber].name.replace(/"/g, '\\"')}</h1>
+          <h1>${testNames[testNumber]?.name.replace(/"/g, '\\"') || 'Невідомий тест'}</h1>
           <div id="timer">Залишилось часу: ${minutes} хв ${seconds} с</div>
           <div class="progress-bar">
             ${progress.map((p, j) => `
@@ -2001,7 +2001,6 @@ app.get('/test/question', checkAuth, async (req, res) => {
                 }
               } catch (error) {
                 console.error('Error in auto-saving answer:', error);
-                // Прибираємо сповіщення, щоб уникнути "Failed to fetch"
               } finally {
                 isSubmitting = false;
               }
@@ -2063,7 +2062,7 @@ app.get('/test/question', checkAuth, async (req, res) => {
                     } else {
                       setTimeout(() => {
                         window.location.href = '/result';
-                      }, 500); // Зменшуємо затримку
+                      }, 300); // Зменшуємо затримку
                     }
                   });
                 } else {
@@ -2133,7 +2132,7 @@ app.get('/test/question', checkAuth, async (req, res) => {
                 if (result.success) {
                   setTimeout(() => {
                     window.location.href = '/result';
-                  }, 500); // Зменшуємо затримку
+                  }, 300); // Зменшуємо затримку
                 } else {
                   console.error('Error finishing test:', result.error);
                   alert('Помилка завершення тесту: ' + result.error);
@@ -2159,7 +2158,7 @@ app.get('/test/question', checkAuth, async (req, res) => {
                 saveCurrentAnswer(currentQuestionIndex).then(() => {
                   setTimeout(() => {
                     window.location.href = '/result';
-                  }, 500); // Зменшуємо затримку
+                  }, 300); // Зменшуємо затримку
                 });
               }
             }
@@ -2194,7 +2193,7 @@ app.get('/test/question', checkAuth, async (req, res) => {
                   saveCurrentAnswer(currentQuestionIndex).then(() => {
                     setTimeout(() => {
                       window.location.href = '/result';
-                    }, 500); // Зменшуємо затримку
+                    }, 300); // Зменшуємо затримку
                   });
                 }
               }, 50);
@@ -2341,9 +2340,9 @@ app.get('/test/question', checkAuth, async (req, res) => {
                         const rightItems = Array.from(rightColumn.children);
                         const rightIndex = rightItems.indexOf(item);
                         if (leftItems[rightIndex]) {
-                          leftColumn.insertBefore(draggable, leftItems[rightIndex]);
+                          leftColumn.insertBefore(dragging, leftItems[rightIndex]);
                         } else {
-                          leftColumn.appendChild(draggable);
+                          leftColumn.appendChild(dragging);
                         }
                         updateMatchingPairs();
                       }
@@ -2357,6 +2356,9 @@ app.get('/test/question', checkAuth, async (req, res) => {
       </html>
     `;
     res.send(html);
+  } catch (error) {
+    logger.error('Error in /test/question', { message: error.message, stack: error.stack });
+    res.status(500).send('Внутрішня помилка сервера. Спробуйте ще раз або зверніться до адміністратора.');
   } finally {
     const endTime = Date.now();
     logger.info('Route /test/question executed', { duration: `${endTime - startTime} ms` });
@@ -2475,7 +2477,6 @@ app.get('/result', checkAuth, async (req, res) => {
       if (!recentResult) {
         return res.status(400).send('Тест не розпочато або перерваний. Розпочніть новий тест.');
       }
-      // Використовуємо дані з test_results
       testData = recentResult;
     } else {
       testData = userTest;
@@ -2483,7 +2484,7 @@ app.get('/result', checkAuth, async (req, res) => {
 
     const { questions, testNumber, answers, startTime: testStartTime, suspiciousActivity, variant, testSessionId, timeLimit } = userTest || testData;
     let score = testData.score || 0;
-    const totalPoints = testData.totalPoints || questions.reduce((sum, q) => sum + q.points, 0);
+    const totalPoints = testData.totalPoints || (questions ? questions.reduce((sum, q) => sum + q.points, 0) : 0);
     let scoresPerQuestion = testData.scoresPerQuestion || [];
 
     if (!scoresPerQuestion.length && questions) {
@@ -2592,7 +2593,7 @@ app.get('/result', checkAuth, async (req, res) => {
     const percentage = testData.percentage || (score / totalPoints) * 100;
     const totalClicks = testData.totalClicks || Object.keys(answers).length;
     const correctClicks = testData.correctClicks || scoresPerQuestion.filter(s => s > 0).length;
-    const totalQuestions = testData.totalQuestions || questions.length;
+    const totalQuestions = testData.totalQuestions || (questions ? questions.length : 0);
 
     const duration = testData.duration || Math.round((endTime - testStartTime) / 1000);
     const timeAwayPercent = testData.timeAwayPercent || (suspiciousActivity && suspiciousActivity.timeAway
@@ -2647,6 +2648,28 @@ app.get('/result', checkAuth, async (req, res) => {
       }
     }
 
+    // Оновлюємо існуючий результат, якщо він є
+    if (userTest && testData.isSaved) {
+      await db.collection('test_results').updateOne(
+        { testSessionId },
+        { $set: {
+          score,
+          totalPoints,
+          endTime,
+          totalClicks,
+          correctClicks,
+          totalQuestions,
+          percentage,
+          suspiciousActivity,
+          answers,
+          scoresPerQuestion,
+          variant,
+          ipAddress
+        } },
+        { upsert: true }
+      );
+    }
+
     // Видаляємо тест із active_tests після збереження результату
     if (userTest) {
       await db.collection('active_tests').deleteOne({ user: req.user });
@@ -2669,7 +2692,7 @@ app.get('/result', checkAuth, async (req, res) => {
       <html lang="uk">
         <head>
           <meta charset="UTF-8">
-          <title>Результати ${testNames[testNumber].name.replace(/"/g, '\\"')}</title>
+          <title>Результати ${testNames[testNumber]?.name.replace(/"/g, '\\"') || 'Невідомий тест'}</title>
           <style>
             body { font-family: Arial, sans-serif; text-align: center; padding: 20px; background-color: #f5f5f5; }
             .result-container { margin: 20px auto; width: 150px; height: 150px; position: relative; }
@@ -2710,7 +2733,7 @@ app.get('/result', checkAuth, async (req, res) => {
           </div>
           <script>
             const user = "${req.user.replace(/"/g, '\\"')}";
-            const testName = "${testNames[testNumber].name.replace(/"/g, '\\"')}";
+            const testName = "${testNames[testNumber]?.name.replace(/"/g, '\\"') || 'Невідомий тест'}";
             const totalQuestions = ${totalQuestions};
             const correctClicks = ${correctClicks};
             const score = ${score};
@@ -2793,7 +2816,7 @@ app.get('/result', checkAuth, async (req, res) => {
     res.send(resultHtml);
   } catch (error) {
     logger.error('Error in /result', { message: error.message, stack: error.stack });
-    res.status(500).send('Помилка при завантаженні результатів: ' + error.message);
+    res.status(500).send('Помилка при завантаженні результатів: ' + (error.message || 'Невідома помилка'));
   } finally {
     const endTime = Date.now();
     logger.info('Route /result executed', { duration: `${endTime - startTime} ms` });
