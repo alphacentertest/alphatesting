@@ -1353,12 +1353,23 @@ app.get('/test/question', checkAuth, async (req, res) => {
   try {
     if (req.userRole === 'admin') return res.redirect('/admin');
 
-    const userTest = await db.collection('active_tests').findOne({ user: req.user });
+    let userTest = await db.collection('active_tests').findOne({ user: req.user });
     if (!userTest) {
       return res.status(400).send('Тест не розпочато');
     }
 
     const { questions, testNumber, answers, currentQuestion, startTime: testStartTime, timeLimit, isQuickTest, timePerQuestion, suspiciousActivity, variant, testSessionId } = userTest;
+
+    // Перевірка та оновлення testNames, якщо кеш застарілий
+    if (!testNames[testNumber]) {
+      logger.info('Test number not found in cache, reloading tests', { testNumber });
+      const tests = await db.collection('tests').find().toArray();
+      testNames = tests.reduce((acc, test) => {
+        acc[test.testNumber] = test;
+        return acc;
+      }, {});
+      logger.info('Reloaded testNames cache', { testCount: Object.keys(testNames).length });
+    }
 
     // Перевірка, чи існує testNumber у testNames
     if (!testNames[testNumber]) {
@@ -1518,10 +1529,10 @@ app.get('/test/question', checkAuth, async (req, res) => {
       currentQuestion: index,
       answerTimestamps: userTest.answerTimestamps || {},
       suspiciousActivity: { 
-        timeAway: suspiciousActivity?.timeAway || 0, // Беремо поточне значення, якщо є
-        switchCount: suspiciousActivity?.switchCount || 0,
-        responseTimes: suspiciousActivity?.responseTimes || [],
-        activityCounts: suspiciousActivity?.activityCounts || []
+        timeAway: userTest.suspiciousActivity?.timeAway || 0,
+        switchCount: userTest.suspiciousActivity?.switchCount || 0,
+        responseTimes: userTest.suspiciousActivity?.responseTimes || [],
+        activityCounts: userTest.suspiciousActivity?.activityCounts || []
       }
     };
     updateData.answerTimestamps[index] = Date.now();
@@ -1941,11 +1952,11 @@ app.get('/test/question', checkAuth, async (req, res) => {
             const isQuickTest = ${isQuickTest};
             const timePerQuestion = ${timePerQuestion || 0};
             const totalQuestions = ${questions.length};
-            let timeAway = 0; // Скидаємо timeAway на початок, як у твоїй версії
+            let timeAway = ${userTest.suspiciousActivity?.timeAway || 0}; // Беремо поточне значення
             let lastBlurTime = 0;
-            let switchCount = 0;
+            let switchCount = ${userTest.suspiciousActivity?.switchCount || 0};
             let lastActivityTime = Date.now();
-            let activityCount = 0;
+            let activityCount = ${userTest.suspiciousActivity?.activityCounts?.[index] || 0};
             let lastMouseMoveTime = 0;
             let lastKeydownTime = 0;
             const debounceDelay = 100;
@@ -2362,7 +2373,7 @@ app.get('/test/question', checkAuth, async (req, res) => {
     `;
     res.send(html);
   } catch (error) {
-    logger.error('Error in /test/question', { message: error.message, stack: error.stack });
+    logger.error('Error in /test/question', { message: error.message, stack: error.stack, testNumber, testNames: Object.keys(testNames) });
     res.status(500).send('Внутрішня помилка сервера. Спробуйте ще раз або зверніться до адміністратора.');
   } finally {
     const endTime = Date.now();
