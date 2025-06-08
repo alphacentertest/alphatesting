@@ -253,6 +253,11 @@ app.use(session({
   }
 }));
 
+app.use((req, res, next) => {
+  logger.info('Запит отримано', { url: req.url, method: req.method, userRole: req.userRole, timestamp: new Date().toISOString(), args: process.argv });
+  next();
+});
+
 // Middleware для генерації CSRF-токенів
 app.use((req, res, next) => {
   if (!req.session.csrfSecret) {
