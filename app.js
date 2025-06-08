@@ -4839,7 +4839,8 @@ app.get('/admin/results', checkAuth, async (req, res) => {
       return res.status(403).send('Доступно тільки для адміністраторів та інструкторів');
     }
 
-    const results = await db.collection('test_results').find({}).toArray();
+    // Отримуємо всі результати та сортуємо за endTime у спадному порядку
+    const results = await db.collection('test_results').find({}).sort({ endTime: -1 }).toArray();
     let html = `
       <!DOCTYPE html>
       <html lang="uk">
