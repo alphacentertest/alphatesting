@@ -1516,7 +1516,8 @@ app.get('/test/question', checkAuth, async (req, res) => {
 
     const updateData = {
       currentQuestion: index,
-      answerTimestamps: userTest.answerTimestamps || {}
+      answerTimestamps: userTest.answerTimestamps || {},
+      suspiciousActivity: userTest.suspiciousActivity || { timeAway: 0, switchCount: 0, responseTimes: [], activityCounts: [] }
     };
     updateData.answerTimestamps[index] = Date.now();
     await db.collection('active_tests').updateOne(
@@ -1935,11 +1936,11 @@ app.get('/test/question', checkAuth, async (req, res) => {
             const isQuickTest = ${isQuickTest};
             const timePerQuestion = ${timePerQuestion || 0};
             const totalQuestions = ${questions.length};
-            let timeAway = ${suspiciousActivity?.timeAway || 0};
+            let timeAway = 0; // Скидаємо timeAway на початок тесту
             let lastBlurTime = 0;
-            let switchCount = ${suspiciousActivity?.switchCount || 0};
+            let switchCount = 0;
             let lastActivityTime = Date.now();
-            let activityCount = ${suspiciousActivity?.activityCounts?.[index] || 0};
+            let activityCount = 0;
             let lastMouseMoveTime = 0;
             let lastKeydownTime = 0;
             const debounceDelay = 100;
@@ -2218,10 +2219,8 @@ app.get('/test/question', checkAuth, async (req, res) => {
               if (lastBlurTime > 0) {
                 const now = performance.now();
                 const awayDuration = (now - lastBlurTime) / 1000;
-                // Обмежуємо timeAway до максимального часу тесту
-                const maxTimeAway = (Date.now() - startTime) / 1000;
-                timeAway = Math.min(timeAway + awayDuration, maxTimeAway);
-                console.log('Tab focused, time away accumulated:', awayDuration, 'Total timeAway:', timeAway, 'Max timeAway:', maxTimeAway);
+                timeAway += awayDuration;
+                console.log('Tab focused, time away accumulated:', awayDuration, 'Total timeAway:', timeAway);
                 lastBlurTime = 0;
                 // Зберігаємо дані при поверненні на вкладку
                 saveCurrentAnswer(currentQuestionIndex);
@@ -2599,7 +2598,7 @@ app.get('/result', checkAuth, async (req, res) => {
 
     const duration = testData.duration || Math.round((endTime - testStartTime) / 1000);
     const timeAway = testData.timeAway || (suspiciousActivity ? suspiciousActivity.timeAway || 0 : 0);
-    // Обмежуємо timeAwayPercent до 100% і коректуємо timeAway, якщо він перевищує duration
+    // Обмежуємо timeAway до duration
     const correctedTimeAway = Math.min(timeAway, duration);
     const timeAwayPercent = Math.min(100, Math.round((correctedTimeAway / duration) * 100));
     const switchCount = testData.switchCount || (suspiciousActivity ? suspiciousActivity.switchCount || 0 : 0);
@@ -2731,7 +2730,6 @@ app.get('/result', checkAuth, async (req, res) => {
             Правильних відповідей: ${correctClicks}<br>
             Набрано балів: ${score}<br>
             Максимально можлива кількість балів: ${totalPoints}<br>
-            Час проведений поза вкладкою: ${timeAwayPercent}%<br>
           </p>
           <div class="buttons">
             <button id="exportPDF">Експортувати в PDF</button>
@@ -2785,7 +2783,6 @@ app.get('/result', checkAuth, async (req, res) => {
                       { text: 'Правильних відповідей: ' + correctClicks, lineHeight: 2 },
                       { text: 'Набрано балів: ' + score, lineHeight: 2 },
                       { text: 'Максимально можлива кількість балів: ' + totalPoints, lineHeight: 2 },
-                      { text: 'Час проведений поза вкладкою: ' + ${timeAwayPercent} + '%', lineHeight: 2 },
                       {
                         columns: [
                           { text: 'Час: ' + time, width: '50%', lineHeight: 2 },
