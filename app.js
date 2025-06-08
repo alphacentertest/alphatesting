@@ -4856,8 +4856,8 @@ app.get('/admin/results', checkAuth, async (req, res) => {
             .action-btn.view { background-color: #4CAF50; color: white; }
             .action-btn.delete { background-color: #ff4d4d; color: white; }
             .nav-btn { background-color: #007bff; color: white; }
-            .answers { white-space: pre-wrap; max-width: 300px; overflow-wrap: break-word; }
             .suspicious { color: red; }
+            .details { white-space: pre-wrap; max-width: 300px; overflow-wrap: break-word; }
           </style>
         </head>
         <body>
@@ -4867,20 +4867,26 @@ app.get('/admin/results', checkAuth, async (req, res) => {
             <tr>
               <th>Користувач</th>
               <th>Тест</th>
-              <th>Результат (%)</th>
-              <th>Час поза вкладкою (%)</th>
-              <th>Переключення вкладок</th>
-              <th>Середній час відповіді (с)</th>
-              <th>Загальна активність</th>
-              <th>Дата завершення</th>
               <th>Варіант</th>
-              <th>Дії</th>
+              <th>Очки/%</th>
+              <th>Максимум</th>
+              <th>Початок</th>
+              <th>Кінець</th>
+              <th>Тривалість (хв:сек)</th>
+              <th>Підозріла активність (%)</th>
+              <th>Деталі активності</th>
+              <th>Дія</th>
             </tr>
     `;
     if (!results || results.length === 0) {
-      html += '<tr><td colspan="10">Немає результатів</td></tr>';
+      html += '<tr><td colspan="11">Немає результатів</td></tr>';
     } else {
       results.forEach(result => {
+        const startTime = new Date(result.startTime).toLocaleTimeString('uk-UA', { hour12: false }) + ' ' + new Date(result.startTime).toLocaleDateString('uk-UA');
+        const endTime = new Date(result.endTime).toLocaleTimeString('uk-UA', { hour12: false }) + ' ' + new Date(result.endTime).toLocaleDateString('uk-UA');
+        const durationSec = result.duration || Math.round((new Date(result.endTime) - new Date(result.startTime)) / 1000);
+        const minutes = Math.floor(durationSec / 60).toString().padStart(2, '0');
+        const seconds = (durationSec % 60).toString().padStart(2, '0');
         const timeAwayPercent = result.suspiciousActivity?.timeAway
           ? Math.round((result.suspiciousActivity.timeAway / result.duration) * 100)
           : 0;
@@ -4895,20 +4901,25 @@ app.get('/admin/results', checkAuth, async (req, res) => {
         const isSuspicious = timeAwayPercent > config.suspiciousActivity.timeAwayThreshold ||
                             switchCount > config.suspiciousActivity.switchCountThreshold;
 
+        const activityDetails = `Час поза вкладкою: ${timeAwayPercent}%\n` +
+                               `Переключення вкладок: ${switchCount}\n` +
+                               `Середній час відповіді (сек): ${avgResponseTime}`;
+
         html += `
           <tr class="${isSuspicious ? 'suspicious' : ''}">
             <td>${result.user}</td>
             <td>${testNames[result.testNumber]?.name.replace(/"/g, '\\"') || 'Невідомий тест'}</td>
-            <td>${Math.round(result.percentage)}%</td>
-            <td>${timeAwayPercent}%</td>
-            <td>${switchCount}</td>
-            <td>${avgResponseTime}</td>
-            <td>${totalActivityCount}</td>
-            <td>${new Date(result.endTime).toLocaleString('uk-UA')}</td>
             <td>${result.variant || 'Немає'}</td>
+            <td>${result.score} / ${Math.round(result.percentage)}%</td>
+            <td>${result.totalPoints}</td>
+            <td>${startTime}</td>
+            <td>${endTime}</td>
+            <td>${minutes} хв ${seconds} сек</td>
+            <td>${timeAwayPercent}%</td>
+            <td class="details">${activityDetails}</td>
             <td>
-              <button class="action-btn view" onclick="viewResult('${result._id}')">Переглянути</button>
-              <button class="action-btn delete" onclick="deleteResult('${result._id}')">Видалити</button>
+              <button class="action-btn view" onclick="viewResult('${result._id}')">Перегляд</button>
+              <button class="action-btn delete" onclick="deleteResult('${result._id}')">🗑️ Видалити</button>
             </td>
           </tr>
         `;
