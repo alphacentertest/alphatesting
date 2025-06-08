@@ -1517,7 +1517,12 @@ app.get('/test/question', checkAuth, async (req, res) => {
     const updateData = {
       currentQuestion: index,
       answerTimestamps: userTest.answerTimestamps || {},
-      suspiciousActivity: userTest.suspiciousActivity || { timeAway: 0, switchCount: 0, responseTimes: [], activityCounts: [] }
+      suspiciousActivity: { 
+        timeAway: suspiciousActivity?.timeAway || 0, // Беремо поточне значення, якщо є
+        switchCount: suspiciousActivity?.switchCount || 0,
+        responseTimes: suspiciousActivity?.responseTimes || [],
+        activityCounts: suspiciousActivity?.activityCounts || []
+      }
     };
     updateData.answerTimestamps[index] = Date.now();
     await db.collection('active_tests').updateOne(
@@ -1936,7 +1941,7 @@ app.get('/test/question', checkAuth, async (req, res) => {
             const isQuickTest = ${isQuickTest};
             const timePerQuestion = ${timePerQuestion || 0};
             const totalQuestions = ${questions.length};
-            let timeAway = 0; // Скидаємо timeAway на початок тесту
+            let timeAway = 0; // Скидаємо timeAway на початок, як у твоїй версії
             let lastBlurTime = 0;
             let switchCount = 0;
             let lastActivityTime = Date.now();
@@ -1949,13 +1954,13 @@ app.get('/test/question', checkAuth, async (req, res) => {
             let questionTimeRemaining = timePerQuestion;
             let currentQuestionIndex = ${index};
             let lastGlobalUpdateTime = Date.now();
-            let isSubmitting = false;
+            let isSaving = false;
             let hasMovedToNext = false;
             let questionStartTime = ${questionStartTime[index]};
 
             async function saveCurrentAnswer(index) {
-              if (isSubmitting) return;
-              isSubmitting = true;
+              if (isSaving) return;
+              isSaving = true;
               try {
                 let answers = selectedOptions;
                 if (document.querySelector('input[name="q' + index + '"]')) {
@@ -2003,13 +2008,13 @@ app.get('/test/question', checkAuth, async (req, res) => {
               } catch (error) {
                 console.error('Error in auto-saving answer:', error);
               } finally {
-                isSubmitting = false;
+                isSaving = false;
               }
             }
 
             async function saveAndNext(index) {
-              if (isSubmitting) return;
-              isSubmitting = true;
+              if (isSaving) return;
+              isSaving = true;
               try {
                 hasMovedToNext = true;
                 let answers = selectedOptions;
@@ -2074,7 +2079,7 @@ app.get('/test/question', checkAuth, async (req, res) => {
                 console.error('Error in saveAndNext:', error);
                 alert('Не вдалося зберегти відповідь: ' + error.message);
               } finally {
-                isSubmitting = false;
+                isSaving = false;
               }
             }
 
@@ -2087,8 +2092,8 @@ app.get('/test/question', checkAuth, async (req, res) => {
             }
 
             async function finishTest(index) {
-              if (isSubmitting) return;
-              isSubmitting = true;
+              if (isSaving) return;
+              isSaving = true;
               try {
                 await saveCurrentAnswer(index);
                 let answers = selectedOptions;
@@ -2142,7 +2147,7 @@ app.get('/test/question', checkAuth, async (req, res) => {
                 console.error('Error in finishTest:', error);
                 alert('Не вдалося завершити тест: ' + error.message);
               } finally {
-                isSubmitting = false;
+                isSaving = false;
               }
             }
 
@@ -2222,7 +2227,6 @@ app.get('/test/question', checkAuth, async (req, res) => {
                 timeAway += awayDuration;
                 console.log('Tab focused, time away accumulated:', awayDuration, 'Total timeAway:', timeAway);
                 lastBlurTime = 0;
-                // Зберігаємо дані при поверненні на вкладку
                 saveCurrentAnswer(currentQuestionIndex);
               }
             });
@@ -2596,9 +2600,9 @@ app.get('/result', checkAuth, async (req, res) => {
     const correctClicks = testData.correctClicks || scoresPerQuestion.filter(s => s > 0).length;
     const totalQuestions = testData.totalQuestions || (questions ? questions.length : 0);
 
-    const duration = testData.duration || Math.round((endTime - testStartTime) / 1000);
+    const duration = Math.round((endTime - testStartTime) / 1000);
     const timeAway = testData.timeAway || (suspiciousActivity ? suspiciousActivity.timeAway || 0 : 0);
-    // Обмежуємо timeAway до duration
+    // Обмежуємо timeAway до duration, як у твоїй версії
     const correctedTimeAway = Math.min(timeAway, duration);
     const timeAwayPercent = Math.min(100, Math.round((correctedTimeAway / duration) * 100));
     const switchCount = testData.switchCount || (suspiciousActivity ? suspiciousActivity.switchCount || 0 : 0);
@@ -2639,7 +2643,7 @@ app.get('/result', checkAuth, async (req, res) => {
           correctClicks,
           totalQuestions,
           percentage,
-          suspiciousActivity,
+          { timeAway: correctedTimeAway, switchCount, responseTimes: suspiciousActivity?.responseTimes || [], activityCounts: suspiciousActivity?.activityCounts || [] },
           answers,
           scoresPerQuestion,
           variant,
@@ -2662,13 +2666,11 @@ app.get('/result', checkAuth, async (req, res) => {
           correctClicks,
           totalQuestions,
           percentage,
-          suspiciousActivity,
+          suspiciousActivity: { timeAway: correctedTimeAway, switchCount, responseTimes: suspiciousActivity?.responseTimes || [], activityCounts: suspiciousActivity?.activityCounts || [] },
           answers,
           scoresPerQuestion,
           variant,
-          ipAddress,
-          timeAwayPercent,
-          timeAway: correctedTimeAway
+          ipAddress
         } },
         { upsert: true }
       );
