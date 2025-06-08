@@ -1,4 +1,5 @@
-// Імпорт необхідних модулів
+// Останнє оновлення: 08.06.2025 15:32 EEST
+// // Імпорт необхідних модулів
 require('dotenv').config();
 const express = require('express');
 const cookieParser = require('cookie-parser');
