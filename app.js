@@ -4991,7 +4991,11 @@ app.get('/admin/view-result', checkAuth, async (req, res) => {
       return res.status(404).send('Результат не знайдено');
     }
 
-    const questions = await db.collection('questions').find({ testNumber: result.testNumber }).sort({ order: 1 }).toArray();
+    const questions = await db.collection('questions')
+      .find({ testNumber: result.testNumber })
+      .sort({ order: 1 })
+      .toArray();
+
     let html = `
       <!DOCTYPE html>
       <html lang="uk">
@@ -5036,41 +5040,41 @@ app.get('/admin/view-result', checkAuth, async (req, res) => {
               <th>Бали</th>
             </tr>
     `;
-    Object.keys(result.answers).sort((a, b) => parseInt(a) - parseInt(b)).forEach(index => {
-      const question = questions.find(q => q.order === parseInt(index));
-      if (question) {
-        const userAnswer = result.answers[index] || 'Не відповіли';
-        let correctAnswer;
-        if (question.type === 'matching') {
-          correctAnswer = question.correctPairs.map(pair => `${pair[0]} -> ${pair[1]}`).join(', ');
-        } else if (question.type === 'fillblank') {
-          correctAnswer = question.correctAnswers.join(', ');
-        } else if (question.type === 'singlechoice') {
-          correctAnswer = question.correctAnswer;
-        } else {
-          correctAnswer = question.correctAnswers.join(', ');
-        }
-        const questionScore = result.scoresPerQuestion[index] || 0;
-        let userAnswerDisplay;
-        if (question.type === 'matching' && Array.isArray(userAnswer)) {
-          userAnswerDisplay = userAnswer.map(pair => `${pair[0]} -> ${pair[1]}`).join(', ');
-        } else if (question.type === 'fillblank' && Array.isArray(userAnswer)) {
-          userAnswerDisplay = userAnswer.join(', ');
-        } else if (Array.isArray(userAnswer)) {
-          userAnswerDisplay = userAnswer.join(', ');
-        } else {
-          userAnswerDisplay = userAnswer;
-        }
-        html += `
-          <tr>
-            <td>${question.text}</td>
-            <td class="answers">${userAnswerDisplay}</td>
-            <td>${correctAnswer}</td>
-            <td>${questionScore} з ${question.points}</td>
-          </tr>
-        `;
+
+    // Перебираємо питання в порядку order і зіставляємо з відповідями за індексом
+    questions.forEach((question, index) => {
+      const userAnswer = result.answers[index] !== undefined ? result.answers[index] : 'Не відповіли';
+      let correctAnswer;
+      if (question.type === 'matching') {
+        correctAnswer = question.correctPairs.map(pair => `${pair[0]} -> ${pair[1]}`).join(', ');
+      } else if (question.type === 'fillblank') {
+        correctAnswer = question.correctAnswers.join(', ');
+      } else if (question.type === 'singlechoice') {
+        correctAnswer = question.correctAnswer;
+      } else {
+        correctAnswer = question.correctAnswers.join(', ');
       }
+      const questionScore = result.scoresPerQuestion[index] || 0;
+      let userAnswerDisplay;
+      if (question.type === 'matching' && Array.isArray(userAnswer)) {
+        userAnswerDisplay = userAnswer.map(pair => `${pair[0]} -> ${pair[1]}`).join(', ');
+      } else if (question.type === 'fillblank' && Array.isArray(userAnswer)) {
+        userAnswerDisplay = userAnswer.join(', ');
+      } else if (Array.isArray(userAnswer)) {
+        userAnswerDisplay = userAnswer.join(', ');
+      } else {
+        userAnswerDisplay = userAnswer;
+      }
+      html += `
+        <tr>
+          <td>${question.text}</td>
+          <td class="answers">${userAnswerDisplay}</td>
+          <td>${correctAnswer}</td>
+          <td>${questionScore} з ${question.points}</td>
+        </tr>
+      `;
     });
+
     html += `
           </table>
           <button class="nav-btn" onclick="window.location.href='/admin/results'">Повернутися до результатів</button>
