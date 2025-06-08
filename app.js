@@ -4863,7 +4863,7 @@ app.get('/admin/results', checkAuth, async (req, res) => {
         </head>
         <body>
           <h1>Результати тестів</h1>
-          <button class="nav-btn" onclick="window.location.href='/admin'">Повернутися до адмін-панелі</button>
+          <button class="nav-btn" onclick="window.location.href='/select-test'">Повернутися до вибору тесту</button>
           <table>
             <tr>
               <th>Користувач</th>
@@ -4895,9 +4895,6 @@ app.get('/admin/results', checkAuth, async (req, res) => {
         const avgResponseTime = result.suspiciousActivity?.responseTimes
           ? (result.suspiciousActivity.responseTimes.reduce((sum, time) => sum + (time || 0), 0) / result.suspiciousActivity.responseTimes.length).toFixed(2)
           : 0;
-        const totalActivityCount = result.suspiciousActivity?.activityCounts
-          ? result.suspiciousActivity.activityCounts.reduce((sum, count) => sum + (count || 0), 0)
-          : 0;
 
         const isSuspicious = timeAwayPercent > config.suspiciousActivity.timeAwayThreshold ||
                             switchCount > config.suspiciousActivity.switchCountThreshold;
@@ -4920,7 +4917,7 @@ app.get('/admin/results', checkAuth, async (req, res) => {
             <td class="details">${activityDetails}</td>
             <td>
               <button class="action-btn view" onclick="viewResult('${result._id}')">Перегляд</button>
-              <button class="action-btn delete" onclick="deleteResult('${result._id}')">🗑️ Видалити</button>
+              ${req.userRole === 'admin' ? '<button class="action-btn delete" onclick="deleteResult(\'' + result._id + '\')">🗑️ Видалити</button>' : ''}
             </td>
           </tr>
         `;
@@ -5036,7 +5033,6 @@ app.get('/admin/view-result', checkAuth, async (req, res) => {
             <tr>
               <th>Питання</th>
               <th>Ваша відповідь</th>
-              <th>Правильна відповідь</th>
               <th>Бали</th>
             </tr>
     `;
@@ -5044,16 +5040,6 @@ app.get('/admin/view-result', checkAuth, async (req, res) => {
     // Перебираємо питання в порядку order і зіставляємо з відповідями за індексом
     questions.forEach((question, index) => {
       const userAnswer = result.answers[index] !== undefined ? result.answers[index] : 'Не відповіли';
-      let correctAnswer;
-      if (question.type === 'matching') {
-        correctAnswer = question.correctPairs.map(pair => `${pair[0]} -> ${pair[1]}`).join(', ');
-      } else if (question.type === 'fillblank') {
-        correctAnswer = question.correctAnswers.join(', ');
-      } else if (question.type === 'singlechoice') {
-        correctAnswer = question.correctAnswer;
-      } else {
-        correctAnswer = question.correctAnswers.join(', ');
-      }
       const questionScore = result.scoresPerQuestion[index] || 0;
       let userAnswerDisplay;
       if (question.type === 'matching' && Array.isArray(userAnswer)) {
@@ -5069,7 +5055,6 @@ app.get('/admin/view-result', checkAuth, async (req, res) => {
         <tr>
           <td>${question.text}</td>
           <td class="answers">${userAnswerDisplay}</td>
-          <td>${correctAnswer}</td>
           <td>${questionScore} з ${question.points}</td>
         </tr>
       `;
@@ -5077,7 +5062,7 @@ app.get('/admin/view-result', checkAuth, async (req, res) => {
 
     html += `
           </table>
-          <button class="nav-btn" onclick="window.location.href='/admin/results'">Повернутися до результатів</button>
+          <button class="nav-btn" onclick="window.location.href='/select-test'">Повернутися до вибору тесту</button>
         </body>
       </html>
     `;
