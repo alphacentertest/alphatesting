@@ -1194,13 +1194,15 @@ const saveResult = async (user, testNumber, score, totalPoints, startTime, endTi
   try {
     await session.withTransaction(async () => {
       const duration = Math.round((endTime - startTime) / 1000);
-      const timeOffset = 3 * 60 * 60 * 1000;
+      const timeOffset = 3 * 60 * 60 * 1000; // Корекція часового поясу (+3 години)
       const adjustedStartTime = new Date(startTime + timeOffset);
       const adjustedEndTime = new Date(endTime + timeOffset);
 
+      const testName = testNames[testNumber]?.name || `Тест ${testNumber}`; // Використовуємо testNumber як запасний варіант
       const result = {
         user,
         testNumber,
+        testName,
         score,
         totalPoints,
         totalClicks,
@@ -1216,12 +1218,12 @@ const saveResult = async (user, testNumber, score, totalPoints, startTime, endTi
         variant: `Variant ${variant}`,
         testSessionId
       };
-      logger.info('Збереження результату в MongoDB із відповідями', { answers: result.answers });
+      logger.info('Збереження результату в MongoDB з відповідями', { testName, answers: result.answers });
       if (!db) {
         throw new Error('Підключення до MongoDB не встановлено');
       }
       await db.collection('test_results').insertOne(result, { session });
-      await logActivity(user, `завершив тест ${testNames[testNumber].name.replace(/"/g, '\\"')} з результатом ${Math.round(percentage)}%`, ipAddress, { percentage: Math.round(percentage) }, session);
+      await logActivity(user, `завершив тест ${testName.replace(/"/g, '\\"')} з результатом ${Math.round(percentage)}%`, ipAddress, { percentage: Math.round(percentage) }, session);
     });
   } catch (error) {
     logger.error('Помилка збереження результату та логу активності', { message: error.message, stack: error.stack });
@@ -1385,211 +1387,22 @@ app.get('/test', checkAuth, async (req, res) => {
 app.get('/test/question', checkAuth, async (req, res) => {
   const startTime = Date.now();
   try {
-    if (req.userRole === 'admin') return res.redirect('/admin');
-
-    let userTest = await db.collection('active_tests').findOne({ user: req.user });
+    const userTest = await db.collection('active_tests').findOne({ user: req.user });
     if (!userTest) {
-      return res.status(400).send('Тест не розпочато');
+      return res.status(400).send('Тест не розпочато. Виберіть тест для початку.');
     }
 
-    const { questions, testNumber, answers, currentQuestion, startTime: testStartTime, timeLimit, isQuickTest, timePerQuestion, suspiciousActivity, variant, testSessionId } = userTest;
-
-    // Перевірка кешу тестів
-    if (!testNames[testNumber]) {
-      logger.info('Номер тесту не знайдено в кеші, повторне завантаження тестів', { testNumber });
-      const tests = await db.collection('tests').find().toArray();
-      testNames = tests.reduce((acc, test) => {
-        acc[test.testNumber] = test;
-        return acc;
-      }, {});
-      logger.info('Оновлено кеш testNames', { testCount: Object.keys(testNames).length });
-    }
-
-    // Перевірка доступності тесту
-    if (!testNames[testNumber]) {
-      let score = 0;
-      const totalPoints = questions.reduce((sum, q) => sum + q.points, 0);
-      const scoresPerQuestion = questions.map((q, index) => {
-        const userAnswer = answers[index];
-        let questionScore = 0;
-
-        const normalizeAnswer = (answer) => {
-          if (!answer) return '';
-          return String(answer)
-            .trim()
-            .toLowerCase()
-            .replace(/\s+/g, '')
-            .replace(',', '.')
-            .replace(/\\'/g, "'")
-            .replace(/°/g, 'deg');
-        };
-
-        if (q.type === 'multiple' && userAnswer && Array.isArray(userAnswer)) {
-          const correctAnswers = q.correctAnswers.map(val => normalizeAnswer(val));
-          const userAnswers = userAnswer.map(val => normalizeAnswer(val));
-          const isCorrect = correctAnswers.length === userAnswers.length &&
-            correctAnswers.every(val => userAnswers.includes(val)) &&
-            userAnswers.every(val => correctAnswers.includes(val));
-          if (isCorrect) {
-            questionScore = q.points;
-          }
-        } else if (q.type === 'input' && userAnswer) {
-          const normalizedUserAnswer = normalizeAnswer(userAnswer);
-          const normalizedCorrectAnswer = normalizeAnswer(q.correctAnswers[0]);
-          if (normalizedCorrectAnswer.includes('-')) {
-            const [min, max] = normalizedCorrectAnswer.split('-').map(val => parseFloat(val.trim()));
-            const userValue = parseFloat(normalizedUserAnswer);
-            const isCorrect = !isNaN(userValue) && userValue >= min && userValue <= max;
-            if (isCorrect) {
-              questionScore = q.points;
-            }
-          } else {
-            const isCorrect = normalizedUserAnswer === normalizedCorrectAnswer;
-            if (isCorrect) {
-              questionScore = q.points;
-            }
-          }
-        } else if (q.type === 'ordering' && userAnswer && Array.isArray(userAnswer)) {
-          const userAnswers = userAnswer.map(val => normalizeAnswer(val));
-          const correctAnswers = q.correctAnswers.map(val => normalizeAnswer(val));
-          const isCorrect = userAnswers.join(',') === correctAnswers.join(',');
-          if (isCorrect) {
-            questionScore = q.points;
-          }
-        } else if (q.type === 'matching' && userAnswer && Array.isArray(userAnswer)) {
-          const userPairs = userAnswer.map(pair => [normalizeAnswer(pair[0]), normalizeAnswer(pair[1])]);
-          const correctPairs = q.correctPairs.map(pair => [normalizeAnswer(pair[0]), normalizeAnswer(pair[1])]);
-          const isCorrect = userPairs.length === correctPairs.length &&
-            userPairs.every(userPair => correctPairs.some(correctPair => userPair[0] === correctPair[0] && userPair[1] === correctPair[1]));
-          if (isCorrect) {
-            questionScore = q.points;
-          }
-        } else if (q.type === 'fillblank' && userAnswer && Array.isArray(userAnswer)) {
-          const userAnswers = userAnswer.map(val => normalizeAnswer(val));
-          const correctAnswers = q.correctAnswers.map(val => normalizeAnswer(val));
-          const isCorrect = userAnswers.length === correctAnswers.length &&
-            userAnswers.every((answer, idx) => {
-              const correctAnswer = correctAnswers[idx];
-              if (correctAnswer.includes('-')) {
-                const [min, max] = correctAnswer.split('-').map(val => parseFloat(val.trim()));
-                const userValue = parseFloat(answer);
-                return !isNaN(userValue) && userValue >= min && userValue <= max;
-              } else {
-                return answer === correctAnswer;
-              }
-            });
-          if (isCorrect) {
-            questionScore = q.points;
-          }
-        } else if (q.type === 'singlechoice' && userAnswer && Array.isArray(userAnswer)) {
-          const userAnswers = userAnswer.map(val => normalizeAnswer(val));
-          const correctAnswer = normalizeAnswer(q.correctAnswer);
-          const isCorrect = userAnswers.length === 1 && userAnswers[0] === correctAnswer;
-          if (isCorrect) {
-            questionScore = q.points;
-          }
-        }
-        return questionScore;
-      });
-
-      score = scoresPerQuestion.reduce((sum, s) => sum + s, 0);
-      const endTime = Date.now();
-      const percentage = (score / totalPoints) * 100;
-      const totalClicks = Object.keys(answers).length;
-      const correctClicks = scoresPerQuestion.filter(s => s > 0).length;
-      const totalQuestions = questions.length;
-      const ipAddress = req.headers['x-forwarded-for'] || req.socket.remoteAddress;
-
-      const existingResult = await db.collection('test_results').findOne({ testSessionId });
-      if (!existingResult && !userTest.isSavingResult) {
-        await db.collection('active_tests').updateOne(
-          { user: req.user },
-          { $set: { isSavingResult: true } }
-        );
-        await saveResult(
-          req.user,
-          testNumber,
-          score,
-          totalPoints,
-          testStartTime,
-          endTime,
-          totalClicks,
-          correctClicks,
-          totalQuestions,
-          percentage,
-          suspiciousActivity,
-          answers,
-          scoresPerQuestion,
-          variant,
-          ipAddress,
-          testSessionId
-        );
-        logger.info(`Результат збережено для testSessionId: ${testSessionId} через недоступність тесту`);
-      }
-
-      await db.collection('active_tests').deleteOne({ user: req.user });
-
-      return res.send(`
-        <!DOCTYPE html>
-        <html lang="uk">
-          <head>
-            <meta charset="UTF-8">
-            <meta name="viewport" content="width=device-width, initial-scale=1.0">
-            <title>Помилка</title>
-            <style>
-              body { font-family: Arial, sans-serif; text-align: center; padding: 50px; background-color: #f5f5f5; margin: 0; }
-              h2 { font-size: 24px; margin-bottom: 20px; }
-              button { padding: 10px 20px; cursor: pointer; border: none; border-radius: 5px; background-color: #4CAF50; color: white; }
-              button:hover { background-color: #45a049; }
-            </style>
-          </head>
-          <body>
-            <h2>Цей тест більше недоступний. Ваші відповіді збережено. Оберіть інший тест.</h2>
-            <button onclick="window.location.href='/select-test'">Повернутися до вибору тестів</button>
-          </body>
-        </html>
-      `);
-    }
-
+    const { testNumber, questions, answers, testStartTime, timeLimit, selectedOptions, testNames, isQuickTest, timePerQuestion, variant, testSessionId } = userTest;
     const index = parseInt(req.query.index) || 0;
-
     if (index < 0 || index >= questions.length) {
-      return res.status(400).send('Невірний номер питання');
+      return res.status(400).send('Невірний номер питання.');
     }
-
-    const updateData = {
-      currentQuestion: index,
-      answerTimestamps: userTest.answerTimestamps || {},
-      suspiciousActivity: { 
-        timeAway: userTest.suspiciousActivity?.timeAway || 0,
-        switchCount: userTest.suspiciousActivity?.switchCount || 0,
-        responseTimes: userTest.suspiciousActivity?.responseTimes || [],
-        activityCounts: userTest.suspiciousActivity?.activityCounts || []
-      }
-    };
-    updateData.answerTimestamps[index] = Date.now();
-    await db.collection('active_tests').updateOne(
-      { user: req.user },
-      { $set: updateData }
-    );
 
     const q = questions[index];
-    const progress = Array.from({ length: questions.length }, (_, i) => ({
-      number: i + 1,
-      answered: answers[i] && (Array.isArray(answers[i]) ? answers[i].length > 0 : answers[i].trim() !== '')
-    }));
-
-    let totalTestTime = timeLimit / 1000;
-    if (isQuickTest) {
-      totalTestTime = questions.length * timePerQuestion;
-    }
-    const elapsedTime = Math.floor((Date.now() - testStartTime) / 1000);
-    const remainingTime = Math.max(0, totalTestTime - elapsedTime);
-    const minutes = Math.floor(remainingTime / 60).toString().padStart(2, '0');
-    const seconds = (remainingTime % 60).toString().padStart(2, '0');
-
-    const selectedOptions = answers[index] || [];
-    const selectedOptionsString = JSON.stringify(selectedOptions).replace(/'/g, "\\'");
+    const minutes = Math.floor((timeLimit / 1000 - Math.floor((Date.now() - testStartTime) / 1000)) / 60).toString().padStart(2, '0');
+    const seconds = (Math.floor((timeLimit / 1000 - Math.floor((Date.now() - testStartTime) / 1000)) % 60)).toString().padStart(2, '0');
+    const selectedOptionsString = JSON.stringify(selectedOptions || []);
+    const progress = questions.map((_, i) => ({ number: i + 1, answered: !!answers[i] }));
 
     const questionStartTime = userTest.questionStartTime || {};
     if (!questionStartTime[index]) {
@@ -1609,50 +1422,15 @@ app.get('/test/question', checkAuth, async (req, res) => {
           <title>${testNames[testNumber]?.name.replace(/"/g, '\\"') || 'Невідомий тест'}</title>
           <script src="https://cdnjs.cloudflare.com/ajax/libs/Sortable/1.15.0/Sortable.min.js"></script>
           <style>
-            body { font-family: Arial, sans-serif; margin: 0; padding: 20px; padding-bottom: 80px; background-color: #f0f0f0; }
+            body { font-family: Arial, sans-serif; margin: 0; padding: 20px; padding-bottom: 80px; background-color: #f0f0f0; user-select: none; }
             h1 { font-size: 24px; text-align: center; }
             img { max-width: 100%; margin-bottom: 10px; display: block; margin-left: auto; margin-right: auto; }
-            .progress-bar { 
-              display: flex; 
-              flex-wrap: wrap; 
-              gap: 5px; 
-              margin-bottom: 20px; 
-              width: calc(100% - 40px); 
-              margin-left: auto; 
-              margin-right: auto; 
-              box-sizing: border-box; 
-              justify-content: center; 
-              align-items: center; 
-            }
-            .progress-circle { 
-              width: 40px; 
-              height: 40px; 
-              border-radius: 50%; 
-              display: flex; 
-              align-items: center; 
-              justify-content: center; 
-              font-size: 14px; 
-              flex-shrink: 0; 
-            }
-            .progress-circle.unanswered { 
-              background-color: red; 
-              color: white; 
-            }
-            .progress-circle.answered { 
-              background-color: green; 
-              color: white; 
-            }
-            .progress-line { 
-              width: 5px; 
-              height: 2px; 
-              background-color: #ccc; 
-              margin: 0 2px; 
-              align-self: center; 
-              flex-shrink: 0; 
-            }
-            .progress-line.answered { 
-              background-color: green; 
-            }
+            .progress-bar { display: flex; flex-wrap: wrap; gap: 5px; margin-bottom: 20px; width: calc(100% - 40px); margin-left: auto; margin-right: auto; box-sizing: border-box; justify-content: center; align-items: center; }
+            .progress-circle { width: 40px; height: 40px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 14px; flex-shrink: 0; }
+            .progress-circle.unanswered { background-color: red; color: white; }
+            .progress-circle.answered { background-color: green; color: white; }
+            .progress-line { width: 5px; height: 2px; background-color: #ccc; margin: 0 2px; align-self: center; flex-shrink: 0; }
+            .progress-line.answered { background-color: green; }
             .option-box { border: 2px solid #ccc; padding: 10px; margin: 5px 0; border-radius: 5px; cursor: pointer; font-size: 16px; user-select: none; }
             .option-box.selected { background-color: #90ee90; }
             .button-container { position: fixed; bottom: 20px; left: 20px; right: 20px; display: flex; justify-content: space-between; }
@@ -1677,162 +1455,111 @@ app.get('/test/question', checkAuth, async (req, res) => {
             #question-container { background-color: white; padding: 20px; border-radius: 8px; box-shadow: 0 0 10px rgba(0, 0, 0, 0.1); width: calc(100% - 40px); margin: 0 auto 20px auto; box-sizing: border-box; }
             #answers { margin-bottom: 20px; }
             .matching-container { display: flex; justify-content: space-between; flex-wrap: wrap; gap: 10px; }
-            .matching-column { 
-              width: 45%; 
-              display: flex; 
-              flex-direction: column; 
-              gap: 5px; 
-              box-sizing: border-box; 
-            }
-            .matching-item { 
-              border: 2px solid #ccc; 
-              padding: 10px; 
-              margin: 0; 
-              border-radius: 5px; 
-              cursor: move; 
-              font-family: Arial, sans-serif; 
-              font-size: 16px; 
-              line-height: 1.5; 
-              min-height: 40px; 
-              display: flex; 
-              align-items: center; 
-              justify-content: flex-start; 
-              box-sizing: border-box; 
-              white-space: normal; 
-              overflow-wrap: break-word; 
-            }
+            .matching-column { width: 45%; display: flex; flex-direction: column; gap: 5px; box-sizing: border-box; }
+            .matching-item { border: 2px solid #ccc; padding: 10px; margin: 0; border-radius: 5px; cursor: move; font-family: Arial, sans-serif; font-size: 16px; line-height: 1.5; min-height: 40px; display: flex; align-items: center; justify-content: flex-start; box-sizing: border-box; white-space: normal; overflow-wrap: break-word; }
             .matching-item.matched { background-color: #90ee90; }
             .blank-input { width: 100px; margin: 0 5px; padding: 5px; border: 1px solid #ccc; border-radius: 4px; display: inline-block; }
             .question-text { display: inline; }
             .image-error { color: red; font-style: italic; text-align: center; margin-bottom: 10px; }
             @media (max-width: 400px) {
               h1 { font-size: 24px; }
-              .progress-bar { 
-                gap: 2px; 
-              }
-              .progress-circle { 
-                width: 20px; 
-                height: 20px; 
-                font-size: 8px; 
-              }
-              .progress-line { 
-                width: 3px; 
-              }
+              .progress-bar { gap: 2px; }
+              .progress-circle { width: 20px; height: 20px; font-size: 8px; }
+              .progress-line { width: 3px; }
               button { font-size: 16px; padding: 10px; }
               #timer { font-size: 20px; }
               .question-box h2 { font-size: 18px; }
               .matching-container { flex-direction: column; }
               .matching-column { width: 100%; }
               .blank-input { width: 80px; }
-              .option-box, .matching-item { 
-                font-size: 14px; 
-                padding: 8px; 
-                min-height: 40px; 
-                line-height: 1.5; 
-              }
+              .option-box, .matching-item { font-size: 14px; padding: 8px; min-height: 40px; line-height: 1.5; }
             }
             @media (min-width: 401px) and (max-width: 600px) {
               h1 { font-size: 28px; }
-              .progress-bar { 
-                gap: 3px; 
-              }
-              .progress-circle { 
-                width: 25px; 
-                height: 25px; 
-                font-size: 10px; 
-              }
-              .progress-line { 
-                width: 4px; 
-              }
+              .progress-bar { gap: 3px; }
+              .progress-circle { width: 25px; height: 25px; font-size: 10px; }
+              .progress-line { width: 4px; }
               button { font-size: 18px; padding: 15px; }
               #timer { font-size: 20px; }
               .question-box h2 { font-size: 20px; }
               .matching-container { flex-direction: column; }
               .matching-column { width: 100%; }
               .blank-input { width: 80px; }
-              .option-box, .matching-item { 
-                font-size: 18px; 
-                padding: 10px; 
-                min-height: 50px; 
-                line-height: 1.5; 
-              }
+              .option-box, .matching-item { font-size: 18px; padding: 10px; min-height: 50px; line-height: 1.5; }
             }
             @media (min-width: 601px) and (max-width: 900px) {
               h1 { font-size: 30px; }
-              .progress-bar { 
-                gap: 4px; 
-              }
-              .progress-circle { 
-                width: 30px; 
-                height: 30px; 
-                font-size: 12px; 
-              }
-              .progress-line { 
-                width: 5px; 
-              }
+              .progress-bar { gap: 4px; }
+              .progress-circle { width: 30px; height: 30px; font-size: 12px; }
+              .progress-line { width: 5px; }
               button { font-size: 18px; padding: 15px; }
               #timer { font-size: 22px; }
               .question-box h2 { font-size: 22px; }
               .matching-column { width: 45%; }
               .blank-input { width: 100px; }
-              .option-box, .matching-item { 
-                font-size: 18px; 
-                padding: 10px; 
-                min-height: 50px; 
-                line-height: 1.5; 
-              }
+              .option-box, .matching-item { font-size: 18px; padding: 10px; min-height: 50px; line-height: 1.5; }
             }
             @media (min-width: 901px) and (max-width: 1200px) {
               h1 { font-size: 32px; }
-              .progress-bar { 
-                gap: 5px; 
-              }
-              .progress-circle { 
-                width: 35px; 
-                height: 35px; 
-                font-size: 14px; 
-              }
-              .progress-line { 
-                width: 5px; 
-              }
+              .progress-bar { gap: 5px; }
+              .progress-circle { width: 35px; height: 35px; font-size: 14px; }
+              .progress-line { width: 5px; }
               button { font-size: 18px; padding: 15px; }
               #timer { font-size: 24px; }
               .question-box h2 { font-size: 24px; }
               .matching-column { width: 45%; }
               .blank-input { width: 100px; }
-              .option-box, .matching-item { 
-                font-size: 18px; 
-                padding: 10px; 
-                min-height: 50px; 
-                line-height: 1.5; 
-              }
+              .option-box, .matching-item { font-size: 18px; padding: 10px; min-height: 50px; line-height: 1.5; }
             }
             @media (min-width: 1201px) {
               h1 { font-size: 36px; }
-              .progress-bar { 
-                gap: 6px; 
-              }
-              .progress-circle { 
-                width: 40px; 
-                height: 40px; 
-                font-size: 16px; 
-              }
-              .progress-line { 
-                width: 6px; 
-              }
+              .progress-bar { gap: 6px; }
+              .progress-circle { width: 40px; height: 40px; font-size: 16px; }
+              .progress-line { width: 6px; }
               button { font-size: 20px; padding: 15px; }
               #timer { font-size: 26px; }
               .question-box h2 { font-size: 26px; }
               .matching-column { width: 45%; }
               .blank-input { width: 120px; }
-              .option-box, .matching-item { 
-                font-size: 20px; 
-                padding: 12px; 
-                min-height: 60px; 
-                line-height: 1.5; 
-              }
+              .option-box, .matching-item { font-size: 20px; padding: 12px; min-height: 60px; line-height: 1.5; }
+            }
+            /* Захист від скріншотів */
+            body::before {
+              content: "Користувач: ${req.user}"; /* Водяний знак */
+              position: fixed;
+              top: 10px;
+              right: 10px;
+              font-size: 12px;
+              color: rgba(0, 0, 0, 0.3);
+              pointer-events: none;
+            }
+            body {
+              -webkit-user-select: none;
+              -moz-user-select: none;
+              -ms-user-select: none;
+              user-select: none;
+            }
+            @keyframes watermark-blink {
+              50% { opacity: 0.5; }
+            }
+            body::before {
+              animation: watermark-blink 1s infinite;
             }
           </style>
+          <script>
+            // Захист від скріншотів
+            document.addEventListener('contextmenu', event => event.preventDefault());
+            document.addEventListener('keydown', (event) => {
+              if (event.key === 'PrintScreen' || (event.ctrlKey && event.key === 'p') || (event.metaKey && event.key === 'p') ||
+                  (event.ctrlKey && event.key === 's') || (event.metaKey && event.key === 's') ||
+                  (event.altKey && event.key === 'PrintScreen') || (event.metaKey && event.key === '3' && event.shiftKey) ||
+                  (event.metaKey && event.key === '4' && event.shiftKey)) {
+                event.preventDefault();
+              }
+            });
+            document.addEventListener('copy', event => event.preventDefault());
+            document.addEventListener('selectstart', event => event.preventDefault());
+          </script>
         </head>
         <body>
           <h1>${testNames[testNumber]?.name.replace(/"/g, '\\"') || 'Невідомий тест'}</h1>
@@ -1992,7 +1719,7 @@ app.get('/test/question', checkAuth, async (req, res) => {
             let lastMouseMoveTime = 0;
             let lastKeydownTime = 0;
             const debounceDelay = 100;
-            const blurDebounceDelay = 200; // Затримка для дебаунсингу подій blur
+            const blurDebounceDelay = 200;
             let blurTimeout = null;
             let selectedOptions = ${selectedOptionsString};
             let matchingPairs = ${JSON.stringify(answers[index] || [])};
@@ -2270,7 +1997,7 @@ app.get('/test/question', checkAuth, async (req, res) => {
                 blurTimeout = setTimeout(() => {
                   if (lastBlurTime === 0) {
                     lastBlurTime = performance.now();
-                    switchCount = Math.min(switchCount + 1, 1000); // Обмеження switchCount
+                    switchCount = Math.min(switchCount + 1, 1000);
                     console.log('Вкладка втратила фокус, початок підрахунку часу:', lastBlurTime, 'Кількість переключень:', switchCount);
                   }
                   blurTimeout = null;
@@ -2286,7 +2013,7 @@ app.get('/test/question', checkAuth, async (req, res) => {
               }
               if (lastBlurTime > 0) {
                 const now = performance.now();
-                const awayDuration = Math.min((now - lastBlurTime) / 1000, 60); // Обмеження до 60 секунд
+                const awayDuration = Math.min((now - lastBlurTime) / 1000, 60);
                 timeAway += awayDuration;
                 console.log('Вкладка отримала фокус, накопичено часу поза вкладкою:', awayDuration, 'Загальний timeAway:', timeAway);
                 lastBlurTime = 0;
@@ -2299,7 +2026,7 @@ app.get('/test/question', checkAuth, async (req, res) => {
               if (!document.hidden) {
                 const now = Date.now();
                 const timeSinceLastActivity = (now - lastActivityTime) / 1000;
-                if (timeSinceLastActivity > 300) { // Якщо простій більше 5 хвилин
+                if (timeSinceLastActivity > 300) {
                   questionStartTime = now;
                   console.log('Виявлено тривалий простій, скидання questionStartTime:', questionStartTime);
                   fetch('/set-question-start-time?index=' + currentQuestionIndex, {
@@ -2336,7 +2063,7 @@ app.get('/test/question', checkAuth, async (req, res) => {
             }
 
             document.addEventListener('mousemove', debounceMouseMove);
-            document.addEventListener('keydown', debounceKeydown);
+            document.addEventLogger('keydown', debounceKeydown);
 
             // Обробка кліків по варіантах відповідей
             document.querySelectorAll('.option-box:not(.draggable)').forEach(box => {
@@ -2445,6 +2172,22 @@ app.get('/test/question', checkAuth, async (req, res) => {
                 });
               }
             }
+
+            // Періодична перевірка статусу тесту
+            setInterval(() => {
+              fetch('/check-test-status')
+                .then(response => response.json())
+                .then(data => {
+                  if (data.redirect) {
+                    window.location.href = data.redirect;
+                  } else if (data.remainingTime <= 0) {
+                    saveCurrentAnswer(currentQuestionIndex).then(() => {
+                      window.location.href = '/result';
+                    });
+                  }
+                })
+                .catch(error => console.error('Помилка перевірки статусу тесту:', error));
+            }, 5000); // Перевірка кожні 5 секунд
           </script>
         </body>
       </html>
@@ -2456,6 +2199,84 @@ app.get('/test/question', checkAuth, async (req, res) => {
   } finally {
     const endTime = Date.now();
     logger.info('Маршрут /test/question виконано', { duration: `${endTime - startTime} мс` });
+  }
+});
+
+app.get('/check-test-status', checkAuth, async (req, res) => {
+  const startTime = Date.now();
+  try {
+    const userTest = await db.collection('active_tests').findOne({ user: req.user });
+    if (!userTest) {
+      return res.status(400).json({ success: false, message: 'Тест не розпочато' });
+    }
+
+    const { startTime: testStartTime, timeLimit, isQuickTest, timePerQuestion, currentQuestion, questions } = userTest;
+    const now = Date.now();
+    const elapsedTime = Math.floor((now - testStartTime) / 1000);
+    let remainingTime = timeLimit / 1000;
+
+    if (isQuickTest) {
+      remainingTime = questions.length * timePerQuestion - elapsedTime;
+    } else {
+      remainingTime = Math.max(0, (timeLimit / 1000) - elapsedTime);
+    }
+
+    if (remainingTime <= 0) {
+      // Автоматично завершуємо тест, якщо час вичерпано
+      const { answers, suspiciousActivity, variant, testSessionId } = userTest;
+      const score = userTest.score || 0;
+      const totalPoints = userTest.totalPoints || questions.reduce((sum, q) => sum + q.points, 0);
+      const scoresPerQuestion = userTest.scoresPerQuestion || questions.map((q, idx) => {
+        const userAnswer = answers[idx];
+        let questionScore = 0;
+        const normalizeAnswer = (answer) => String(answer).trim().toLowerCase().replace(/\s+/g, '');
+        if (q.type === 'singlechoice' && userAnswer && Array.isArray(userAnswer)) {
+          const userAnswers = userAnswer.map(normalizeAnswer);
+          const correctAnswer = normalizeAnswer(q.correctAnswer);
+          if (userAnswers.length === 1 && userAnswers[0] === correctAnswer) questionScore = q.points;
+        } else if (q.type === 'multiple' && userAnswer && Array.isArray(userAnswer)) {
+          const correctAnswers = q.correctAnswers.map(normalizeAnswer);
+          const userAnswers = userAnswer.map(normalizeAnswer);
+          if (correctAnswers.length === userAnswers.length && correctAnswers.every(a => userAnswers.includes(a))) questionScore = q.points;
+        }
+        return questionScore;
+      });
+      score = scoresPerQuestion.reduce((sum, s) => sum + s, 0);
+      const percentage = (score / totalPoints) * 100;
+      const totalClicks = Object.keys(answers).length;
+      const correctClicks = scoresPerQuestion.filter(s => s > 0).length;
+      const totalQuestions = questions.length;
+      const ipAddress = req.headers['x-forwarded-for'] || req.socket.remoteAddress;
+
+      await saveResult(
+        req.user,
+        userTest.testNumber,
+        score,
+        totalPoints,
+        testStartTime,
+        now,
+        totalClicks,
+        correctClicks,
+        totalQuestions,
+        percentage,
+        suspiciousActivity,
+        answers,
+        scoresPerQuestion,
+        variant,
+        ipAddress,
+        testSessionId
+      );
+      await db.collection('active_tests').deleteOne({ user: req.user });
+      return res.json({ success: true, redirect: '/result' });
+    }
+
+    res.json({ success: true, remainingTime });
+  } catch (error) {
+    logger.error('Помилка в /check-test-status', { message: error.message, stack: error.stack });
+    res.status(500).json({ success: false, message: 'Помилка сервера' });
+  } finally {
+    const endTime = Date.now();
+    logger.info('Маршрут /check-test-status виконано', { duration: `${endTime - startTime} мс` });
   }
 });
 
