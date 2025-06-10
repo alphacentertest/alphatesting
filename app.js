@@ -1906,7 +1906,7 @@ app.get('/test/question', checkAuth, async (req, res) => {
               if (remainingTime > 0) {
                 const minutes = Math.floor(remainingTime / 60).toString().padStart(2, '0');
                 const seconds = (remainingTime % 60).toString().padStart(2, '0');
-                timerElement.textContent = `Залишилось часу: ${minutes} хв ${seconds} с`;
+                timerElement.textContent = 'Залишилось часу: ${minutes} хв ${seconds} с';
               } else {
                 timerElement.textContent = 'Час вичерпано';
               }
