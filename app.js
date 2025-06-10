@@ -2369,6 +2369,13 @@ app.get('/result', checkAuth, async (req, res) => {
     const totalPoints = testData.totalPoints || (questions ? questions.reduce((sum, q) => sum + (q.points || 0), 0) : 0);
     let scoresPerQuestion = testData.scoresPerQuestion || [];
 
+    // Валідація та нормалізація часу
+    let validatedTestStartTime = testStartTime;
+    if (typeof validatedTestStartTime !== 'number' || isNaN(validatedTestStartTime)) {
+      logger.warn('Некоректне значення testStartTime, встановлюємо поточний час', { testStartTime, testSessionId });
+      validatedTestStartTime = Date.now() - (timeLimit || 3600000); // Встановлюємо час на основі timeLimit
+    }
+
     if (!scoresPerQuestion.length && questions && questions.length > 0) {
       scoresPerQuestion = questions.map((q, idx) => {
         const userAnswer = answers[idx];
@@ -2441,7 +2448,11 @@ app.get('/result', checkAuth, async (req, res) => {
     }
 
     let endTime = testData.endTime ? new Date(testData.endTime).getTime() : Date.now();
-    const maxEndTime = testStartTime + (timeLimit || 3600000);
+    if (typeof endTime !== 'number' || isNaN(endTime)) {
+      logger.warn('Некоректне значення endTime, встановлюємо поточний час', { endTime, testSessionId });
+      endTime = Date.now();
+    }
+    const maxEndTime = validatedTestStartTime + (timeLimit || 3600000);
     if (endTime > maxEndTime) {
       endTime = maxEndTime;
       logger.info(`Кориговано endTime до timeLimit для testSessionId: ${testSessionId}`);
@@ -2452,7 +2463,7 @@ app.get('/result', checkAuth, async (req, res) => {
     const correctClicks = scoresPerQuestion.filter(s => s > 0).length;
     const totalQuestions = questions ? questions.length : 0;
 
-    const duration = Math.round((endTime - testStartTime) / 1000) || 0;
+    const duration = Math.round((endTime - validatedTestStartTime) / 1000) || 0;
     const timeAway = (suspiciousActivity && suspiciousActivity.timeAway) || 0;
     const correctedTimeAway = Math.min(timeAway, duration);
     const timeAwayPercent = Math.round((correctedTimeAway / duration) * 100) || 0;
@@ -2483,7 +2494,7 @@ app.get('/result', checkAuth, async (req, res) => {
           testNumber,
           score,
           totalPoints,
-          testStartTime,
+          validatedTestStartTime,
           endTime,
           totalClicks,
           correctClicks,
