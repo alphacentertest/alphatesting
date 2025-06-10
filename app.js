@@ -1192,12 +1192,24 @@ const saveResult = async (user, testNumber, score, totalPoints, startTime, endTi
   const session = client.startSession();
   try {
     await session.withTransaction(async () => {
-      const duration = Math.round((endTime - startTime) / 1000);
-      const timeOffset = 3 * 60 * 60 * 1000; // Корекція часового поясу (+3 години)
-      const adjustedStartTime = new Date(startTime + timeOffset);
-      const adjustedEndTime = new Date(endTime + timeOffset);
+      // Валідація часу
+      let validatedStartTime = startTime;
+      let validatedEndTime = endTime;
+      if (typeof validatedStartTime !== 'number' || isNaN(validatedStartTime)) {
+        logger.warn('Некоректне значення startTime, встановлюємо поточний час', { startTime, testSessionId });
+        validatedStartTime = Date.now() - 3600000; // За замовчуванням 1 година назад
+      }
+      if (typeof validatedEndTime !== 'number' || isNaN(validatedEndTime)) {
+        logger.warn('Некоректне значення endTime, встановлюємо поточний час', { endTime, testSessionId });
+        validatedEndTime = Date.now();
+      }
 
-      const testName = testNames[testNumber]?.name || `Тест ${testNumber}`; // Використовуємо testNumber як запасний варіант
+      const duration = Math.round((validatedEndTime - validatedStartTime) / 1000);
+      const timeOffset = 3 * 60 * 60 * 1000; // Корекція часового поясу (+3 години)
+      const adjustedStartTime = new Date(validatedStartTime + timeOffset);
+      const adjustedEndTime = new Date(validatedEndTime + timeOffset);
+
+      const testName = testNames[testNumber]?.name || `Тест ${testNumber}`;
       const result = {
         user,
         testNumber,
@@ -1932,20 +1944,30 @@ app.get('/test/question', checkAuth, async (req, res) => {
                   saveCurrentAnswer(currentQuestionIndex).then(() => {
                     saveAndNext(currentQuestionIndex);
                   });
-                }
-              }
-
-              const questionTimerInterval = setInterval(() => {
-                updateQuestionTimer();
-                if (currentQuestionIndex >= totalQuestions - 1 && questionTimeRemaining <= 0 && !hasMovedToNext) {
-                  clearInterval(questionTimerInterval);
+                } else if (questionTimeRemaining <= 0 && currentQuestionIndex >= totalQuestions - 1 && !hasMovedToNext) {
+                  hasMovedToNext = true;
                   saveCurrentAnswer(currentQuestionIndex).then(() => {
                     setTimeout(() => {
                       window.location.href = '/result';
                     }, 300);
                   });
                 }
-              }, 50);
+              }
+
+              const questionTimerInterval = setInterval(() => {
+                updateQuestionTimer();
+                fetch('/check-test-status')
+                  .then(response => response.json())
+                  .then(data => {
+                    if (data.warning) {
+                      alert(data.warning); // Показуємо попередження
+                    }
+                    if (data.redirect) {
+                      window.location.href = data.redirect;
+                    }
+                  })
+                  .catch(error => console.error('Помилка перевірки статусу тесту:', error));
+              }, 1000); // Перевірка кожну секунду для кращої синхронізації
 
               document.addEventListener('visibilitychange', () => {
                 if (!document.hidden) {
@@ -2142,12 +2164,11 @@ app.get('/test/question', checkAuth, async (req, res) => {
               fetch('/check-test-status')
                 .then(response => response.json())
                 .then(data => {
+                  if (data.warning) {
+                    alert(data.warning); // Показуємо попередження
+                  }
                   if (data.redirect) {
                     window.location.href = data.redirect;
-                  } else if (data.remainingTime <= 0) {
-                    saveCurrentAnswer(currentQuestionIndex).then(() => {
-                      window.location.href = '/result';
-                    });
                   }
                 })
                 .catch(error => console.error('Помилка перевірки статусу тесту:', error));
@@ -2185,7 +2206,10 @@ app.get('/check-test-status', checkAuth, async (req, res) => {
       remainingTime = Math.max(0, (timeLimit / 1000) - elapsedTime);
     }
 
-    if (remainingTime <= 0) {
+    if (remainingTime <= 5 && remainingTime > 0) {
+      // Попередження за 5 секунд до завершення
+      res.json({ success: true, remainingTime, warning: 'Тест завершиться через кілька секунд!' });
+    } else if (remainingTime <= 0) {
       // Автоматично завершуємо тест, якщо час вичерпано
       const score = userTest.score || 0;
       const totalPoints = userTest.totalPoints || questions.reduce((sum, q) => sum + q.points, 0);
