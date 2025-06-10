@@ -1207,6 +1207,11 @@ const saveResult = async (user, testNumber, score, totalPoints, startTime, endTi
       const adjustedStartTime = new Date(validatedStartTime + timeOffset);
       const adjustedEndTime = new Date(validatedEndTime + timeOffset);
 
+      if (!testNumber || !user || !totalQuestions || !duration) {
+        logger.error('Missing required fields for saving result', { testNumber, user, totalQuestions, duration });
+        throw new Error('Invalid data for saving result');
+      }
+
       const testName = testNames[testNumber]?.name || `Test ${testNumber}`;
       const result = {
         user,
@@ -1443,16 +1448,17 @@ app.get('/test/question', checkAuth, async (req, res) => {
             .image-error { color: red; font-style: italic; text-align: center; margin-bottom: 10px; }
             /* Один водяний знак */
             body::before {
-              content: "User: ${req.user}"; /* Англійська версія для уникнення помилок */
+              content: "User: ${req.user}";
               position: fixed;
               top: 10px;
               right: 10px;
               font-size: 12px;
-              color: rgba(255, 0, 0, 0.3); /* Червоний колір */
+              color: rgba(255, 0, 0, 0.3);
               pointer-events: none;
             }
-            /* Видаляємо всі інші водяні знаки */
+            /* Примусово видаляємо всі інші водяні знаки */
             body::after { display: none !important; }
+            [style*="position: fixed"][style*="top: 10px"][style*="right: 10px"]:not(:first-child) { display: none !important; }
             @media (max-width: 400px) {
               h1 { font-size: 24px; }
               .progress-bar { gap: 2px; }
@@ -1533,7 +1539,7 @@ app.get('/test/question', checkAuth, async (req, res) => {
         </head>
         <body>
           <h1>${testNames[testNumber]?.name.replace(/"/g, '\\"') || 'Unknown Test'}</h1>
-          <div id="timer">Time left: ${minutes} min ${seconds} sec</div> <!-- Англійська версія -->
+          <div id="timer">Time left: ${minutes} min ${seconds} sec</div>
           <div class="progress-bar">
             ${progress.map((p, j) => `
               <div class="progress-circle ${p.answered ? 'answered' : 'unanswered'}">${p.number}</div>
@@ -1675,8 +1681,8 @@ app.get('/test/question', checkAuth, async (req, res) => {
           </div>
           <script>
             const startTime = ${testStartTime};
-            const timeLimit = ${timeLimit}; // У секундах
-            const totalTestTime = ${timeLimit}; // Синонім для зрозумілості
+            const timeLimit = ${timeLimit}; // In milliseconds
+            const totalTestTime = ${timeLimit}; // Synonym for clarity
             const timerElement = document.getElementById('timer');
             const isQuickTest = ${isQuickTest};
             const timePerQuestion = ${timePerQuestion || 0};
@@ -1700,7 +1706,7 @@ app.get('/test/question', checkAuth, async (req, res) => {
             let hasMovedToNext = false;
             let questionStartTime = ${questionStartTime[index]};
 
-            // Функція для автоматичного збереження відповіді
+            // Function to auto-save answer
             async function saveCurrentAnswer(index) {
               if (isSaving) return;
               isSaving = true;
@@ -1755,7 +1761,7 @@ app.get('/test/question', checkAuth, async (req, res) => {
               }
             }
 
-            // Функція для збереження відповіді та переходу до наступного питання
+            // Function to save answer and move to next question
             async function saveAndNext(index) {
               if (isSaving) return;
               isSaving = true;
@@ -1827,17 +1833,17 @@ app.get('/test/question', checkAuth, async (req, res) => {
               }
             }
 
-            // Показ модального вікна підтвердження завершення тесту
+            // Show confirmation modal for finishing test
             function showConfirm(index) {
               document.getElementById('confirm-modal').style.display = 'block';
             }
 
-            // Приховування модального вікна
+            // Hide confirmation modal
             function hideConfirm() {
               document.getElementById('confirm-modal').style.display = 'none';
             }
 
-            // Завершення тесту
+            // Finish test
             async function finishTest(index) {
               if (isSaving) return;
               isSaving = true;
@@ -1898,15 +1904,15 @@ app.get('/test/question', checkAuth, async (req, res) => {
               }
             }
 
-            // Оновлення глобального таймера
+            // Update global timer
             function updateGlobalTimer() {
               const now = Date.now();
               const elapsedTime = Math.floor((now - startTime) / 1000);
-              const remainingTime = Math.max(0, (totalTestTime / 1000) - elapsedTime); // Corrected to seconds
+              const remainingTime = Math.max(0, (totalTestTime / 1000) - elapsedTime);
               if (remainingTime > 0) {
                 const minutes = Math.floor(remainingTime / 60).toString().padStart(2, '0');
                 const seconds = (remainingTime % 60).toString().padStart(2, '0');
-                timerElement.textContent = `Time left: ${minutes} min ${seconds} sec`;
+                timerElement.textContent = 'Time left: ' + minutes + ' min ' + seconds + ' sec';
               } else {
                 timerElement.textContent = 'Time exhausted';
                 saveCurrentAnswer(currentQuestionIndex).then(() => {
@@ -1920,7 +1926,7 @@ app.get('/test/question', checkAuth, async (req, res) => {
 
             setInterval(updateGlobalTimer, 1000); // Update every second
 
-            // Таймер для швидкого тесту
+            // Quick test timer
             if (isQuickTest) {
               function updateQuestionTimer() {
                 const now = Date.now();
@@ -1972,7 +1978,7 @@ app.get('/test/question', checkAuth, async (req, res) => {
               });
             }
 
-            // Відстеження втрати фокусу вкладки
+            // Track tab blur
             window.addEventListener('blur', () => {
               if (!blurTimeout) {
                 blurTimeout = setTimeout(() => {
@@ -1986,7 +1992,7 @@ app.get('/test/question', checkAuth, async (req, res) => {
               }
             });
 
-            // Відстеження повернення фокусу вкладки
+            // Track tab focus
             window.addEventListener('focus', () => {
               if (blurTimeout) {
                 clearTimeout(blurTimeout);
@@ -2002,7 +2008,7 @@ app.get('/test/question', checkAuth, async (req, res) => {
               }
             });
 
-            // Скидання questionStartTime після тривалого простою
+            // Reset questionStartTime after long inactivity
             document.addEventListener('visibilitychange', () => {
               if (!document.hidden) {
                 const now = Date.now();
@@ -2023,7 +2029,7 @@ app.get('/test/question', checkAuth, async (req, res) => {
               }
             });
 
-            // Дебаунсинг для руху миші
+            // Debounce mouse move
             function debounceMouseMove() {
               const now = Date.now();
               if (now - lastMouseMoveTime >= debounceDelay) {
@@ -2033,7 +2039,7 @@ app.get('/test/question', checkAuth, async (req, res) => {
               }
             }
 
-            // Дебаунсинг для натискання клавіш
+            // Debounce keydown
             function debounceKeydown() {
               const now = Date.now();
               if (now - lastKeydownTime >= debounceDelay) {
@@ -2046,7 +2052,7 @@ app.get('/test/question', checkAuth, async (req, res) => {
             document.addEventListener('mousemove', debounceMouseMove);
             document.addEventListener('keydown', debounceKeydown);
 
-            // Обробка кліків по варіантах відповідей
+            // Handle option clicks
             document.querySelectorAll('.option-box:not(.draggable)').forEach(box => {
               box.addEventListener('click', () => {
                 const questionType = '${q.type}';
@@ -2068,13 +2074,13 @@ app.get('/test/question', checkAuth, async (req, res) => {
               });
             });
 
-            // Ініціалізація sortable для ordering
+            // Initialize sortable for ordering
             const sortable = document.getElementById('sortable-options');
             if (sortable) {
               new Sortable(sortable, { animation: 150 });
             }
 
-            // Ініціалізація sortable для matching
+            // Initialize sortable for matching
             const leftColumn = document.getElementById('left-column');
             const rightColumn = document.getElementById('right-column');
             if (leftColumn && rightColumn && '${q.type}' === 'matching') {
@@ -2154,7 +2160,7 @@ app.get('/test/question', checkAuth, async (req, res) => {
               }
             }
 
-            // Періодична перевірка статусу тесту
+            // Periodic test status check
             setInterval(() => {
               fetch('/check-test-status')
                 .then(response => response.json())
@@ -2194,10 +2200,10 @@ app.get('/check-test-status', checkAuth, async (req, res) => {
     const { startTime: testStartTime, timeLimit, isQuickTest, timePerQuestion, currentQuestion, questions, answers, suspiciousActivity, variant, testSessionId, testNumber } = userTest;
     const now = Date.now();
     const elapsedTime = Math.floor((now - testStartTime) / 1000);
-    let remainingTime = timeLimit / 1000;
+    let remainingTime = timeLimit / 1000; // Ensure timeLimit is in milliseconds
 
     if (isQuickTest) {
-      remainingTime = Math.max(0, questions.length * timePerQuestion - elapsedTime);
+      remainingTime = Math.max(0, (questions.length * timePerQuestion * 1000 - elapsedTime * 1000) / 1000); // Convert to seconds
     } else {
       remainingTime = Math.max(0, (timeLimit / 1000) - elapsedTime);
     }
