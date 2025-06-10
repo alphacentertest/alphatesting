@@ -1275,108 +1275,65 @@ const checkTestAttempts = async (user, testNumber) => {
 app.get('/test', checkAuth, async (req, res) => {
   const startTime = Date.now();
   try {
-    if (req.userRole === 'admin') return res.redirect('/admin');
-    const testNumber = req.query.test;
+    const testNumber = req.query.testNumber; // Отримуємо testNumber з запиту
     if (!testNumber || !testNames[testNumber]) {
-      return res.status(400).send('Номер тесту не вказано або тест не знайдено');
+      return res.status(400).send('Невірний номер тесту.');
     }
 
-    const canAttemptTest = await checkTestAttempts(req.user, testNumber);
-    if (!canAttemptTest) {
-      return res.send(`
-        <!DOCTYPE html>
-        <html lang="uk">
-          <head>
-            <meta charset="UTF-8">
-            <meta name="viewport" content="width=device-width, initial-scale=1.0">
-            <title>Помилка</title>
-            <style>
-              body { font-family: Arial, sans-serif; text-align: center; padding: 50px; background-color: #f5f5f5; margin: 0; }
-              #modal { position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%); background: white; padding: 20px; border: 2px solid black; z-index: 1000; box-shadow: 0 0 10px rgba(0,0,0,0.3); border-radius: 10px; }
-              button { padding: 10px 20px; margin: 5px; cursor: pointer; border: none; border-radius: 5px; background-color: #4CAF50; color: white; transition: background-color 0.3s; }
-              button:hover { background-color: #45a049; }
-              .overlay { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.5); z-index: 999; }
-              h2 { margin-bottom: 20px; font-size: 24px; color: #333; }
-            </style>
-          </head>
-          <body>
-            <div class="overlay"></div>
-            <div id="modal">
-              <h2>Ви вже проходили сьогодні цей тест</h2>
-              <button onclick="window.location.href='/select-test'">Повернутися до вибору тесту</button>
-            </div>
-          </body>
-        </html>
-      `);
+    const userTest = await db.collection('active_tests').findOne({ user: req.user });
+    if (userTest) {
+      await db.collection('active_tests').deleteOne({ user: req.user });
     }
 
-    let questions = await loadQuestions(testNumber);
-    const userVariant = Math.floor(Math.random() * 3) + 1;
-    logger.info(`Призначено варіант користувачу ${req.user} для тесту ${testNumber}: Variant ${userVariant}`);
-
-    questions = questions.filter(q => !q.variant || q.variant === '' || q.variant === `Variant ${userVariant}`);
-    logger.info(`Відфільтровано питання для тесту ${testNumber}, варіант ${userVariant}: знайдено ${questions.length} питань`);
-
-    if (questions.length === 0) {
-      return res.status(400).send(`Немає питань для варіанту ${userVariant} у тесті ${testNumber}`);
+    const questions = await db.collection('questions')
+      .find({ testNumber })
+      .sort({ order: 1 })
+      .toArray();
+    if (!questions.length) {
+      return res.status(400).send('Питання для цього тесту не знайдено.');
     }
 
-    const questionLimit = testNames[testNumber].questionLimit;
-    if (questionLimit && questions.length > questionLimit) {
-      questions = shuffleArray([...questions]).slice(0, questionLimit);
-    }
-
-    if (testNames[testNumber].randomQuestions) {
-      questions = shuffleArray([...questions]);
-    }
-
-    if (testNames[testNumber].randomAnswers) {
-      questions = questions.map(q => {
-        if (q.options && q.options.length > 0 && q.type !== 'ordering' && q.type !== 'matching') {
-          const shuffledOptions = shuffleArray([...q.options]);
-          return { ...q, options: shuffledOptions };
-        } else if (q.type === 'matching' && q.pairs) {
-          const shuffledPairs = shuffleArray([...q.pairs]);
-          return { ...q, pairs: shuffledPairs };
-        }
-        return q;
-      });
-    }
-
+    const testData = testNames[testNumber];
+    const variant = Math.floor(Math.random() * 4) + 1; // Випадковий варіант від 1 до 4
+    const timeLimit = testData.timeLimit || 3600000; // За замовчуванням 1 година в мілісекундах
+    const isQuickTest = testData.isQuickTest || false;
+    const timePerQuestion = testData.timePerQuestion || 0;
+    const questionLimit = testData.questionLimit || questions.length;
+    const selectedQuestions = testData.randomQuestions
+      ? shuffleArray(questions).slice(0, Math.min(questionLimit, questions.length))
+      : questions.slice(0, Math.min(questionLimit, questions.length));
     const testStartTime = Date.now();
-    const testSessionId = `${req.user}_${testNumber}_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+    const testSessionId = `${testNumber}_${variant}_${testStartTime}_${Math.random().toString(36).substr(2, 5)}`;
 
-    // Збереження стану тесту в MongoDB
-    const testData = {
+    const newUserTest = {
       user: req.user,
-      testNumber,
-      questions,
+      testNumber, // Додаємо testNumber
+      questions: selectedQuestions,
       answers: {},
-      currentQuestion: 0,
-      startTime: testStartTime,
-      timeLimit: testNames[testNumber].timeLimit * 1000,
-      variant: userVariant,
-      isQuickTest: testNames[testNumber].isQuickTest,
-      timePerQuestion: testNames[testNumber].timePerQuestion,
-      testSessionId: testSessionId,
-      isSavingResult: false,
-      answerTimestamps: {},
+      selectedOptions: [],
+      testStartTime,
+      timeLimit,
+      isQuickTest,
+      timePerQuestion,
+      variant,
+      testSessionId,
+      suspiciousActivity: { timeAway: 0, switchCount: 0, responseTimes: [], activityCounts: [] },
       questionStartTime: {},
-      suspiciousActivity: { timeAway: 0, switchCount: 0, responseTimes: [], activityCounts: [] }
+      score: 0,
+      totalPoints: selectedQuestions.reduce((sum, q) => sum + q.points, 0),
+      scoresPerQuestion: [],
+      totalClicks: 0,
+      correctClicks: 0,
+      totalQuestions: selectedQuestions.length,
+      percentage: 0
     };
 
-    await db.collection('active_tests').updateOne(
-      { user: req.user },
-      { $set: testData },
-      { upsert: true }
-    );
-
-    const ipAddress = req.headers['x-forwarded-for'] || req.socket.remoteAddress;
-    await logActivity(req.user, `розпочав тест ${testNames[testNumber].name.replace(/"/g, '\\"')}`, ipAddress);
+    await db.collection('active_tests').insertOne(newUserTest);
+    logger.info('Тест розпочато', { user: req.user, testNumber, testSessionId, variant });
     res.redirect(`/test/question?index=0`);
   } catch (error) {
     logger.error('Помилка в /test', { message: error.message, stack: error.stack });
-    res.status(500).send('Помилка при завантаженні тесту: ' + error.message);
+    res.status(500).send('Помилка при запуску тесту. Спробуйте ще раз або зверніться до адміністратора.');
   } finally {
     const endTime = Date.now();
     logger.info('Маршрут /test виконано', { duration: `${endTime - startTime} мс` });
@@ -1392,7 +1349,12 @@ app.get('/test/question', checkAuth, async (req, res) => {
       return res.status(400).send('Тест не розпочато. Виберіть тест для початку.');
     }
 
-    const { testNumber, questions, answers, testStartTime, timeLimit, selectedOptions, testNames, isQuickTest, timePerQuestion, variant, testSessionId } = userTest;
+    const { testNumber, questions, answers, testStartTime, timeLimit, selectedOptions, isQuickTest, timePerQuestion, variant, testSessionId } = userTest;
+    if (!testNumber) {
+      logger.error('testNumber відсутній у userTest', { user: req.user, userTest });
+      return res.status(500).send('Помилка конфігурації тесту. Зверніться до адміністратора.');
+    }
+
     const index = parseInt(req.query.index) || 0;
     if (index < 0 || index >= questions.length) {
       return res.status(400).send('Невірний номер питання.');
@@ -1706,7 +1668,7 @@ app.get('/test/question', checkAuth, async (req, res) => {
           <script>
             const startTime = ${testStartTime};
             const timeLimit = ${timeLimit};
-            const totalTestTime = ${totalTestTime};
+            const totalTestTime = ${timeLimit}; // Синонім для зрозумілості
             const timerElement = document.getElementById('timer');
             const isQuickTest = ${isQuickTest};
             const timePerQuestion = ${timePerQuestion || 0};
@@ -2063,7 +2025,7 @@ app.get('/test/question', checkAuth, async (req, res) => {
             }
 
             document.addEventListener('mousemove', debounceMouseMove);
-            document.addEventLogger('keydown', debounceKeydown);
+            document.addEventListener('keydown', debounceKeydown);
 
             // Обробка кліків по варіантах відповідей
             document.querySelectorAll('.option-box:not(.draggable)').forEach(box => {
@@ -2194,7 +2156,7 @@ app.get('/test/question', checkAuth, async (req, res) => {
     `;
     res.send(html);
   } catch (error) {
-    logger.error('Помилка в /test/question', { message: error.message, stack: error.stack, testNumber, testNames: Object.keys(testNames) });
+    logger.error('Помилка в /test/question', { message: error.message, stack: error.stack, userTest });
     res.status(500).send('Внутрішня помилка сервера. Спробуйте ще раз або зверніться до адміністратора.');
   } finally {
     const endTime = Date.now();
