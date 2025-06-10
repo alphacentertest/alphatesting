@@ -1903,7 +1903,7 @@ app.get('/test/question', checkAuth, async (req, res) => {
               const remainingTime = Math.max(0, totalTestTime - elapsedTime); // Уникаємо від’ємних значень
               const minutes = Math.floor(remainingTime / 60).toString().padStart(2, '0');
               const seconds = (remainingTime % 60).toString().padStart(2, '0');
-              timerElement.textContent = remainingTime > 0 ? `Залишилось часу: ${minutes} хв ${seconds} с` : 'Час вичерпано';
+              timerElement.textContent = remainingTime > 0 ? 'Залишилось часу: ${minutes} хв ${seconds} с' : 'Час вичерпано';
               lastGlobalUpdateTime = now;
             }
 
