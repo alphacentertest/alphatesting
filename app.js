@@ -1,4 +1,3 @@
-```javascript
 // Імпорт необхідних модулів
 require('dotenv').config();
 const express = require('express');
@@ -1860,7 +1859,7 @@ app.get('/test/question', checkAuth, async (req, res) => {
 
                 if (!response.ok) {
                   if (attempt < maxAttempts) {
-                    console.warn(`Спроба ${attempt} невдала, повтор через 1с`);
+                    console.warn('Спроба ${attempt} невдала, повтор через 1с');
                     await new Promise(resolve => setTimeout(resolve, 1000));
                     return saveCurrentAnswer(index, attempt + 1, maxAttempts);
                   }
