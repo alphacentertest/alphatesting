@@ -1203,7 +1203,7 @@ const saveResult = async (user, testNumber, score, totalPoints, startTime, endTi
       }
 
       const duration = Math.max(1, Math.round((validatedEndTime - validatedStartTime) / 1000)); // Уникаємо 0
-      const timeOffset = 0; // Відключимо корекцію +3 години, щоб уникнути зсуву
+      const timeOffset = 0; // Відключимо корекцію +3 години
       const adjustedStartTime = new Date(validatedStartTime + timeOffset);
       const adjustedEndTime = new Date(validatedEndTime + timeOffset);
 
@@ -1224,14 +1224,14 @@ const saveResult = async (user, testNumber, score, totalPoints, startTime, endTi
         answers: Object.fromEntries(Object.entries(answers).sort((a, b) => parseInt(a[0]) - parseInt(b[0]))),
         scoresPerQuestion,
         suspiciousActivity: {
-          timeAway: Math.min(suspiciousActivity.timeAway || 0, duration), // Обмежуємо timeAway тривалістю
+          timeAway: Math.min(suspiciousActivity.timeAway || 0, duration),
           switchCount: suspiciousActivity.switchCount || 0,
           responseTimes: suspiciousActivity.responseTimes || []
         },
         variant: `Variant ${variant}`,
         testSessionId
       };
-      logger.info('Збереження результату в MongoDB з відповідями', { testName, answers: result.answers });
+      logger.info('Збереження результату в MongoDB', { testName, result });
       if (!db) {
         throw new Error('Підключення до MongoDB не встановлено');
       }
@@ -1366,8 +1366,8 @@ app.get('/test/question', checkAuth, async (req, res) => {
     }
 
     const { testNumber, questions, answers, testStartTime, timeLimit, selectedOptions, isQuickTest, timePerQuestion, variant, testSessionId } = userTest;
-    if (!testNumber) {
-      logger.error('testNumber відсутній у userTest', { user: req.user, userTest });
+    if (!testNumber || !testStartTime || !timeLimit) {
+      logger.error('Неповні дані userTest', { user: req.user, userTest });
       return res.status(500).send('Помилка конфігурації тесту. Зверніться до адміністратора.');
     }
 
@@ -1378,7 +1378,7 @@ app.get('/test/question', checkAuth, async (req, res) => {
 
     const q = questions[index];
     const elapsedTime = Math.floor((Date.now() - testStartTime) / 1000);
-    const remainingTime = Math.max(0, Math.floor((timeLimit / 1000) - elapsedTime));
+    const remainingTime = Math.max(0, Math.floor((timeLimit / 1000) - elapsedTime)); // Уникаємо від’ємних значень
     const minutes = Math.floor(remainingTime / 60).toString().padStart(2, '0');
     const seconds = (remainingTime % 60).toString().padStart(2, '0');
     const selectedOptionsString = JSON.stringify(selectedOptions || []);
@@ -1441,16 +1441,18 @@ app.get('/test/question', checkAuth, async (req, res) => {
             .blank-input { width: 100px; margin: 0 5px; padding: 5px; border: 1px solid #ccc; border-radius: 4px; display: inline-block; }
             .question-text { display: inline; }
             .image-error { color: red; font-style: italic; text-align: center; margin-bottom: 10px; }
-            /* Водяний знак */
+            /* Один водяний знак */
             body::before {
-              content: "Користувач: ${req.user}"; /* Один водяний знак, червоний */
+              content: "Користувач: ${req.user}"; /* Один червоний водяний знак */
               position: fixed;
               top: 10px;
               right: 10px;
               font-size: 12px;
-              color: rgba(255, 0, 0, 0.3); /* Червоний колір без мерехтіння */
+              color: rgba(255, 0, 0, 0.3); /* Червоний колір */
               pointer-events: none;
             }
+            /* Видаляємо зайвий водяний знак */
+            body::after { display: none; }
             @media (max-width: 400px) {
               h1 { font-size: 24px; }
               .progress-bar { gap: 2px; }
@@ -1900,14 +1902,18 @@ app.get('/test/question', checkAuth, async (req, res) => {
             function updateGlobalTimer() {
               const now = Date.now();
               const elapsedTime = Math.floor((now - startTime) / 1000);
-              const remainingTime = Math.max(0, totalTestTime - elapsedTime); // Уникаємо від’ємних значень
-              const minutes = Math.floor(remainingTime / 60).toString().padStart(2, '0');
-              const seconds = (remainingTime % 60).toString().padStart(2, '0');
-              timerElement.textContent = remainingTime > 0 ? 'Залишилось часу: ${minutes} хв ${seconds} с' : 'Час вичерпано';
+              const remainingTime = Math.max(0, totalTestTime / 1000 - elapsedTime); // Перерахунок у секунди
+              if (remainingTime > 0) {
+                const minutes = Math.floor(remainingTime / 60).toString().padStart(2, '0');
+                const seconds = (remainingTime % 60).toString().padStart(2, '0');
+                timerElement.textContent = `Залишилось часу: ${minutes} хв ${seconds} с`;
+              } else {
+                timerElement.textContent = 'Час вичерпано';
+              }
               lastGlobalUpdateTime = now;
             }
 
-            setInterval(updateGlobalTimer, 1000);
+            setInterval(updateGlobalTimer, 1000); // Оновлення кожну секунду
 
             // Таймер для швидкого тесту
             if (isQuickTest) {
@@ -2175,6 +2181,7 @@ app.get('/check-test-status', checkAuth, async (req, res) => {
   const startTime = Date.now();
   try {
     const userTest = await db.collection('active_tests').findOne({ user: req.user });
+    logger.info('Перевірка статусу тесту', { user: req.user, userTestExists: !!userTest });
     if (!userTest) {
       return res.status(400).json({ success: false, message: 'Тест не розпочато' });
     }
@@ -2191,10 +2198,8 @@ app.get('/check-test-status', checkAuth, async (req, res) => {
     }
 
     if (remainingTime <= 5 && remainingTime > 0) {
-      // Попередження за 5 секунд до завершення
       res.json({ success: true, remainingTime, warning: 'Тест завершиться через кілька секунд!' });
     } else if (remainingTime <= 0) {
-      // Автоматично завершуємо тест, якщо час вичерпано
       const score = userTest.score || 0;
       const totalPoints = userTest.totalPoints || questions.reduce((sum, q) => sum + q.points, 0);
       const scoresPerQuestion = userTest.scoresPerQuestion || questions.map((q, idx) => {
