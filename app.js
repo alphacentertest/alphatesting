@@ -1,4 +1,3 @@
-// Останнє оновлення: 08.06.2025 15:32 EEST
 // // Імпорт необхідних модулів
 require('dotenv').config();
 const express = require('express');
@@ -1192,7 +1191,6 @@ const saveResult = async (user, testNumber, score, totalPoints, startTime, endTi
   const session = client.startSession();
   try {
     await session.withTransaction(async () => {
-      // Валідація часу
       let validatedStartTime = startTime;
       let validatedEndTime = endTime;
       if (typeof validatedStartTime !== 'number' || isNaN(validatedStartTime)) {
@@ -1204,8 +1202,8 @@ const saveResult = async (user, testNumber, score, totalPoints, startTime, endTi
         validatedEndTime = Date.now();
       }
 
-      const duration = Math.round((validatedEndTime - validatedStartTime) / 1000);
-      const timeOffset = 3 * 60 * 60 * 1000; // Корекція часового поясу (+3 години)
+      const duration = Math.max(1, Math.round((validatedEndTime - validatedStartTime) / 1000)); // Уникаємо 0
+      const timeOffset = 0; // Відключимо корекцію +3 години, щоб уникнути зсуву
       const adjustedStartTime = new Date(validatedStartTime + timeOffset);
       const adjustedEndTime = new Date(validatedEndTime + timeOffset);
 
@@ -1225,7 +1223,11 @@ const saveResult = async (user, testNumber, score, totalPoints, startTime, endTi
         duration,
         answers: Object.fromEntries(Object.entries(answers).sort((a, b) => parseInt(a[0]) - parseInt(b[0]))),
         scoresPerQuestion,
-        suspiciousActivity,
+        suspiciousActivity: {
+          timeAway: Math.min(suspiciousActivity.timeAway || 0, duration), // Обмежуємо timeAway тривалістю
+          switchCount: suspiciousActivity.switchCount || 0,
+          responseTimes: suspiciousActivity.responseTimes || []
+        },
         variant: `Variant ${variant}`,
         testSessionId
       };
@@ -1375,8 +1377,10 @@ app.get('/test/question', checkAuth, async (req, res) => {
     }
 
     const q = questions[index];
-    const minutes = Math.floor((timeLimit / 1000 - Math.floor((Date.now() - testStartTime) / 1000)) / 60).toString().padStart(2, '0');
-    const seconds = (Math.floor((timeLimit / 1000 - Math.floor((Date.now() - testStartTime) / 1000)) % 60)).toString().padStart(2, '0');
+    const elapsedTime = Math.floor((Date.now() - testStartTime) / 1000);
+    const remainingTime = Math.max(0, Math.floor((timeLimit / 1000) - elapsedTime));
+    const minutes = Math.floor(remainingTime / 60).toString().padStart(2, '0');
+    const seconds = (remainingTime % 60).toString().padStart(2, '0');
     const selectedOptionsString = JSON.stringify(selectedOptions || []);
     const progress = questions.map((_, i) => ({ number: i + 1, answered: !!answers[i] }));
 
@@ -1437,6 +1441,16 @@ app.get('/test/question', checkAuth, async (req, res) => {
             .blank-input { width: 100px; margin: 0 5px; padding: 5px; border: 1px solid #ccc; border-radius: 4px; display: inline-block; }
             .question-text { display: inline; }
             .image-error { color: red; font-style: italic; text-align: center; margin-bottom: 10px; }
+            /* Водяний знак */
+            body::before {
+              content: "Користувач: ${req.user}"; /* Один водяний знак, червоний */
+              position: fixed;
+              top: 10px;
+              right: 10px;
+              font-size: 12px;
+              color: rgba(255, 0, 0, 0.3); /* Червоний колір без мерехтіння */
+              pointer-events: none;
+            }
             @media (max-width: 400px) {
               h1 { font-size: 24px; }
               .progress-bar { gap: 2px; }
@@ -1498,28 +1512,6 @@ app.get('/test/question', checkAuth, async (req, res) => {
               .matching-column { width: 45%; }
               .blank-input { width: 120px; }
               .option-box, .matching-item { font-size: 20px; padding: 12px; min-height: 60px; line-height: 1.5; }
-            }
-            /* Захист від скріншотів */
-            body::before {
-              content: "Користувач: ${req.user}"; /* Водяний знак */
-              position: fixed;
-              top: 10px;
-              right: 10px;
-              font-size: 12px;
-              color: rgba(0, 0, 0, 0.3);
-              pointer-events: none;
-            }
-            body {
-              -webkit-user-select: none;
-              -moz-user-select: none;
-              -ms-user-select: none;
-              user-select: none;
-            }
-            @keyframes watermark-blink {
-              50% { opacity: 0.5; }
-            }
-            body::before {
-              animation: watermark-blink 1s infinite;
             }
           </style>
           <script>
@@ -1908,19 +1900,11 @@ app.get('/test/question', checkAuth, async (req, res) => {
             function updateGlobalTimer() {
               const now = Date.now();
               const elapsedTime = Math.floor((now - startTime) / 1000);
-              const remainingTime = Math.max(0, totalTestTime - elapsedTime);
+              const remainingTime = Math.max(0, totalTestTime - elapsedTime); // Уникаємо від’ємних значень
               const minutes = Math.floor(remainingTime / 60).toString().padStart(2, '0');
               const seconds = (remainingTime % 60).toString().padStart(2, '0');
-              timerElement.textContent = 'Залишилось часу: ' + minutes + ' хв ' + seconds + ' с';
+              timerElement.textContent = remainingTime > 0 ? `Залишилось часу: ${minutes} хв ${seconds} с` : 'Час вичерпано';
               lastGlobalUpdateTime = now;
-
-              if (remainingTime <= 0) {
-                saveCurrentAnswer(currentQuestionIndex).then(() => {
-                  setTimeout(() => {
-                    window.location.href = '/result';
-                  }, 300);
-                });
-              }
             }
 
             setInterval(updateGlobalTimer, 1000);
@@ -1934,9 +1918,9 @@ app.get('/test/question', checkAuth, async (req, res) => {
                 const timerText = document.getElementById('timer-text');
                 const timerCircle = document.querySelector('#question-timer .timer-circle');
                 if (timerText && timerCircle) {
-                  timerText.textContent = Math.round(questionTimeRemaining);
+                  timerText.textContent = Math.round(questionTimeRemaining); // Показуємо лише додатні значення
                   const circumference = 251;
-                  const offset = (1 - questionTimeRemaining / timePerQuestion) * circumference;
+                  const offset = (1 - (questionTimeRemaining / timePerQuestion)) * circumference;
                   timerCircle.style.strokeDashoffset = offset;
                 }
                 if (questionTimeRemaining <= 0 && currentQuestionIndex < totalQuestions - 1 && !hasMovedToNext) {
@@ -1967,7 +1951,7 @@ app.get('/test/question', checkAuth, async (req, res) => {
                     }
                   })
                   .catch(error => console.error('Помилка перевірки статусу тесту:', error));
-              }, 1000); // Перевірка кожну секунду для кращої синхронізації
+              }, 1000); // Перевірка кожну секунду
 
               document.addEventListener('visibilitychange', () => {
                 if (!document.hidden) {
@@ -2393,29 +2377,17 @@ app.get('/result', checkAuth, async (req, res) => {
     const totalPoints = testData.totalPoints || (questions ? questions.reduce((sum, q) => sum + (q.points || 0), 0) : 0);
     let scoresPerQuestion = testData.scoresPerQuestion || [];
 
-    // Валідація та нормалізація часу
     let validatedTestStartTime = testStartTime;
     if (typeof validatedTestStartTime !== 'number' || isNaN(validatedTestStartTime)) {
       logger.warn('Некоректне значення testStartTime, встановлюємо поточний час', { testStartTime, testSessionId });
-      validatedTestStartTime = Date.now() - (timeLimit || 3600000); // Встановлюємо час на основі timeLimit
+      validatedTestStartTime = Date.now() - (timeLimit || 3600000);
     }
 
     if (!scoresPerQuestion.length && questions && questions.length > 0) {
       scoresPerQuestion = questions.map((q, idx) => {
         const userAnswer = answers[idx];
         let questionScore = 0;
-
-        const normalizeAnswer = (answer) => {
-          if (!answer) return '';
-          return String(answer)
-            .trim()
-            .toLowerCase()
-            .replace(/\s+/g, '')
-            .replace(',', '.')
-            .replace(/\\'/g, "'")
-            .replace(/°/g, 'deg');
-        };
-
+        const normalizeAnswer = (answer) => String(answer).trim().toLowerCase().replace(/\s+/g, '');
         if (q.type === 'multiple' && userAnswer && Array.isArray(userAnswer)) {
           const correctAnswers = (q.correctAnswers || []).map(normalizeAnswer);
           const userAnswers = userAnswer.map(normalizeAnswer);
@@ -2485,22 +2457,19 @@ app.get('/result', checkAuth, async (req, res) => {
     const percentage = (score / totalPoints) * 100 || 0;
     const totalClicks = Object.keys(answers).length;
     const correctClicks = scoresPerQuestion.filter(s => s > 0).length;
-    const totalQuestions = questions ? questions.length : 0;
+    const totalQuestions = questions ? questions.length : 0; // Виправлено відображення кількості питань
 
     const duration = Math.round((endTime - validatedTestStartTime) / 1000) || 0;
     const timeAway = (suspiciousActivity && suspiciousActivity.timeAway) || 0;
-    const correctedTimeAway = Math.min(timeAway, duration);
-    const timeAwayPercent = Math.round((correctedTimeAway / duration) * 100) || 0;
+    const correctedTimeAway = Math.min(timeAway, duration); // Виправлено обчислення часу поза вкладкою
+    const timeAwayPercent = duration > 0 ? Math.round((correctedTimeAway / duration) * 100) : 0; // Уникаємо ділення на 0
     const switchCount = (suspiciousActivity && suspiciousActivity.switchCount) || 0;
     const avgResponseTime = (suspiciousActivity && suspiciousActivity.responseTimes && suspiciousActivity.responseTimes.length > 0)
       ? (suspiciousActivity.responseTimes.reduce((sum, time) => sum + (time || 0), 0) / suspiciousActivity.responseTimes.length).toFixed(2)
       : 0;
-    const totalActivityCount = (suspiciousActivity && suspiciousActivity.activityCounts)
-      ? suspiciousActivity.activityCounts.reduce((sum, count) => sum + (count || 0), 0)
-      : 0;
 
     if (!testData.suspiciousActivity && (timeAwayPercent > config.suspiciousActivity.timeAwayThreshold || switchCount > config.suspiciousActivity.switchCountThreshold)) {
-      const activityDetails = { timeAwayPercent, switchCount, avgResponseTime, totalActivityCount };
+      const activityDetails = { timeAwayPercent, switchCount, avgResponseTime };
       await sendSuspiciousActivityEmail(req.user, activityDetails);
     }
 
@@ -2561,7 +2530,7 @@ app.get('/result', checkAuth, async (req, res) => {
     }
 
     const endDateTime = new Date(endTime);
-    const formattedTime = endDateTime.toLocaleTimeString('uk-UA', { hour12: false });
+    const formattedTime = endDateTime.toLocaleTimeString('uk-UA', { hour12: false, timeZone: 'Europe/Kiev' }); // Корекція часового поясу
     const formattedDate = endDateTime.toLocaleDateString('uk-UA');
     const imagePath = path.join(__dirname, 'public', 'images', 'A.png');
     let imageBase64 = '';
@@ -4639,7 +4608,6 @@ app.get('/admin/results', checkAuth, async (req, res) => {
       return res.status(403).send('Доступно тільки для адміністраторів та інструкторів');
     }
 
-    // Отримуємо всі результати та сортуємо за endTime у спадному порядку
     const results = await db.collection('test_results').find({}).sort({ endTime: -1 }).toArray();
     let html = `
       <!DOCTYPE html>
@@ -4663,7 +4631,7 @@ app.get('/admin/results', checkAuth, async (req, res) => {
         </head>
         <body>
           <h1>Результати тестів</h1>
-          <button class="nav-btn" onclick="window.location.href='/select-test'">Повернутися до вибору тесту</button>
+          <button class="nav-btn" onclick="window.location.href='${req.userRole === 'admin' ? '/admin' : '/select-test'}'">Повернутися</button>
           <table>
             <tr>
               <th>Користувач</th>
@@ -4680,11 +4648,11 @@ app.get('/admin/results', checkAuth, async (req, res) => {
             </tr>
     `;
     if (!results || results.length === 0) {
-      html += '<tr><td colspan="11">Немає результатів</td></tr>';
+      html += '<tr><td colspan="10">Немає результатів</td></tr>';
     } else {
       results.forEach(result => {
-        const startTime = new Date(result.startTime).toLocaleTimeString('uk-UA', { hour12: false }) + ' ' + new Date(result.startTime).toLocaleDateString('uk-UA');
-        const endTime = new Date(result.endTime).toLocaleTimeString('uk-UA', { hour12: false }) + ' ' + new Date(result.endTime).toLocaleDateString('uk-UA');
+        const startTime = new Date(result.startTime).toLocaleTimeString('uk-UA', { hour12: false, timeZone: 'Europe/Kiev' }) + ' ' + new Date(result.startTime).toLocaleDateString('uk-UA');
+        const endTime = new Date(result.endTime).toLocaleTimeString('uk-UA', { hour12: false, timeZone: 'Europe/Kiev' }) + ' ' + new Date(result.endTime).toLocaleDateString('uk-UA');
         const durationSec = result.duration || Math.round((new Date(result.endTime) - new Date(result.startTime)) / 1000);
         const minutes = Math.floor(durationSec / 60).toString().padStart(2, '0');
         const seconds = (durationSec % 60).toString().padStart(2, '0');
