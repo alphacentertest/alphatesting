@@ -297,6 +297,7 @@ app.use((req, res, next) => {
   const originalSend = res.send;
   res.send = function (body) {
     if (typeof body === 'string' && body.includes('</body>') && req.user) {
+      logger.info('Додавання водяного знака', { user: req.user });
       const watermarkScript = `
         <style>
           .watermark {
@@ -328,6 +329,8 @@ app.use((req, res, next) => {
         </script>
       `;
       body = body.replace('</body>', `${watermarkScript}</body>`);
+    } else {
+      logger.debug('Водяний знак не додано', { hasBody: typeof body === 'string', hasBodyTag: body?.includes('</body>'), hasUser: !!req.user });
     }
     return originalSend.call(this, body);
   };
