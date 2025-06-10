@@ -1194,20 +1194,20 @@ const saveResult = async (user, testNumber, score, totalPoints, startTime, endTi
       let validatedStartTime = startTime;
       let validatedEndTime = endTime;
       if (typeof validatedStartTime !== 'number' || isNaN(validatedStartTime)) {
-        logger.warn('Некоректне значення startTime, встановлюємо поточний час', { startTime, testSessionId });
-        validatedStartTime = Date.now() - 3600000; // За замовчуванням 1 година назад
+        logger.warn('Invalid startTime, setting to current time minus 1 hour', { startTime, testSessionId });
+        validatedStartTime = Date.now() - 3600000;
       }
       if (typeof validatedEndTime !== 'number' || isNaN(validatedEndTime)) {
-        logger.warn('Некоректне значення endTime, встановлюємо поточний час', { endTime, testSessionId });
+        logger.warn('Invalid endTime, setting to current time', { endTime, testSessionId });
         validatedEndTime = Date.now();
       }
 
-      const duration = Math.max(1, Math.round((validatedEndTime - validatedStartTime) / 1000)); // Уникаємо 0
-      const timeOffset = 0; // Відключимо корекцію +3 години
+      const duration = Math.max(1, Math.round((validatedEndTime - validatedStartTime) / 1000));
+      const timeOffset = 0; // No timezone offset
       const adjustedStartTime = new Date(validatedStartTime + timeOffset);
       const adjustedEndTime = new Date(validatedEndTime + timeOffset);
 
-      const testName = testNames[testNumber]?.name || `Тест ${testNumber}`;
+      const testName = testNames[testNumber]?.name || `Test ${testNumber}`;
       const result = {
         user,
         testNumber,
@@ -1231,20 +1231,20 @@ const saveResult = async (user, testNumber, score, totalPoints, startTime, endTi
         variant: `Variant ${variant}`,
         testSessionId
       };
-      logger.info('Збереження результату в MongoDB', { testName, result });
+      logger.info('Saving result to MongoDB', { testName, result });
       if (!db) {
-        throw new Error('Підключення до MongoDB не встановлено');
+        throw new Error('MongoDB connection not established');
       }
       await db.collection('test_results').insertOne(result, { session });
-      await logActivity(user, `завершив тест ${testName.replace(/"/g, '\\"')} з результатом ${Math.round(percentage)}%`, ipAddress, { percentage: Math.round(percentage) }, session);
+      await logActivity(user, `completed test ${testName.replace(/"/g, '\\"')} with result ${Math.round(percentage)}%`, ipAddress, { percentage: Math.round(percentage) }, session);
     });
   } catch (error) {
-    logger.error('Помилка збереження результату та логу активності', { message: error.message, stack: error.stack });
+    logger.error('Error saving result and activity log', { message: error.message, stack: error.stack });
     throw error;
   } finally {
     await session.endSession();
     const endTimeLog = Date.now();
-    logger.info('saveResult виконано', { duration: `${endTimeLog - startTimeLog} мс` });
+    logger.info('saveResult executed', { duration: `${endTimeLog - startTimeLog} ms` });
   }
 };
 
@@ -1362,23 +1362,23 @@ app.get('/test/question', checkAuth, async (req, res) => {
   try {
     const userTest = await db.collection('active_tests').findOne({ user: req.user });
     if (!userTest) {
-      return res.status(400).send('Тест не розпочато. Виберіть тест для початку.');
+      return res.status(400).send('Test not started. Please select a test to begin.');
     }
 
     const { testNumber, questions, answers, testStartTime, timeLimit, selectedOptions, isQuickTest, timePerQuestion, variant, testSessionId } = userTest;
     if (!testNumber || !testStartTime || !timeLimit) {
-      logger.error('Неповні дані userTest', { user: req.user, userTest });
-      return res.status(500).send('Помилка конфігурації тесту. Зверніться до адміністратора.');
+      logger.error('Incomplete userTest data', { user: req.user, userTest });
+      return res.status(500).send('Test configuration error. Contact administrator.');
     }
 
     const index = parseInt(req.query.index) || 0;
     if (index < 0 || index >= questions.length) {
-      return res.status(400).send('Невірний номер питання.');
+      return res.status(400).send('Invalid question number.');
     }
 
     const q = questions[index];
     const elapsedTime = Math.floor((Date.now() - testStartTime) / 1000);
-    const remainingTime = Math.max(0, Math.floor((timeLimit / 1000) - elapsedTime)); // Уникаємо від’ємних значень
+    const remainingTime = Math.max(0, Math.floor((timeLimit / 1000) - elapsedTime)); // Avoid negative values
     const minutes = Math.floor(remainingTime / 60).toString().padStart(2, '0');
     const seconds = (remainingTime % 60).toString().padStart(2, '0');
     const selectedOptionsString = JSON.stringify(selectedOptions || []);
@@ -1399,7 +1399,7 @@ app.get('/test/question', checkAuth, async (req, res) => {
         <head>
           <meta charset="UTF-8">
           <meta name="viewport" content="width=device-width, initial-scale=1.0">
-          <title>${testNames[testNumber]?.name.replace(/"/g, '\\"') || 'Невідомий тест'}</title>
+          <title>${testNames[testNumber]?.name.replace(/"/g, '\\"') || 'Unknown Test'}</title>
           <script src="https://cdnjs.cloudflare.com/ajax/libs/Sortable/1.15.0/Sortable.min.js"></script>
           <style>
             body { font-family: Arial, sans-serif; margin: 0; padding: 20px; padding-bottom: 80px; background-color: #f0f0f0; user-select: none; }
@@ -1443,7 +1443,7 @@ app.get('/test/question', checkAuth, async (req, res) => {
             .image-error { color: red; font-style: italic; text-align: center; margin-bottom: 10px; }
             /* Один водяний знак */
             body::before {
-              content: "Користувач: ${req.user}"; /* Один червоний водяний знак */
+              content: "User: ${req.user}"; /* Англійська версія для уникнення помилок */
               position: fixed;
               top: 10px;
               right: 10px;
@@ -1451,8 +1451,8 @@ app.get('/test/question', checkAuth, async (req, res) => {
               color: rgba(255, 0, 0, 0.3); /* Червоний колір */
               pointer-events: none;
             }
-            /* Видаляємо зайвий водяний знак */
-            body::after { display: none; }
+            /* Видаляємо всі інші водяні знаки */
+            body::after { display: none !important; }
             @media (max-width: 400px) {
               h1 { font-size: 24px; }
               .progress-bar { gap: 2px; }
@@ -1532,8 +1532,8 @@ app.get('/test/question', checkAuth, async (req, res) => {
           </script>
         </head>
         <body>
-          <h1>${testNames[testNumber]?.name.replace(/"/g, '\\"') || 'Невідомий тест'}</h1>
-          <div id="timer">Залишилось часу: ${minutes} хв ${seconds} с</div>
+          <h1>${testNames[testNumber]?.name.replace(/"/g, '\\"') || 'Unknown Test'}</h1>
+          <div id="timer">Time left: ${minutes} min ${seconds} sec</div> <!-- Англійська версія -->
           <div class="progress-bar">
             ${progress.map((p, j) => `
               <div class="progress-circle ${p.answered ? 'answered' : 'unanswered'}">${p.number}</div>
@@ -1559,31 +1559,31 @@ app.get('/test/question', checkAuth, async (req, res) => {
       html += `
         <div id="image-container">
           <img src="${q.picture}" alt="Picture" onerror="this.style.display='none'; document.getElementById('image-error').style.display='block';">
-          <div id="image-error" class="image-error" style="display: none;">Зображення недоступне</div>
+          <div id="image-error" class="image-error" style="display: none;">Image unavailable</div>
         </div>
       `;
     }
 
-    const instructionText = q.type === 'multiple' ? 'Виберіть усі правильні відповіді' :
-                           q.type === 'input' ? 'Введіть правильну відповідь' :
-                           q.type === 'ordering' ? 'Розташуйте відповіді у правильній послідовності' :
-                           q.type === 'matching' ? 'Складіть правильні пари, перетягуючи елементи' :
-                           q.type === 'fillblank' ? 'Заповніть пропуски у реченні' :
-                           q.type === 'singlechoice' ? 'Виберіть правильну відповідь' : '';
+    const instructionText = q.type === 'multiple' ? 'Select all correct answers' :
+                           q.type === 'input' ? 'Enter the correct answer' :
+                           q.type === 'ordering' ? 'Arrange answers in the correct order' :
+                           q.type === 'matching' ? 'Match pairs by dragging items' :
+                           q.type === 'fillblank' ? 'Fill in the blanks in the sentence' :
+                           q.type === 'singlechoice' ? 'Select the correct answer' : '';
     html += `
             <div class="question-box">
               <h2 id="question-text">${index + 1}. `;
     
     if (q.type === 'fillblank') {
       const userAnswers = Array.isArray(answers[index]) ? answers[index] : [];
-      logger.info(`Частини питання fillblank для індексу ${index}`, { parts: q.text.split('___') });
+      logger.info(`Fillblank question parts for index ${index}`, { parts: q.text.split('___') });
       const parts = q.text.split('___');
       let inputHtml = '';
       parts.forEach((part, i) => {
         inputHtml += `<span class="question-text">${part}</span>`;
         if (i < parts.length - 1) {
           const userAnswer = userAnswers[i] || '';
-          inputHtml += `<input type="text" class="blank-input" id="blank_${i}" value="${userAnswer.replace(/"/g, '\\"')}" placeholder="Введіть відповідь" autocomplete="off">`;
+          inputHtml += `<input type="text" class="blank-input" id="blank_${i}" value="${userAnswer.replace(/"/g, '\\"')}" placeholder="Enter answer" autocomplete="off">`;
         }
       });
       html += inputHtml;
@@ -1616,19 +1616,19 @@ app.get('/test/question', checkAuth, async (req, res) => {
               const matchedLeft = userPairs.find(pair => pair[1] === item)?.[0] || '';
               return `
                 <div class="matching-item droppable" data-value="${escapedItem}">
-                  ${item}${matchedLeft ? `<span class="matched"> (Зіставлено: ${matchedLeft})</span>` : ''}
+                  ${item}${matchedLeft ? `<span class="matched"> (Matched: ${matchedLeft})</span>` : ''}
                 </div>
               `;
             }).join('')}
           </div>
         </div>
-        <button onclick="resetMatchingPairs()">Скинути зіставлення</button>
+        <button onclick="resetMatchingPairs()">Reset matches</button>
       `;
     } else if (!q.options || q.options.length === 0) {
       if (q.type !== 'fillblank') {
         const userAnswer = answers[index] || '';
         html += `
-          <input type="text" name="q${index}" id="q${index}_input" value="${userAnswer}" placeholder="Введіть відповідь" class="answer-option" autocomplete="off"><br>
+          <input type="text" name="q${index}" id="q${index}_input" value="${userAnswer}" placeholder="Enter answer" class="answer-option" autocomplete="off"><br>
         `;
       }
     } else {
@@ -1663,19 +1663,19 @@ app.get('/test/question', checkAuth, async (req, res) => {
           </div>
           <div class="button-container">
             ${!isQuickTest ? `
-              <button class="back-btn" ${index === 0 ? 'disabled' : ''} onclick="window.location.href='/test/question?index=${index - 1}'">Назад</button>
+              <button class="back-btn" ${index === 0 ? 'disabled' : ''} onclick="window.location.href='/test/question?index=${index - 1}'">Back</button>
             ` : ''}
-            <button id="submit-answer" class="next-btn" ${index === questions.length - 1 ? 'disabled' : ''} onclick="saveAndNext(${index})">Далі</button>
-            <button class="finish-btn" onclick="showConfirm(${index})">Завершити тест</button>
+            <button id="submit-answer" class="next-btn" ${index === questions.length - 1 ? 'disabled' : ''} onclick="saveAndNext(${index})">Next</button>
+            <button class="finish-btn" onclick="showConfirm(${index})">Finish Test</button>
           </div>
           <div id="confirm-modal">
-            <h2>Ви дійсно бажаєте завершити тест?</h2>
-            <button onclick="finishTest(${index})">Так</button>
-            <button onclick="hideConfirm()">Ні</button>
+            <h2>Are you sure you want to finish the test?</h2>
+            <button onclick="finishTest(${index})">Yes</button>
+            <button onclick="hideConfirm()">No</button>
           </div>
           <script>
             const startTime = ${testStartTime};
-            const timeLimit = ${timeLimit};
+            const timeLimit = ${timeLimit}; // У секундах
             const totalTestTime = ${timeLimit}; // Синонім для зрозумілості
             const timerElement = document.getElementById('timer');
             const isQuickTest = ${isQuickTest};
@@ -1731,7 +1731,7 @@ app.get('/test/question', checkAuth, async (req, res) => {
                 formData.append('activityCount', activityCount);
                 formData.append('_csrf', '${res.locals._csrf}');
 
-                console.log('Автозбереження відповіді перед завершенням тесту:', { index, answers: safeAnswer, responseTime });
+                console.log('Auto-saving answer before test end:', { index, answers: safeAnswer, responseTime });
 
                 const response = await fetch('/answer', {
                   method: 'POST',
@@ -1741,15 +1741,15 @@ app.get('/test/question', checkAuth, async (req, res) => {
 
                 if (!response.ok) {
                   const errorText = await response.text();
-                  throw new Error('HTTP-помилка! статус: ' + response.status + ' - ' + errorText);
+                  throw new Error('HTTP error! status: ' + response.status + ' - ' + errorText);
                 }
 
                 const result = await response.json();
                 if (!result.success) {
-                  console.error('Помилка автозбереження відповіді:', result.error);
+                  console.error('Auto-save answer error:', result.error);
                 }
               } catch (error) {
-                console.error('Помилка в автозбереженні відповіді:', error);
+                console.error('Error in auto-saving answer:', error);
               } finally {
                 isSaving = false;
               }
@@ -1787,7 +1787,7 @@ app.get('/test/question', checkAuth, async (req, res) => {
                 formData.append('activityCount', activityCount);
                 formData.append('_csrf', '${res.locals._csrf}');
 
-                console.log('Збереження даних у saveAndNext:', { timeAway, switchCount, responseTime, answer: safeAnswer });
+                console.log('Saving data in saveAndNext:', { timeAway, switchCount, responseTime, answer: safeAnswer });
 
                 const response = await fetch('/answer', {
                   method: 'POST',
@@ -1796,7 +1796,7 @@ app.get('/test/question', checkAuth, async (req, res) => {
                 });
 
                 if (!response.ok) {
-                  throw new Error('HTTP-помилка! статус: ' + response.status);
+                  throw new Error('HTTP error! status: ' + response.status);
                 }
 
                 const result = await response.json();
@@ -1816,12 +1816,12 @@ app.get('/test/question', checkAuth, async (req, res) => {
                     }
                   });
                 } else {
-                  console.error('Помилка збереження відповіді:', result.error);
-                  alert('Помилка збереження відповіді: ' + result.error);
+                  console.error('Save answer error:', result.error);
+                  alert('Error saving answer: ' + result.error);
                 }
               } catch (error) {
-                console.error('Помилка в saveAndNext:', error);
-                alert('Не вдалося зберегти відповідь: ' + error.message);
+                console.error('Error in saveAndNext:', error);
+                alert('Failed to save answer: ' + error.message);
               } finally {
                 isSaving = false;
               }
@@ -1869,7 +1869,7 @@ app.get('/test/question', checkAuth, async (req, res) => {
                 formData.append('activityCount', activityCount);
                 formData.append('_csrf', '${res.locals._csrf}');
 
-                console.log('Збереження даних у finishTest:', { timeAway, switchCount, responseTime, answer: safeAnswer });
+                console.log('Saving data in finishTest:', { timeAway, switchCount, responseTime, answer: safeAnswer });
 
                 const response = await fetch('/answer', {
                   method: 'POST',
@@ -1878,7 +1878,7 @@ app.get('/test/question', checkAuth, async (req, res) => {
                 });
 
                 if (!response.ok) {
-                  throw new Error('HTTP-помилка! статус: ' + response.status);
+                  throw new Error('HTTP error! status: ' + response.status);
                 }
 
                 const result = await response.json();
@@ -1887,12 +1887,12 @@ app.get('/test/question', checkAuth, async (req, res) => {
                     window.location.href = '/result';
                   }, 300);
                 } else {
-                  console.error('Помилка завершення тесту:', result.error);
-                  alert('Помилка завершення тесту: ' + result.error);
+                  console.error('Finish test error:', result.error);
+                  alert('Error finishing test: ' + result.error);
                 }
               } catch (error) {
-                console.error('Помилка в finishTest:', error);
-                alert('Не вдалося завершити тест: ' + error.message);
+                console.error('Error in finishTest:', error);
+                alert('Failed to finish test: ' + error.message);
               } finally {
                 isSaving = false;
               }
@@ -1902,18 +1902,23 @@ app.get('/test/question', checkAuth, async (req, res) => {
             function updateGlobalTimer() {
               const now = Date.now();
               const elapsedTime = Math.floor((now - startTime) / 1000);
-              const remainingTime = Math.max(0, totalTestTime / 1000 - elapsedTime); // Перерахунок у секунди
+              const remainingTime = Math.max(0, (totalTestTime / 1000) - elapsedTime); // Corrected to seconds
               if (remainingTime > 0) {
                 const minutes = Math.floor(remainingTime / 60).toString().padStart(2, '0');
                 const seconds = (remainingTime % 60).toString().padStart(2, '0');
-                timerElement.textContent = 'Залишилось часу: ${minutes} хв ${seconds} с';
+                timerElement.textContent = `Time left: ${minutes} min ${seconds} sec`;
               } else {
-                timerElement.textContent = 'Час вичерпано';
+                timerElement.textContent = 'Time exhausted';
+                saveCurrentAnswer(currentQuestionIndex).then(() => {
+                  setTimeout(() => {
+                    window.location.href = '/result';
+                  }, 300);
+                });
               }
               lastGlobalUpdateTime = now;
             }
 
-            setInterval(updateGlobalTimer, 1000); // Оновлення кожну секунду
+            setInterval(updateGlobalTimer, 1000); // Update every second
 
             // Таймер для швидкого тесту
             if (isQuickTest) {
@@ -1924,7 +1929,7 @@ app.get('/test/question', checkAuth, async (req, res) => {
                 const timerText = document.getElementById('timer-text');
                 const timerCircle = document.querySelector('#question-timer .timer-circle');
                 if (timerText && timerCircle) {
-                  timerText.textContent = Math.round(questionTimeRemaining); // Показуємо лише додатні значення
+                  timerText.textContent = Math.round(questionTimeRemaining);
                   const circumference = 251;
                   const offset = (1 - (questionTimeRemaining / timePerQuestion)) * circumference;
                   timerCircle.style.strokeDashoffset = offset;
@@ -1950,14 +1955,14 @@ app.get('/test/question', checkAuth, async (req, res) => {
                   .then(response => response.json())
                   .then(data => {
                     if (data.warning) {
-                      alert(data.warning); // Показуємо попередження
+                      alert(data.warning);
                     }
                     if (data.redirect) {
                       window.location.href = data.redirect;
                     }
                   })
-                  .catch(error => console.error('Помилка перевірки статусу тесту:', error));
-              }, 1000); // Перевірка кожну секунду
+                  .catch(error => console.error('Error checking test status:', error));
+              }, 1000);
 
               document.addEventListener('visibilitychange', () => {
                 if (!document.hidden) {
@@ -1974,7 +1979,7 @@ app.get('/test/question', checkAuth, async (req, res) => {
                   if (lastBlurTime === 0) {
                     lastBlurTime = performance.now();
                     switchCount = Math.min(switchCount + 1, 1000);
-                    console.log('Вкладка втратила фокус, початок підрахунку часу:', lastBlurTime, 'Кількість переключень:', switchCount);
+                    console.log('Tab lost focus, starting time count:', lastBlurTime, 'Switch count:', switchCount);
                   }
                   blurTimeout = null;
                 }, blurDebounceDelay);
@@ -1991,7 +1996,7 @@ app.get('/test/question', checkAuth, async (req, res) => {
                 const now = performance.now();
                 const awayDuration = Math.min((now - lastBlurTime) / 1000, 60);
                 timeAway += awayDuration;
-                console.log('Вкладка отримала фокус, накопичено часу поза вкладкою:', awayDuration, 'Загальний timeAway:', timeAway);
+                console.log('Tab regained focus, accumulated away time:', awayDuration, 'Total timeAway:', timeAway);
                 lastBlurTime = 0;
                 saveCurrentAnswer(currentQuestionIndex);
               }
@@ -2004,7 +2009,7 @@ app.get('/test/question', checkAuth, async (req, res) => {
                 const timeSinceLastActivity = (now - lastActivityTime) / 1000;
                 if (timeSinceLastActivity > 300) {
                   questionStartTime = now;
-                  console.log('Виявлено тривалий простій, скидання questionStartTime:', questionStartTime);
+                  console.log('Long inactivity detected, resetting questionStartTime:', questionStartTime);
                   fetch('/set-question-start-time?index=' + currentQuestionIndex, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
@@ -2130,7 +2135,7 @@ app.get('/test/question', checkAuth, async (req, res) => {
                       const leftValue = draggable.dataset.value || '';
                       const rightValue = item.dataset.value || '';
                       if (leftValue && rightValue) {
-                        item.innerHTML = rightValue + ' <span class="matched"> (Зіставлено: ' + leftValue + ')</span>';
+                        item.innerHTML = rightValue + ' <span class="matched"> (Matched: ' + leftValue + ')</span>';
                         const leftColumn = document.getElementById('left-column');
                         const rightColumn = document.getElementById('right-column');
                         const leftItems = Array.from(leftColumn.children);
@@ -2155,25 +2160,25 @@ app.get('/test/question', checkAuth, async (req, res) => {
                 .then(response => response.json())
                 .then(data => {
                   if (data.warning) {
-                    alert(data.warning); // Показуємо попередження
+                    alert(data.warning);
                   }
                   if (data.redirect) {
                     window.location.href = data.redirect;
                   }
                 })
-                .catch(error => console.error('Помилка перевірки статусу тесту:', error));
-            }, 5000); // Перевірка кожні 5 секунд
+                .catch(error => console.error('Error checking test status:', error));
+            }, 5000);
           </script>
         </body>
       </html>
     `;
     res.send(html);
   } catch (error) {
-    logger.error('Помилка в /test/question', { message: error.message, stack: error.stack, userTest });
-    res.status(500).send('Внутрішня помилка сервера. Спробуйте ще раз або зверніться до адміністратора.');
+    logger.error('Error in /test/question', { message: error.message, stack: error.stack, userTest });
+    res.status(500).send('Internal server error. Try again or contact administrator.');
   } finally {
     const endTime = Date.now();
-    logger.info('Маршрут /test/question виконано', { duration: `${endTime - startTime} мс` });
+    logger.info('Route /test/question executed', { duration: `${endTime - startTime} ms` });
   }
 });
 
@@ -2181,9 +2186,9 @@ app.get('/check-test-status', checkAuth, async (req, res) => {
   const startTime = Date.now();
   try {
     const userTest = await db.collection('active_tests').findOne({ user: req.user });
-    logger.info('Перевірка статусу тесту', { user: req.user, userTestExists: !!userTest });
+    logger.info('Checking test status', { user: req.user, userTestExists: !!userTest, testStartTime: userTest?.startTime, timeLimit: userTest?.timeLimit });
     if (!userTest) {
-      return res.status(400).json({ success: false, message: 'Тест не розпочато' });
+      return res.status(400).json({ success: false, message: 'Test not started' });
     }
 
     const { startTime: testStartTime, timeLimit, isQuickTest, timePerQuestion, currentQuestion, questions, answers, suspiciousActivity, variant, testSessionId, testNumber } = userTest;
@@ -2192,13 +2197,14 @@ app.get('/check-test-status', checkAuth, async (req, res) => {
     let remainingTime = timeLimit / 1000;
 
     if (isQuickTest) {
-      remainingTime = questions.length * timePerQuestion - elapsedTime;
+      remainingTime = Math.max(0, questions.length * timePerQuestion - elapsedTime);
     } else {
       remainingTime = Math.max(0, (timeLimit / 1000) - elapsedTime);
     }
+    logger.info('Calculated remaining time', { elapsedTime, remainingTime, isQuickTest, timePerQuestion, questionsLength: questions?.length });
 
     if (remainingTime <= 5 && remainingTime > 0) {
-      res.json({ success: true, remainingTime, warning: 'Тест завершиться через кілька секунд!' });
+      res.json({ success: true, remainingTime, warning: 'Test will end in a few seconds!' });
     } else if (remainingTime <= 0) {
       const score = userTest.score || 0;
       const totalPoints = userTest.totalPoints || questions.reduce((sum, q) => sum + q.points, 0);
@@ -2246,18 +2252,18 @@ app.get('/check-test-status', checkAuth, async (req, res) => {
         await db.collection('active_tests').deleteOne({ user: req.user });
         return res.json({ success: true, redirect: '/result' });
       } catch (saveError) {
-        logger.error('Помилка збереження результату в /check-test-status', { message: saveError.message, stack: saveError.stack });
-        return res.status(500).json({ success: false, message: 'Помилка збереження результату' });
+        logger.error('Error saving result in /check-test-status', { message: saveError.message, stack: saveError.stack });
+        return res.status(500).json({ success: false, message: 'Error saving result' });
       }
     }
 
     res.json({ success: true, remainingTime });
   } catch (error) {
-    logger.error('Помилка в /check-test-status', { message: error.message, stack: error.stack });
-    res.status(500).json({ success: false, message: 'Помилка сервера' });
+    logger.error('Error in /check-test-status', { message: error.message, stack: error.stack });
+    res.status(500).json({ success: false, message: 'Server error' });
   } finally {
     const endTime = Date.now();
-    logger.info('Маршрут /check-test-status виконано', { duration: `${endTime - startTime} мс` });
+    logger.info('Route /check-test-status executed', { duration: `${endTime - startTime} ms` });
   }
 });
 
