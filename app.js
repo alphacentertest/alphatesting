@@ -1075,7 +1075,6 @@ app.get('/select-test', checkAuth, async (req, res) => {
     if (req.userRole === 'admin') {
       return res.redirect('/admin');
     }
-    // Перевірка кешу тестів
     if (Object.keys(testNames).length === 0) {
       logger.warn('testNames порожній, повторне завантаження з MongoDB');
       await loadTestsFromMongoDB();
@@ -1109,10 +1108,10 @@ app.get('/select-test', checkAuth, async (req, res) => {
         </head>
         <body>
           <h1>Виберіть тест</h1>
-                    <div class="test-buttons">
+          <div class="test-buttons">
             ${Object.entries(testNames).length > 0
               ? Object.entries(testNames).map(([num, data]) => `
-                  <button onclick="window.location.href='/test?test=${num}'">${data.name.replace(/"/g, '\\"')}</button>
+                  <button onclick="window.location.href='/test?testNumber=${num}'">${data.name.replace(/"/g, '\\"')}</button>
                 `).join('')
               : '<p class="no-tests">Немає доступних тестів</p>'
             }
@@ -1275,8 +1274,10 @@ const checkTestAttempts = async (user, testNumber) => {
 app.get('/test', checkAuth, async (req, res) => {
   const startTime = Date.now();
   try {
-    const testNumber = req.query.testNumber; // Отримуємо testNumber з запиту
+    const testNumber = req.query.testNumber;
+    logger.info('Запит на /test', { testNumber, availableTests: Object.keys(testNames) });
     if (!testNumber || !testNames[testNumber]) {
+      logger.error('Невірний номер тесту', { testNumber, availableTests: Object.keys(testNames) });
       return res.status(400).send('Невірний номер тесту.');
     }
 
@@ -1290,12 +1291,13 @@ app.get('/test', checkAuth, async (req, res) => {
       .sort({ order: 1 })
       .toArray();
     if (!questions.length) {
+      logger.warn('Питання для цього тесту не знайдено', { testNumber });
       return res.status(400).send('Питання для цього тесту не знайдено.');
     }
 
     const testData = testNames[testNumber];
-    const variant = Math.floor(Math.random() * 4) + 1; // Випадковий варіант від 1 до 4
-    const timeLimit = testData.timeLimit || 3600000; // За замовчуванням 1 година в мілісекундах
+    const variant = Math.floor(Math.random() * 4) + 1;
+    const timeLimit = testData.timeLimit || 3600000;
     const isQuickTest = testData.isQuickTest || false;
     const timePerQuestion = testData.timePerQuestion || 0;
     const questionLimit = testData.questionLimit || questions.length;
@@ -1307,7 +1309,7 @@ app.get('/test', checkAuth, async (req, res) => {
 
     const newUserTest = {
       user: req.user,
-      testNumber, // Додаємо testNumber
+      testNumber,
       questions: selectedQuestions,
       answers: {},
       selectedOptions: [],
@@ -1332,7 +1334,7 @@ app.get('/test', checkAuth, async (req, res) => {
     logger.info('Тест розпочато', { user: req.user, testNumber, testSessionId, variant });
     res.redirect(`/test/question?index=0`);
   } catch (error) {
-    logger.error('Помилка в /test', { message: error.message, stack: error.stack });
+    logger.error('Помилка в /test', { message: error.message, stack: error.stack, testNumber: req.query.testNumber });
     res.status(500).send('Помилка при запуску тесту. Спробуйте ще раз або зверніться до адміністратора.');
   } finally {
     const endTime = Date.now();
@@ -2172,7 +2174,7 @@ app.get('/check-test-status', checkAuth, async (req, res) => {
       return res.status(400).json({ success: false, message: 'Тест не розпочато' });
     }
 
-    const { startTime: testStartTime, timeLimit, isQuickTest, timePerQuestion, currentQuestion, questions } = userTest;
+    const { startTime: testStartTime, timeLimit, isQuickTest, timePerQuestion, currentQuestion, questions, answers, suspiciousActivity, variant, testSessionId, testNumber } = userTest;
     const now = Date.now();
     const elapsedTime = Math.floor((now - testStartTime) / 1000);
     let remainingTime = timeLimit / 1000;
@@ -2185,7 +2187,6 @@ app.get('/check-test-status', checkAuth, async (req, res) => {
 
     if (remainingTime <= 0) {
       // Автоматично завершуємо тест, якщо час вичерпано
-      const { answers, suspiciousActivity, variant, testSessionId } = userTest;
       const score = userTest.score || 0;
       const totalPoints = userTest.totalPoints || questions.reduce((sum, q) => sum + q.points, 0);
       const scoresPerQuestion = userTest.scoresPerQuestion || questions.map((q, idx) => {
@@ -2203,33 +2204,38 @@ app.get('/check-test-status', checkAuth, async (req, res) => {
         }
         return questionScore;
       });
-      score = scoresPerQuestion.reduce((sum, s) => sum + s, 0);
-      const percentage = (score / totalPoints) * 100;
+      const computedScore = scoresPerQuestion.reduce((sum, s) => sum + s, 0);
+      const percentage = (computedScore / totalPoints) * 100;
       const totalClicks = Object.keys(answers).length;
       const correctClicks = scoresPerQuestion.filter(s => s > 0).length;
       const totalQuestions = questions.length;
       const ipAddress = req.headers['x-forwarded-for'] || req.socket.remoteAddress;
 
-      await saveResult(
-        req.user,
-        userTest.testNumber,
-        score,
-        totalPoints,
-        testStartTime,
-        now,
-        totalClicks,
-        correctClicks,
-        totalQuestions,
-        percentage,
-        suspiciousActivity,
-        answers,
-        scoresPerQuestion,
-        variant,
-        ipAddress,
-        testSessionId
-      );
-      await db.collection('active_tests').deleteOne({ user: req.user });
-      return res.json({ success: true, redirect: '/result' });
+      try {
+        await saveResult(
+          req.user,
+          testNumber,
+          computedScore,
+          totalPoints,
+          testStartTime,
+          now,
+          totalClicks,
+          correctClicks,
+          totalQuestions,
+          percentage,
+          suspiciousActivity || { timeAway: 0, switchCount: 0, responseTimes: [], activityCounts: [] },
+          answers,
+          scoresPerQuestion,
+          variant,
+          ipAddress,
+          testSessionId
+        );
+        await db.collection('active_tests').deleteOne({ user: req.user });
+        return res.json({ success: true, redirect: '/result' });
+      } catch (saveError) {
+        logger.error('Помилка збереження результату в /check-test-status', { message: saveError.message, stack: saveError.stack });
+        return res.status(500).json({ success: false, message: 'Помилка збереження результату' });
+      }
     }
 
     res.json({ success: true, remainingTime });
@@ -2358,14 +2364,14 @@ app.get('/result', checkAuth, async (req, res) => {
       testData = userTest;
     }
 
-    const { questions, testNumber, answers, startTime: testStartTime, suspiciousActivity, variant, testSessionId, timeLimit } = userTest || testData;
+    const { questions, testNumber, answers = {}, startTime: testStartTime, suspiciousActivity = {}, variant, testSessionId, timeLimit } = testData;
     let score = testData.score || 0;
-    const totalPoints = testData.totalPoints || (questions ? questions.reduce((sum, q) => sum + q.points, 0) : 0);
+    const totalPoints = testData.totalPoints || (questions ? questions.reduce((sum, q) => sum + (q.points || 0), 0) : 0);
     let scoresPerQuestion = testData.scoresPerQuestion || [];
 
-    if (!scoresPerQuestion.length && questions) {
-      scoresPerQuestion = questions.map((q, index) => {
-        const userAnswer = answers[index];
+    if (!scoresPerQuestion.length && questions && questions.length > 0) {
+      scoresPerQuestion = questions.map((q, idx) => {
+        const userAnswer = answers[idx];
         let questionScore = 0;
 
         const normalizeAnswer = (answer) => {
@@ -2380,59 +2386,41 @@ app.get('/result', checkAuth, async (req, res) => {
         };
 
         if (q.type === 'multiple' && userAnswer && Array.isArray(userAnswer)) {
-          const correctAnswers = q.correctAnswers.map(val => normalizeAnswer(val));
-          const userAnswers = userAnswer.map(val => normalizeAnswer(val));
+          const correctAnswers = (q.correctAnswers || []).map(normalizeAnswer);
+          const userAnswers = userAnswer.map(normalizeAnswer);
           const isCorrect = correctAnswers.length === userAnswers.length &&
             correctAnswers.every(val => userAnswers.includes(val)) &&
             userAnswers.every(val => correctAnswers.includes(val));
-          if (isCorrect) {
-            questionScore = q.points;
-          }
+          if (isCorrect) questionScore = q.points || 0;
         } else if (q.type === 'input' && userAnswer) {
           const normalizedUserAnswer = normalizeAnswer(userAnswer);
-          const normalizedCorrectAnswer = normalizeAnswer(q.correctAnswers[0]);
-          logger.info(`Порівняння відповіді input для питання ${index + 1}`, {
-            userAnswer: normalizedUserAnswer,
-            correctAnswer: normalizedCorrectAnswer
-          });
-
-          if (normalizedCorrectAnswer.includes('-')) {
+          const normalizedCorrectAnswer = normalizeAnswer((q.correctAnswers || [])[0]);
+          if (normalizedCorrectAnswer && normalizedCorrectAnswer.includes('-')) {
             const [min, max] = normalizedCorrectAnswer.split('-').map(val => parseFloat(val.trim()));
             const userValue = parseFloat(normalizedUserAnswer);
             const isCorrect = !isNaN(userValue) && userValue >= min && userValue <= max;
-            if (isCorrect) {
-              questionScore = q.points;
-            }
-          } else {
-            const isCorrect = normalizedUserAnswer === normalizedCorrectAnswer;
-            if (isCorrect) {
-              questionScore = q.points;
-            }
+            if (isCorrect) questionScore = q.points || 0;
+          } else if (normalizedUserAnswer === normalizedCorrectAnswer) {
+            questionScore = q.points || 0;
           }
         } else if (q.type === 'ordering' && userAnswer && Array.isArray(userAnswer)) {
-          const userAnswers = userAnswer.map(val => normalizeAnswer(val));
-          const correctAnswers = q.correctAnswers.map(val => normalizeAnswer(val));
+          const userAnswers = userAnswer.map(normalizeAnswer);
+          const correctAnswers = (q.correctAnswers || []).map(normalizeAnswer);
           const isCorrect = userAnswers.join(',') === correctAnswers.join(',');
-          if (isCorrect) {
-            questionScore = q.points;
-          }
+          if (isCorrect) questionScore = q.points || 0;
         } else if (q.type === 'matching' && userAnswer && Array.isArray(userAnswer)) {
           const userPairs = userAnswer.map(pair => [normalizeAnswer(pair[0]), normalizeAnswer(pair[1])]);
-          const correctPairs = q.correctPairs.map(pair => [normalizeAnswer(pair[0]), normalizeAnswer(pair[1])]);
+          const correctPairs = (q.correctPairs || []).map(pair => [normalizeAnswer(pair[0]), normalizeAnswer(pair[1])]);
           const isCorrect = userPairs.length === correctPairs.length &&
             userPairs.every(userPair => correctPairs.some(correctPair => userPair[0] === correctPair[0] && userPair[1] === correctPair[1]));
-          if (isCorrect) {
-            questionScore = q.points;
-          }
+          if (isCorrect) questionScore = q.points || 0;
         } else if (q.type === 'fillblank' && userAnswer && Array.isArray(userAnswer)) {
-          const userAnswers = userAnswer.map(val => normalizeAnswer(val));
-          const correctAnswers = q.correctAnswers.map(val => normalizeAnswer(val));
-          logger.info(`Питання fillblank ${index + 1}`, { userAnswers, correctAnswers });
-
+          const userAnswers = userAnswer.map(normalizeAnswer);
+          const correctAnswers = (q.correctAnswers || []).map(normalizeAnswer);
           const isCorrect = userAnswers.length === correctAnswers.length &&
             userAnswers.every((answer, idx) => {
               const correctAnswer = correctAnswers[idx];
-              if (correctAnswer.includes('-')) {
+              if (correctAnswer && correctAnswer.includes('-')) {
                 const [min, max] = correctAnswer.split('-').map(val => parseFloat(val.trim()));
                 const userValue = parseFloat(answer);
                 return !isNaN(userValue) && userValue >= min && userValue <= max;
@@ -2440,56 +2428,44 @@ app.get('/result', checkAuth, async (req, res) => {
                 return answer === correctAnswer;
               }
             });
-
-          if (isCorrect) {
-            questionScore = q.points;
-          }
+          if (isCorrect) questionScore = q.points || 0;
         } else if (q.type === 'singlechoice' && userAnswer && Array.isArray(userAnswer)) {
-          const userAnswers = userAnswer.map(val => normalizeAnswer(val));
+          const userAnswers = userAnswer.map(normalizeAnswer);
           const correctAnswer = normalizeAnswer(q.correctAnswer);
-          logger.info(`Питання single choice ${index + 1}`, { userAnswers, correctAnswer });
           const isCorrect = userAnswers.length === 1 && userAnswers[0] === correctAnswer;
-          if (isCorrect) {
-            questionScore = q.points;
-          }
+          if (isCorrect) questionScore = q.points || 0;
         }
         return questionScore;
       });
-
-      score = scoresPerQuestion.reduce((sum, s) => sum + s, 0);
+      score = scoresPerQuestion.reduce((sum, s) => sum + (s || 0), 0);
     }
 
     let endTime = testData.endTime ? new Date(testData.endTime).getTime() : Date.now();
-    const maxEndTime = testStartTime + timeLimit;
+    const maxEndTime = testStartTime + (timeLimit || 3600000);
     if (endTime > maxEndTime) {
       endTime = maxEndTime;
       logger.info(`Кориговано endTime до timeLimit для testSessionId: ${testSessionId}`);
     }
 
-    const percentage = testData.percentage || (score / totalPoints) * 100;
-    const totalClicks = testData.totalClicks || Object.keys(answers).length;
-    const correctClicks = testData.correctClicks || scoresPerQuestion.filter(s => s > 0).length;
-    const totalQuestions = testData.totalQuestions || (questions ? questions.length : 0);
+    const percentage = (score / totalPoints) * 100 || 0;
+    const totalClicks = Object.keys(answers).length;
+    const correctClicks = scoresPerQuestion.filter(s => s > 0).length;
+    const totalQuestions = questions ? questions.length : 0;
 
-    const duration = Math.round((endTime - testStartTime) / 1000);
-    const timeAway = testData.timeAway || (suspiciousActivity ? suspiciousActivity.timeAway || 0 : 0);
+    const duration = Math.round((endTime - testStartTime) / 1000) || 0;
+    const timeAway = (suspiciousActivity && suspiciousActivity.timeAway) || 0;
     const correctedTimeAway = Math.min(timeAway, duration);
-    const timeAwayPercent = Math.round((correctedTimeAway / duration) * 100);
-    const switchCount = testData.switchCount || (suspiciousActivity ? suspiciousActivity.switchCount || 0 : 0);
-    const avgResponseTime = testData.avgResponseTime || (suspiciousActivity && suspiciousActivity.responseTimes
+    const timeAwayPercent = Math.round((correctedTimeAway / duration) * 100) || 0;
+    const switchCount = (suspiciousActivity && suspiciousActivity.switchCount) || 0;
+    const avgResponseTime = (suspiciousActivity && suspiciousActivity.responseTimes && suspiciousActivity.responseTimes.length > 0)
       ? (suspiciousActivity.responseTimes.reduce((sum, time) => sum + (time || 0), 0) / suspiciousActivity.responseTimes.length).toFixed(2)
-      : 0);
-    const totalActivityCount = testData.totalActivityCount || (suspiciousActivity && suspiciousActivity.activityCounts
+      : 0;
+    const totalActivityCount = (suspiciousActivity && suspiciousActivity.activityCounts)
       ? suspiciousActivity.activityCounts.reduce((sum, count) => sum + (count || 0), 0)
-      : 0);
+      : 0;
 
     if (!testData.suspiciousActivity && (timeAwayPercent > config.suspiciousActivity.timeAwayThreshold || switchCount > config.suspiciousActivity.switchCountThreshold)) {
-      const activityDetails = {
-        timeAwayPercent,
-        switchCount,
-        avgResponseTime,
-        totalActivityCount
-      };
+      const activityDetails = { timeAwayPercent, switchCount, avgResponseTime, totalActivityCount };
       await sendSuspiciousActivityEmail(req.user, activityDetails);
     }
 
