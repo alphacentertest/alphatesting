@@ -679,8 +679,10 @@ const initializeServer = async () => {
     await db.collection('login_attempts').createIndex({ ipAddress: 1, lastAttempt: 1 });
     await db.collection('tests').createIndex({ testNumber: 1 }, { unique: true });
     await db.collection('active_tests').createIndex({ user: 1 }, { unique: true });
+    await db.collection('feedback').createIndex({ user: 1, timestamp: -1 }); // Новий індекс
     logger.info('Індекси MongoDB успішно створено');
 
+    // Решта коду без змін
     const userCount = await db.collection('users').countDocuments();
     if (userCount > 0) {
       await db.collection('users').updateMany(
@@ -1110,7 +1112,7 @@ app.get('/select-test', checkAuth, async (req, res) => {
               align-items: center; 
               gap: 10px; 
             }
-            button, .instructions-btn { 
+            button, .instructions-btn, .feedback-btn { 
               padding: 10px; 
               font-size: 18px; 
               cursor: pointer; 
@@ -1132,6 +1134,13 @@ app.get('/select-test', checkAuth, async (req, res) => {
               color: #333; 
             }
             .instructions-btn:hover { 
+              background-color: #ffd700; 
+            }
+            .feedback-btn { 
+              background-color: #ffeb3b; 
+              color: #333; 
+            }
+            .feedback-btn:hover { 
               background-color: #ffd700; 
             }
             #logout { 
@@ -1161,7 +1170,7 @@ app.get('/select-test', checkAuth, async (req, res) => {
               h1 { 
                 font-size: 20px; 
               }
-              button, .instructions-btn { 
+              button, .instructions-btn, .feedback-btn { 
                 font-size: 16px; 
                 width: 90%; 
                 padding: 15px; 
@@ -1185,6 +1194,7 @@ app.get('/select-test', checkAuth, async (req, res) => {
               <button class="results-btn" onclick="window.location.href='/admin/results'">Переглянути результати</button>
             ` : ''}
             <a href="/instructions" class="instructions-btn">Інструкція до тестів</a>
+            <a href="/feedback" class="feedback-btn">Зворотний зв’язок</a>
           </div>
           <button id="logout" onclick="logout()">Вийти</button>
           <script>
@@ -1334,6 +1344,359 @@ const checkTestAttempts = async (user, testNumber) => {
     throw error;
   }
 };
+
+app.get('/feedback', checkAuth, (req, res) => {
+  const startTime = Date.now();
+  try {
+    const html = `
+      <!DOCTYPE html>
+      <html lang="uk">
+        <head>
+          <meta charset="UTF-8">
+          <meta name="viewport" content="width=device-width, initial-scale=1.0">
+          <title>Зворотний зв’язок</title>
+          <style>
+            body {
+              font-family: Arial, sans-serif;
+              margin: 0;
+              padding: 20px;
+              background-color: #f5f5f5;
+              text-align: center;
+            }
+            .container {
+              max-width: 600px;
+              margin: 0 auto;
+              background-color: white;
+              padding: 20px;
+              border-radius: 8px;
+              box-shadow: 0 0 10px rgba(0, 0, 0, 0.1);
+            }
+            h1 {
+              font-size: 24px;
+              margin-bottom: 20px;
+              color: #333;
+            }
+            label {
+              display: block;
+              font-size: 16px;
+              margin-bottom: 5px;
+              text-align: left;
+            }
+            textarea {
+              width: 100%;
+              height: 150px;
+              padding: 10px;
+              font-size: 16px;
+              border: 1px solid #ccc;
+              border-radius: 5px;
+              margin-bottom: 10px;
+              box-sizing: border-box;
+            }
+            button {
+              padding: 10px 20px;
+              font-size: 16px;
+              cursor: pointer;
+              border: none;
+              border-radius: 5px;
+              background-color: #4CAF50;
+              color: white;
+            }
+            button:hover {
+              background-color: #45a049;
+            }
+            button:disabled {
+              background-color: #cccccc;
+              cursor: not-allowed;
+            }
+            .error {
+              color: red;
+              margin-top: 10px;
+              font-size: 14px;
+            }
+            .back-btn {
+              background-color: #007bff;
+              margin-top: 10px;
+            }
+            .back-btn:hover {
+              background-color: #0056b3;
+            }
+            @media (max-width: 600px) {
+              .container {
+                padding: 15px;
+              }
+              h1 {
+                font-size: 20px;
+              }
+              textarea {
+                font-size: 14px;
+              }
+              button {
+                width: 100%;
+                font-size: 14px;
+              }
+            }
+          </style>
+        </head>
+        <body>
+          <div class="container">
+            <h1>Зворотний зв’язок</h1>
+            <form id="feedback-form" method="POST" action="/feedback">
+              <input type="hidden" name="_csrf" value="${res.locals._csrf}">
+              <label for="message">Ваше повідомлення:</label>
+              <textarea id="message" name="message" placeholder="Введіть ваше повідомлення, пропозицію або повідомте про проблему" required></textarea>
+              <button type="submit" id="submit-btn">Надіслати</button>
+            </form>
+            <div id="error-message" class="error"></div>
+            <button class="back-btn" onclick="window.location.href='/select-test'">Назад до вибору тесту</button>
+          </div>
+          <script>
+            document.getElementById('feedback-form').addEventListener('submit', async (e) => {
+              e.preventDefault();
+              const message = document.getElementById('message').value;
+              const errorMessage = document.getElementById('error-message');
+              const submitBtn = document.getElementById('submit-btn');
+
+              submitBtn.disabled = true;
+              submitBtn.textContent = 'Надсилання...';
+
+              const formData = new URLSearchParams();
+              formData.append('message', message);
+              formData.append('_csrf', document.querySelector('input[name="_csrf"]').value);
+
+              try {
+                const response = await fetch('/feedback', {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                  body: formData
+                });
+
+                const result = await response.json();
+                if (result.success) {
+                  errorMessage.style.color = 'green';
+                  errorMessage.textContent = 'Повідомлення успішно надіслано!';
+                  document.getElementById('message').value = '';
+                } else {
+                  errorMessage.textContent = result.message || 'Помилка при надсиланні повідомлення.';
+                }
+              } catch (error) {
+                console.error('Помилка надсилання зворотного зв’язку:', error);
+                errorMessage.textContent = 'Не вдалося підключитися до сервера. Перевірте ваше з’єднання з Інтернетом.';
+              } finally {
+                submitBtn.disabled = false;
+                submitBtn.textContent = 'Надіслати';
+              }
+            });
+          </script>
+        </body>
+      </html>
+    `;
+    res.send(html);
+  } catch (error) {
+    logger.error('Помилка в /feedback', { message: error.message, stack: error.stack });
+    res.status(500).send('Помилка при завантаженні форми зворотного зв’язку');
+  } finally {
+    const endTime = Date.now();
+    logger.info('Маршрут /feedback виконано', { duration: `${endTime - startTime} мс` });
+  }
+});
+
+app.post('/feedback', checkAuth, [
+  body('message')
+    .isLength({ min: 5, max: 1000 }).withMessage('Повідомлення має бути від 5 до 1000 символів')
+], async (req, res) => {
+  const startTime = Date.now();
+  try {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({ success: false, message: errors.array()[0].msg });
+    }
+
+    const { message } = req.body;
+    const user = req.user;
+    const ipAddress = req.headers['x-forwarded-for'] || req.socket.remoteAddress;
+    const timestamp = new Date().toISOString();
+
+    // Збереження повідомлення в MongoDB
+    await db.collection('feedback').insertOne({
+      user,
+      message,
+      timestamp,
+      ipAddress
+    });
+
+    logger.info('Зворотний зв’язок збережено', { user, message });
+
+    // (Опціонально) Надсилання email адміністратору
+    try {
+      const mailOptions = {
+        from: process.env.EMAIL_USER || 'alphacentertest@gmail.com',
+        to: process.env.EMAIL_USER || 'alphacentertest@gmail.com',
+        subject: 'Нове повідомлення зворотного зв’язку',
+        text: `
+          Користувач: ${user}
+          Повідомлення: ${message}
+          Час: ${timestamp}
+          IP-адреса: ${ipAddress}
+        `
+      };
+      await transporter.sendMail(mailOptions);
+      logger.info('Email зворотного зв’язку надіслано', { user });
+    } catch (emailError) {
+      logger.error('Помилка відправки email зворотного зв’язку', { message: emailError.message, stack: emailError.stack });
+    }
+
+    res.json({ success: true });
+  } catch (error) {
+    logger.error('Помилка в /feedback (POST)', { message: error.message, stack: error.stack });
+    res.status(500).json({ success: false, message: 'Помилка при надсиланні зворотного зв’язку' });
+  } finally {
+    const endTime = Date.now();
+    logger.info('Маршрут /feedback (POST) виконано', { duration: `${endTime - startTime} мс` });
+  }
+});
+
+app.get('/admin/feedback', checkAuth, checkAdmin, async (req, res) => {
+  const startTime = Date.now();
+  try {
+    const page = parseInt(req.query.page) || 1;
+    const limit = 20;
+    const skip = (page - 1) * limit;
+
+    const feedback = await db.collection('feedback')
+      .find({})
+      .sort({ timestamp: -1 })
+      .skip(skip)
+      .limit(limit)
+      .toArray();
+
+    const totalFeedback = await db.collection('feedback').countDocuments();
+    const totalPages = Math.ceil(totalFeedback / limit);
+
+    const html = `
+      <!DOCTYPE html>
+      <html lang="uk">
+        <head>
+          <meta charset="UTF-8">
+          <meta name="viewport" content="width=device-width, initial-scale=1.0">
+          <title>Зворотний зв’язок</title>
+          <style>
+            body {
+              font-family: Arial, sans-serif;
+              padding: 20px;
+              background-color: #f5f5f5;
+            }
+            .container {
+              max-width: 800px;
+              margin: 0 auto;
+              background-color: white;
+              padding: 20px;
+              border-radius: 8px;
+              box-shadow: 0 0 10px rgba(0, 0, 0, 0.1);
+            }
+            h1 {
+              font-size: 24px;
+              text-align: center;
+              margin-bottom: 20px;
+            }
+            table {
+              border-collapse: collapse;
+              width: 100%;
+              margin-top: 20px;
+            }
+            th, td {
+              border: 1px solid #ddd;
+              padding: 8px;
+              text-align: left;
+            }
+            th {
+              background-color: #f2f2f2;
+            }
+            .message {
+              white-space: pre-wrap;
+              max-width: 400px;
+              word-wrap: break-word;
+            }
+            .nav-btn {
+              padding: 10px 20px;
+              margin: 10px 0;
+              cursor: pointer;
+              border: none;
+              border-radius: 5px;
+              background-color: #007bff;
+              color: white;
+            }
+            .nav-btn:hover {
+              background-color: #0056b3;
+            }
+            .pagination {
+              margin-top: 20px;
+              text-align: center;
+            }
+            .pagination a {
+              margin: 0 5px;
+              padding: 5px 10px;
+              background-color: #007bff;
+              color: white;
+              text-decoration: none;
+              border-radius: 5px;
+            }
+            .pagination a:hover {
+              background-color: #0056b3;
+            }
+            @media (max-width: 600px) {
+              h1 {
+                font-size: 20px;
+              }
+              table {
+                font-size: 14px;
+              }
+              .message {
+                max-width: 200px;
+              }
+              .nav-btn {
+                width: 100%;
+              }
+            }
+          </style>
+        </head>
+        <body>
+          <div class="container">
+            <h1>Зворотний зв’язок від користувачів</h1>
+            <button class="nav-btn" onclick="window.location.href='/admin'">Повернутися до адмін-панелі</button>
+            <table>
+              <tr>
+                <th>Користувач</th>
+                <th>Повідомлення</th>
+                <th>Час</th>
+                <th>IP-адреса</th>
+              </tr>
+              ${feedback.length > 0 ? feedback.map(f => `
+                <tr>
+                  <td>${f.user}</td>
+                  <td class="message">${f.message.replace(/</g, '&lt;').replace(/>/g, '&gt;')}</td>
+                  <td>${new Date(f.timestamp).toLocaleString('uk-UA')}</td>
+                  <td>${f.ipAddress}</td>
+                </tr>
+              `).join('') : '<tr><td colspan="4">Немає повідомлень</td></tr>'}
+            </table>
+            <div class="pagination">
+              ${page > 1 ? `<a href="/admin/feedback?page=${page - 1}">Попередня</a>` : ''}
+              <span>Сторінка ${page} з ${totalPages}</span>
+              ${page < totalPages ? `<a href="/admin/feedback?page=${page + 1}">Наступна</a>` : ''}
+            </div>
+          </div>
+        </body>
+      </html>
+    `;
+    res.send(html);
+  } catch (error) {
+    logger.error('Помилка в /admin/feedback', { message: error.message, stack: error.stack });
+    res.status(500).send('Помилка при завантаженні зворотного зв’язку');
+  } finally {
+    const endTime = Date.now();
+    logger.info('Маршрут /admin/feedback виконано', { duration: `${endTime - startTime} мс` });
+  }
+});
 
 // Початок тесту
 app.get('/test', checkAuth, async (req, res) => {
@@ -3424,6 +3787,7 @@ app.get('/admin', checkAuth, checkAdmin, (req, res) => {
           <button onclick="window.location.href='/admin/edit-tests'">Редагувати назви тестів</button><br>
           <button onclick="window.location.href='/admin/create-test'">Створити новий тест</button><br>
           <button onclick="window.location.href='/admin/activity-log'">Журнал дій</button><br>
+          <button onclick="window.location.href='/admin/feedback'">Зворотний зв’язок</button><br>
           <button id="logout" onclick="logout()">Вийти</button>
           <script>
             async function logout() {
