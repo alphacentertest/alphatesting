@@ -2001,6 +2001,7 @@ app.get('/test/question', checkAuth, async (req, res) => {
             let isSaving = false;
             let hasMovedToNext = false;
             let questionStartTime = ${questionStartTime[index]};
+            let isNavigating = false; // Прапорець для внутрішньої навігації
 
             // Функція для автоматичного збереження відповіді
             async function saveCurrentAnswer(index) {
@@ -2104,6 +2105,7 @@ app.get('/test/question', checkAuth, async (req, res) => {
                 const result = await response.json();
                 if (result.success) {
                   const nextIndex = index + 1;
+                  isNavigating = true; // Встановлюємо прапорець перед навігацією
                   fetch('/set-question-start-time?index=' + nextIndex, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
@@ -2185,6 +2187,7 @@ app.get('/test/question', checkAuth, async (req, res) => {
 
                 const result = await response.json();
                 if (result.success) {
+                  isNavigating = true; // Встановлюємо прапорець перед навігацією
                   setTimeout(() => {
                     window.location.href = '/result';
                   }, 300);
@@ -2218,6 +2221,7 @@ app.get('/test/question', checkAuth, async (req, res) => {
                 requestAnimationFrame(runGlobalTimer);
               } else {
                 saveCurrentAnswer(currentQuestionIndex).then(() => {
+                  isNavigating = true; // Встановлюємо прапорець перед навігацією
                   setTimeout(() => {
                     window.location.href = '/result';
                   }, 300);
@@ -2255,6 +2259,7 @@ app.get('/test/question', checkAuth, async (req, res) => {
                   });
                 } else if (questionTimeRemaining <= 0 && !hasMovedToNext) {
                   saveCurrentAnswer(currentQuestionIndex).then(() => {
+                    isNavigating = true; // Встановлюємо прапорець перед навігацією
                     setTimeout(() => {
                       window.location.href = '/result';
                     }, 300);
