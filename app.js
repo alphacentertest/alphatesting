@@ -819,11 +819,11 @@ const logActivity = async (user, action, ipAddress, additionalInfo = {}, session
       user,
       action,
       ipAddress,
-      timestamp: adjustedTimestamp.toISOString(),
+      timestamp: timestamp.toISOString(),
       additionalInfo
     }, { session });
     const endTime = Date.now();
-    logger.info(`Залогована активність: ${user} - ${action} о ${adjustedTimestamp}, IP: ${ipAddress}`, { duration: `${endTime - startTime} мс` });
+    logger.info(`Залогована активність: ${user} - ${action} о ${timestamp.toLocaleString('uk-UA')}`, { duration: `${endTime - startTime} мс` });
   } catch (error) {
     logger.error('Помилка логування активності', { message: error.message, stack: error.stack });
     throw error;
@@ -1516,7 +1516,7 @@ app.post('/feedback', checkAuth, [
       message,
       timestamp,
       ipAddress,
-      read: false // Додаємо поле для позначки прочитання
+      read: false
     });
 
     logger.info('Зворотний зв’язок збережено', { user, message });
@@ -3758,7 +3758,7 @@ app.get('/results', checkAuth, async (req, res) => {
 app.get('/admin', checkAuth, checkAdmin, async (req, res) => {
   const startTime = Date.now();
   try {
-    // Підрахунок непрочитаних повідомлень
+    // Підрахунок непрочитаних повідомлень зворотного зв’язку
     const unreadFeedbackCount = await db.collection('feedback').countDocuments({ read: false });
 
     const html = `
@@ -3774,7 +3774,7 @@ app.get('/admin', checkAuth, checkAdmin, async (req, res) => {
             button { padding: 15px 30px; margin: 10px; font-size: 24px; cursor: pointer; width: 300px; border: none; border-radius: 5px; background-color: #4CAF50; color: white; position: relative; }
             button:hover { background-color: #45a049; }
             #feedback-btn { 
-              background-color: ${unreadFeedbackCount > 0 ? '#ef5350' : '#4CAF50'}; 
+              background-color: ${unreadFeedbackCount > 0 ? '#ef5350' : '#4CAF50'}; /* Червоний, якщо є непрочитані */
             }
             #feedback-btn:hover { 
               background-color: ${unreadFeedbackCount > 0 ? '#d32f2f' : '#45a049'}; 
