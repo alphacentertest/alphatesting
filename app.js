@@ -2001,7 +2001,6 @@ app.get('/test/question', checkAuth, async (req, res) => {
             let isSaving = false;
             let hasMovedToNext = false;
             let questionStartTime = ${questionStartTime[index]};
-            let isNavigating = false; // Прапорець для внутрішньої навігації
 
             // Функція для автоматичного збереження відповіді
             async function saveCurrentAnswer(index) {
@@ -2034,7 +2033,7 @@ app.get('/test/question', checkAuth, async (req, res) => {
                 formData.append('activityCount', activityCount);
                 formData.append('_csrf', '${res.locals._csrf}');
 
-                console.log('Автозбереження відповіді:', { index, answers: safeAnswer, responseTime });
+                console.log('Автозбереження відповіді перед завершенням тесту:', { index, answers: safeAnswer, responseTime });
 
                 const response = await fetch('/answer', {
                   method: 'POST',
@@ -2105,7 +2104,6 @@ app.get('/test/question', checkAuth, async (req, res) => {
                 const result = await response.json();
                 if (result.success) {
                   const nextIndex = index + 1;
-                  isNavigating = true; // Встановлюємо прапорець перед навігацією
                   fetch('/set-question-start-time?index=' + nextIndex, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
@@ -2187,7 +2185,6 @@ app.get('/test/question', checkAuth, async (req, res) => {
 
                 const result = await response.json();
                 if (result.success) {
-                  isNavigating = true; // Встановлюємо прапорець перед навігацією
                   setTimeout(() => {
                     window.location.href = '/result';
                   }, 300);
@@ -2207,30 +2204,23 @@ app.get('/test/question', checkAuth, async (req, res) => {
             function updateGlobalTimer() {
               const now = Date.now();
               const elapsedTime = Math.floor((now - startTime) / 1000);
-              remainingTime = Math.max(0, totalTestTime - elapsedTime);
+              const remainingTime = Math.max(0, totalTestTime - elapsedTime);
               const minutes = Math.floor(remainingTime / 60).toString().padStart(2, '0');
               const seconds = (remainingTime % 60).toString().padStart(2, '0');
               timerElement.textContent = 'Залишилось часу: ' + minutes + ' хв ' + seconds + ' с';
               lastGlobalUpdateTime = now;
-            }
 
-            // Функція для запуску глобального таймера
-            function runGlobalTimer() {
-              updateGlobalTimer();
-              if (remainingTime > 0) {
-                requestAnimationFrame(runGlobalTimer);
-              } else {
+              if (remainingTime <= 0) {
+                console.log('Глобальний таймер закінчився, збереження відповіді та перенаправлення через 1.5с');
                 saveCurrentAnswer(currentQuestionIndex).then(() => {
-                  isNavigating = true; // Встановлюємо прапорець перед навігацією
                   setTimeout(() => {
                     window.location.href = '/result';
-                  }, 300);
+                  }, 1500); // Затримка 1.5 секунди
                 });
               }
             }
 
-            // Запускаємо глобальний таймер
-            runGlobalTimer();
+            setInterval(updateGlobalTimer, 1000);
 
             // Таймер для швидкого тесту
             if (isQuickTest) {
@@ -2246,78 +2236,71 @@ app.get('/test/question', checkAuth, async (req, res) => {
                   const offset = (1 - questionTimeRemaining / timePerQuestion) * circumference;
                   timerCircle.style.strokeDashoffset = offset;
                 }
-              }
-
-              function runQuestionTimer() {
-                updateQuestionTimer();
-                if (questionTimeRemaining > 0 && currentQuestionIndex < totalQuestions - 1 && !hasMovedToNext) {
-                  requestAnimationFrame(runQuestionTimer);
-                } else if (currentQuestionIndex < totalQuestions - 1 && !hasMovedToNext) {
+                if (questionTimeRemaining <= 0 && currentQuestionIndex < totalQuestions - 1 && !hasMovedToNext) {
                   hasMovedToNext = true;
                   saveCurrentAnswer(currentQuestionIndex).then(() => {
                     saveAndNext(currentQuestionIndex);
                   });
-                } else if (questionTimeRemaining <= 0 && !hasMovedToNext) {
-                  saveCurrentAnswer(currentQuestionIndex).then(() => {
-                    isNavigating = true; // Встановлюємо прапорець перед навігацією
-                    setTimeout(() => {
-                      window.location.href = '/result';
-                    }, 300);
-                  });
                 }
               }
 
-              runQuestionTimer();
+              const questionTimerInterval = setInterval(() => {
+                updateQuestionTimer();
+                if (currentQuestionIndex >= totalQuestions - 1 && questionTimeRemaining <= 0 && !hasMovedToNext) {
+                  console.log('Таймер швидкого тесту закінчився, збереження відповіді та перенаправлення через 1.5с');
+                  clearInterval(questionTimerInterval);
+                  saveCurrentAnswer(currentQuestionIndex).then(() => {
+                    setTimeout(() => {
+                      window.location.href = '/result';
+                    }, 1500); // Затримка 1.5 секунди
+                  });
+                }
+              }, 50);
+
+              document.addEventListener('visibilitychange', () => {
+                if (!document.hidden) {
+                  updateGlobalTimer();
+                  updateQuestionTimer();
+                }
+              });
             }
 
-            // Періодичне автозбереження кожні 30 секунд
-            setInterval(() => {
-              if (!isSaving) {
-                console.log('Періодичне автозбереження відповіді');
-                saveCurrentAnswer(currentQuestionIndex);
-              }
-            }, 30000);
-
-            // Збереження перед закриттям вкладки
-            window.addEventListener('beforeunload', (e) => {
-              if (!isSaving) {
-                console.log('Спроба закрити вкладку, збереження відповіді');
-                saveCurrentAnswer(currentQuestionIndex);
-                e.returnValue = 'Дані зберігаються, зачекайте...';
+            // Відстеження втрати фокусу вкладки
+            window.addEventListener('blur', () => {
+              if (!blurTimeout) {
+                blurTimeout = setTimeout(() => {
+                  if (lastBlurTime === 0) {
+                    lastBlurTime = performance.now();
+                    switchCount = Math.min(switchCount + 1, 1000); // Обмеження switchCount
+                    console.log('Вкладка втратила фокус, початок підрахунку часу:', lastBlurTime, 'Кількість переключень:', switchCount);
+                  }
+                  blurTimeout = null;
+                }, blurDebounceDelay);
               }
             });
 
-            // Відстеження зміни видимості вкладки
-            document.addEventListener('visibilitychange', () => {
-              if (document.hidden) {
-                console.log('Вкладка стала неактивною, примусове збереження відповіді');
+            // Відстеження повернення фокусу вкладки
+            window.addEventListener('focus', () => {
+              if (blurTimeout) {
+                clearTimeout(blurTimeout);
+                blurTimeout = null;
+              }
+              if (lastBlurTime > 0) {
+                const now = performance.now();
+                const awayDuration = Math.min((now - lastBlurTime) / 1000, 60); // Обмеження до 60 секунд
+                timeAway += awayDuration;
+                console.log('Вкладка отримала фокус, накопичено часу поза вкладкою:', awayDuration, 'Загальний timeAway:', timeAway);
+                lastBlurTime = 0;
                 saveCurrentAnswer(currentQuestionIndex);
-                if (!blurTimeout) {
-                  blurTimeout = setTimeout(() => {
-                    if (lastBlurTime === 0) {
-                      lastBlurTime = performance.now();
-                      switchCount = Math.min(switchCount + 1, 1000);
-                      console.log('Вкладка втратила фокус, початок підрахунку часу:', lastBlurTime, 'Кількість переключень:', switchCount);
-                    }
-                    blurTimeout = null;
-                  }, blurDebounceDelay);
-                }
-              } else {
-                if (blurTimeout) {
-                  clearTimeout(blurTimeout);
-                  blurTimeout = null;
-                }
-                if (lastBlurTime > 0) {
-                  const now = performance.now();
-                  const awayDuration = Math.min((now - lastBlurTime) / 1000, 60);
-                  timeAway += awayDuration;
-                  console.log('Вкладка отримала фокус, накопичено часу поза вкладкою:', awayDuration, 'Загальний timeAway:', timeAway);
-                  lastBlurTime = 0;
-                  saveCurrentAnswer(currentQuestionIndex);
-                }
+              }
+            });
+
+            // Скидання questionStartTime після тривалого простою
+            document.addEventListener('visibilitychange', () => {
+              if (!document.hidden) {
                 const now = Date.now();
                 const timeSinceLastActivity = (now - lastActivityTime) / 1000;
-                if (timeSinceLastActivity > 300) {
+                if (timeSinceLastActivity > 300) { // Якщо простій більше 5 хвилин
                   questionStartTime = now;
                   console.log('Виявлено тривалий простій, скидання questionStartTime:', questionStartTime);
                   fetch('/set-question-start-time?index=' + currentQuestionIndex, {
@@ -2579,7 +2562,7 @@ app.get('/result', checkAuth, async (req, res) => {
   try {
     if (req.user === 'admin') return res.redirect('/admin');
 
-    let userTest = await db.collection('active_tests').findOne({ user: req.user });
+    const userTest = await db.collection('active_tests').findOne({ user: req.user });
     let testData;
 
     if (!userTest) {
@@ -2593,138 +2576,146 @@ app.get('/result', checkAuth, async (req, res) => {
       testData = recentResult;
     } else {
       testData = userTest;
+    }
 
-      // Примусово обчислюємо результати, якщо вони ще не збережені
-      const { questions, testNumber, answers, startTime: testStartTime, suspiciousActivity, variant, testSessionId, timeLimit } = userTest;
-      let score = testData.score || 0;
-      const totalPoints = testData.totalPoints || questions.reduce((sum, q) => sum + q.points, 0);
-      let scoresPerQuestion = testData.scoresPerQuestion || [];
+    const { questions, testNumber, answers, startTime: testStartTime, suspiciousActivity, variant, testSessionId, timeLimit } = userTest || testData;
+    let score = testData.score || 0;
+    const totalPoints = testData.totalPoints || (questions ? questions.reduce((sum, q) => sum + q.points, 0) : 0);
+    let scoresPerQuestion = testData.scoresPerQuestion || [];
 
-      if (!scoresPerQuestion.length && questions) {
-        scoresPerQuestion = questions.map((q, index) => {
-          const userAnswer = answers[index];
-          let questionScore = 0;
+    if (!scoresPerQuestion.length && questions) {
+      scoresPerQuestion = questions.map((q, index) => {
+        const userAnswer = answers[index];
+        let questionScore = 0;
 
-          const normalizeAnswer = (answer) => {
-            if (!answer) return '';
-            return String(answer)
-              .trim()
-              .toLowerCase()
-              .replace(/\s+/g, '')
-              .replace(',', '.')
-              .replace(/\\'/g, "'")
-              .replace(/°/g, 'deg');
-          };
+        const normalizeAnswer = (answer) => {
+          if (!answer) return '';
+          return String(answer)
+            .trim()
+            .toLowerCase()
+            .replace(/\s+/g, '')
+            .replace(',', '.')
+            .replace(/\\'/g, "'")
+            .replace(/°/g, 'deg');
+        };
 
-          // Логіка обчислення балів (як у вихідному коді)
-          if (q.type === 'multiple' && userAnswer && Array.isArray(userAnswer)) {
-            const correctAnswers = q.correctAnswers.map(val => normalizeAnswer(val));
-            const userAnswers = userAnswer.map(val => normalizeAnswer(val));
-            const isCorrect = correctAnswers.length === userAnswers.length &&
-              correctAnswers.every(val => userAnswers.includes(val)) &&
-              userAnswers.every(val => correctAnswers.includes(val));
+        if (q.type === 'multiple' && userAnswer && Array.isArray(userAnswer)) {
+          const correctAnswers = q.correctAnswers.map(val => normalizeAnswer(val));
+          const userAnswers = userAnswer.map(val => normalizeAnswer(val));
+          const isCorrect = correctAnswers.length === userAnswers.length &&
+            correctAnswers.every(val => userAnswers.includes(val)) &&
+            userAnswers.every(val => correctAnswers.includes(val));
+          if (isCorrect) {
+            questionScore = q.points;
+          }
+        } else if (q.type === 'input' && userAnswer) {
+          const normalizedUserAnswer = normalizeAnswer(userAnswer);
+          const normalizedCorrectAnswer = normalizeAnswer(q.correctAnswers[0]);
+          logger.info(`Порівняння відповіді input для питання ${index + 1}`, {
+            userAnswer: normalizedUserAnswer,
+            correctAnswer: normalizedCorrectAnswer
+          });
+
+          if (normalizedCorrectAnswer.includes('-')) {
+            const [min, max] = normalizedCorrectAnswer.split('-').map(val => parseFloat(val.trim()));
+            const userValue = parseFloat(normalizedUserAnswer);
+            const isCorrect = !isNaN(userValue) && userValue >= min && userValue <= max;
             if (isCorrect) {
               questionScore = q.points;
             }
-          } else if (q.type === 'input' && userAnswer) {
-            const normalizedUserAnswer = normalizeAnswer(userAnswer);
-            const normalizedCorrectAnswer = normalizeAnswer(q.correctAnswers[0]);
-            if (normalizedCorrectAnswer.includes('-')) {
-              const [min, max] = normalizedCorrectAnswer.split('-').map(val => parseFloat(val.trim()));
-              const userValue = parseFloat(normalizedUserAnswer);
-              const isCorrect = !isNaN(userValue) && userValue >= min && userValue <= max;
-              if (isCorrect) {
-                questionScore = q.points;
-              }
-            } else {
-              const isCorrect = normalizedUserAnswer === normalizedCorrectAnswer;
-              if (isCorrect) {
-                questionScore = q.points;
-              }
-            }
-          } else if (q.type === 'ordering' && userAnswer && Array.isArray(userAnswer)) {
-            const userAnswers = userAnswer.map(val => normalizeAnswer(val));
-            const correctAnswers = q.correctAnswers.map(val => normalizeAnswer(val));
-            const isCorrect = userAnswers.join(',') === correctAnswers.join(',');
-            if (isCorrect) {
-              questionScore = q.points;
-            }
-          } else if (q.type === 'matching' && userAnswer && Array.isArray(userAnswer)) {
-            const userPairs = userAnswer.map(pair => [normalizeAnswer(pair[0]), normalizeAnswer(pair[1])]);
-            const correctPairs = q.correctPairs.map(pair => [normalizeAnswer(pair[0]), normalizeAnswer(pair[1])]);
-            const isCorrect = userPairs.length === correctPairs.length &&
-              userPairs.every(userPair => correctPairs.some(correctPair => userPair[0] === correctPair[0] && userPair[1] === correctPair[1]));
-            if (isCorrect) {
-              questionScore = q.points;
-            }
-          } else if (q.type === 'fillblank' && userAnswer && Array.isArray(userAnswer)) {
-            const userAnswers = userAnswer.map(val => normalizeAnswer(val));
-            const correctAnswers = q.correctAnswers.map(val => normalizeAnswer(val));
-            const isCorrect = userAnswers.length === correctAnswers.length &&
-              userAnswers.every((answer, idx) => {
-                const correctAnswer = correctAnswers[idx];
-                if (correctAnswer.includes('-')) {
-                  const [min, max] = correctAnswer.split('-').map(val => parseFloat(val.trim()));
-                  const userValue = parseFloat(answer);
-                  return !isNaN(userValue) && userValue >= min && userValue <= max;
-                } else {
-                  return answer === correctAnswer;
-                }
-              });
-            if (isCorrect) {
-              questionScore = q.points;
-            }
-          } else if (q.type === 'singlechoice' && userAnswer && Array.isArray(userAnswer)) {
-            const userAnswers = userAnswer.map(val => normalizeAnswer(val));
-            const correctAnswer = normalizeAnswer(q.correctAnswer);
-            const isCorrect = userAnswers.length === 1 && userAnswers[0] === correctAnswer;
+          } else {
+            const isCorrect = normalizedUserAnswer === normalizedCorrectAnswer;
             if (isCorrect) {
               questionScore = q.points;
             }
           }
-          return questionScore;
-        });
+        } else if (q.type === 'ordering' && userAnswer && Array.isArray(userAnswer)) {
+          const userAnswers = userAnswer.map(val => normalizeAnswer(val));
+          const correctAnswers = q.correctAnswers.map(val => normalizeAnswer(val));
+          const isCorrect = userAnswers.join(',') === correctAnswers.join(',');
+          if (isCorrect) {
+            questionScore = q.points;
+          }
+        } else if (q.type === 'matching' && userAnswer && Array.isArray(userAnswer)) {
+          const userPairs = userAnswer.map(pair => [normalizeAnswer(pair[0]), normalizeAnswer(pair[1])]);
+          const correctPairs = q.correctPairs.map(pair => [normalizeAnswer(pair[0]), normalizeAnswer(pair[1])]);
+          const isCorrect = userPairs.length === correctPairs.length &&
+            userPairs.every(userPair => correctPairs.some(correctPair => userPair[0] === correctPair[0] && userPair[1] === correctPair[1]));
+          if (isCorrect) {
+            questionScore = q.points;
+          }
+        } else if (q.type === 'fillblank' && userAnswer && Array.isArray(userAnswer)) {
+          const userAnswers = userAnswer.map(val => normalizeAnswer(val));
+          const correctAnswers = q.correctAnswers.map(val => normalizeAnswer(val));
+          logger.info(`Питання fillblank ${index + 1}`, { userAnswers, correctAnswers });
 
-        score = scoresPerQuestion.reduce((sum, s) => sum + s, 0);
-      }
+          const isCorrect = userAnswers.length === correctAnswers.length &&
+            userAnswers.every((answer, idx) => {
+              const correctAnswer = correctAnswers[idx];
+              if (correctAnswer.includes('-')) {
+                const [min, max] = correctAnswer.split('-').map(val => parseFloat(val.trim()));
+                const userValue = parseFloat(answer);
+                return !isNaN(userValue) && userValue >= min && userValue <= max;
+              } else {
+                return answer === correctAnswer;
+              }
+            });
 
-      let endTime = Date.now();
-      const maxEndTime = testStartTime + timeLimit;
-      if (endTime > maxEndTime) {
-        endTime = maxEndTime;
-        logger.info(`Кориговано endTime до timeLimit для testSessionId: ${testSessionId}`);
-      }
+          if (isCorrect) {
+            questionScore = q.points;
+          }
+        } else if (q.type === 'singlechoice' && userAnswer && Array.isArray(userAnswer)) {
+          const userAnswers = userAnswer.map(val => normalizeAnswer(val));
+          const correctAnswer = normalizeAnswer(q.correctAnswer);
+          logger.info(`Питання single choice ${index + 1}`, { userAnswers, correctAnswer });
+          const isCorrect = userAnswers.length === 1 && userAnswers[0] === correctAnswer;
+          if (isCorrect) {
+            questionScore = q.points;
+          }
+        }
+        return questionScore;
+      });
 
-      const percentage = (score / totalPoints) * 100;
-      const totalClicks = Object.keys(answers).length;
-      const correctClicks = scoresPerQuestion.filter(s => s > 0).length;
-      const totalQuestions = questions.length;
+      score = scoresPerQuestion.reduce((sum, s) => sum + s, 0);
+    }
 
-      const duration = Math.round((endTime - testStartTime) / 1000);
-      const timeAway = suspiciousActivity?.timeAway || 0;
-      const correctedTimeAway = Math.min(timeAway, duration);
-      const timeAwayPercent = Math.round((correctedTimeAway / duration) * 100);
-      const switchCount = suspiciousActivity?.switchCount || 0;
-      const avgResponseTime = suspiciousActivity?.responseTimes
-        ? (suspiciousActivity.responseTimes.reduce((sum, time) => sum + (time || 0), 0) / suspiciousActivity.responseTimes.length).toFixed(2)
-        : 0;
-      const totalActivityCount = suspiciousActivity?.activityCounts
-        ? suspiciousActivity.activityCounts.reduce((sum, count) => sum + (count || 0), 0)
-        : 0;
+    let endTime = testData.endTime ? new Date(testData.endTime).getTime() : Date.now();
+    const maxEndTime = testStartTime + timeLimit;
+    if (endTime > maxEndTime) {
+      endTime = maxEndTime;
+      logger.info(`Кориговано endTime до timeLimit для testSessionId: ${testSessionId}`);
+    }
 
-      if (timeAwayPercent > config.suspiciousActivity.timeAwayThreshold || switchCount > config.suspiciousActivity.switchCountThreshold) {
-        const activityDetails = {
-          timeAwayPercent,
-          switchCount,
-          avgResponseTime,
-          totalActivityCount
-        };
-        await sendSuspiciousActivityEmail(req.user, activityDetails);
-      }
+    const percentage = testData.percentage || (score / totalPoints) * 100;
+    const totalClicks = testData.totalClicks || Object.keys(answers).length;
+    const correctClicks = testData.correctClicks || scoresPerQuestion.filter(s => s > 0).length;
+    const totalQuestions = testData.totalQuestions || (questions ? questions.length : 0);
 
-      const ipAddress = req.headers['x-forwarded-for'] || req.socket.remoteAddress;
+    const duration = Math.round((endTime - testStartTime) / 1000);
+    const timeAway = testData.timeAway || (suspiciousActivity ? suspiciousActivity.timeAway || 0 : 0);
+    const correctedTimeAway = Math.min(timeAway, duration);
+    const timeAwayPercent = Math.round((correctedTimeAway / duration) * 100);
+    const switchCount = testData.switchCount || (suspiciousActivity ? suspiciousActivity.switchCount || 0 : 0);
+    const avgResponseTime = testData.avgResponseTime || (suspiciousActivity && suspiciousActivity.responseTimes
+      ? (suspiciousActivity.responseTimes.reduce((sum, time) => sum + (time || 0), 0) / suspiciousActivity.responseTimes.length).toFixed(2)
+      : 0);
+    const totalActivityCount = testData.totalActivityCount || (suspiciousActivity && suspiciousActivity.activityCounts
+      ? suspiciousActivity.activityCounts.reduce((sum, count) => sum + (count || 0), 0)
+      : 0);
 
-      // Зберігаємо результати, якщо вони ще не збережені
+    if (!testData.suspiciousActivity && (timeAwayPercent > config.suspiciousActivity.timeAwayThreshold || switchCount > config.suspiciousActivity.switchCountThreshold)) {
+      const activityDetails = {
+        timeAwayPercent,
+        switchCount,
+        avgResponseTime,
+        totalActivityCount
+      };
+      await sendSuspiciousActivityEmail(req.user, activityDetails);
+    }
+
+    const ipAddress = req.headers['x-forwarded-for'] || req.socket.remoteAddress;
+
+    if (userTest && !testData.isSaved) {
       const existingResult = await db.collection('test_results').findOne({ testSessionId });
       if (!existingResult && !userTest.isSavingResult) {
         await db.collection('active_tests').updateOne(
@@ -2749,15 +2740,36 @@ app.get('/result', checkAuth, async (req, res) => {
           ipAddress,
           testSessionId
         );
-        logger.info(`Результат збережено для testSessionId: ${testSessionId} у /result`);
+        logger.info(`Результат збережено для testSessionId: ${testSessionId}`);
       }
+    }
 
-      // Видаляємо активний тест
+    if (userTest && testData.isSaved) {
+      await db.collection('test_results').updateOne(
+        { testSessionId },
+        { $set: {
+          score,
+          totalPoints,
+          endTime,
+          totalClicks,
+          correctClicks,
+          totalQuestions,
+          percentage,
+          suspiciousActivity: { timeAway: correctedTimeAway, switchCount, responseTimes: suspiciousActivity?.responseTimes || [], activityCounts: suspiciousActivity?.activityCounts || [] },
+          answers,
+          scoresPerQuestion,
+          variant,
+          ipAddress
+        } },
+        { upsert: true }
+      );
+    }
+
+    if (userTest) {
       await db.collection('active_tests').deleteOne({ user: req.user });
     }
 
-    // Решта коду для відображення HTML залишається без змін
-    const endDateTime = new Date(testData.endTime || endTime);
+    const endDateTime = new Date(endTime);
     const formattedTime = endDateTime.toLocaleTimeString('uk-UA', { hour12: false });
     const formattedDate = endDateTime.toLocaleDateString('uk-UA');
     const imagePath = path.join(__dirname, 'public', 'images', 'A.png');
@@ -2774,7 +2786,7 @@ app.get('/result', checkAuth, async (req, res) => {
       <html lang="uk">
         <head>
           <meta charset="UTF-8">
-          <title>Результати ${testNames[testData.testNumber]?.name.replace(/"/g, '\\"') || 'Невідомий тест'}</title>
+          <title>Результати ${testNames[testNumber]?.name.replace(/"/g, '\\"') || 'Невідомий тест'}</title>
           <style>
             body { font-family: Arial, sans-serif; text-align: center; padding: 20px; background-color: #f5f5f5; }
             .result-container { margin: 20px auto; width: 150px; height: 150px; position: relative; }
@@ -2787,7 +2799,7 @@ app.get('/result', checkAuth, async (req, res) => {
             #restart { background-color: #ef5350; }
             @keyframes fillCircle {
               to {
-                stroke-dashoffset: ${(440 * (100 - (testData.percentage || percentage))) / 100};
+                stroke-dashoffset: ${(440 * (100 - percentage)) / 100};
               }
             }
           </style>
@@ -2801,13 +2813,13 @@ app.get('/result', checkAuth, async (req, res) => {
               <circle class="result-circle-bg" cx="75" cy="75" r="70" />
               <circle class="result-circle" cx="75" cy="75" r="70" />
             </svg>
-            <div class="result-text">${Math.round(testData.percentage || percentage)}%</div>
+            <div class="result-text">${Math.round(percentage)}%</div>
           </div>
           <p>
-            Кількість питань: ${testData.totalQuestions || totalQuestions}<br>
-            Правильних відповідей: ${testData.correctClicks || correctClicks}<br>
-            Набрано балів: ${testData.score || score}<br>
-            Максимально можлива кількість балів: ${testData.totalPoints || totalPoints}<br>
+            Кількість питань: ${totalQuestions}<br>
+            Правильних відповідей: ${correctClicks}<br>
+            Набрано балів: ${score}<br>
+            Максимально можлива кількість балів: ${totalPoints}<br>
           </p>
           <div class="buttons">
             <button id="exportPDF">Експортувати в PDF</button>
@@ -2815,12 +2827,12 @@ app.get('/result', checkAuth, async (req, res) => {
           </div>
           <script>
             const user = "${req.user.replace(/"/g, '\\"')}";
-            const testName = "${testNames[testData.testNumber]?.name.replace(/"/g, '\\"') || 'Невідомий тест'}";
-            const totalQuestions = ${testData.totalQuestions || totalQuestions};
-            const correctClicks = ${testData.correctClicks || correctClicks};
-            const score = ${testData.score || score};
-            const totalPoints = ${testData.totalPoints || totalPoints};
-            const percentage = ${Math.round(testData.percentage || percentage)};
+            const testName = "${testNames[testNumber]?.name.replace(/"/g, '\\"') || 'Невідомий тест'}";
+            const totalQuestions = ${totalQuestions};
+            const correctClicks = ${correctClicks};
+            const score = ${score};
+            const totalPoints = ${totalPoints};
+            const percentage = ${Math.round(percentage)};
             const time = "${formattedTime.replace(/"/g, '\\"')}";
             const date = "${formattedDate.replace(/"/g, '\\"')}";
             const imageBase64 = "${imageBase64.replace(/"/g, '\\"')}";
@@ -2841,9 +2853,13 @@ app.get('/result', checkAuth, async (req, res) => {
             const exportPDFButton = document.getElementById('exportPDF');
             const restartButton = document.getElementById('restart');
 
-            if (exportPDFButton) {
+            if (!exportPDFButton) {
+              console.error('Кнопка експорту PDF не знайдена!');
+            } else {
+              console.log('Кнопка експорту PDF знайдена, додаємо обробник події.');
               exportPDFButton.addEventListener('click', () => {
                 try {
+                  console.log('Натискання кнопки експорту PDF, генерація PDF...');
                   const docDefinition = {
                     content: [
                       imageBase64 ? {
@@ -2870,6 +2886,7 @@ app.get('/result', checkAuth, async (req, res) => {
                     }
                   };
                   pdfMake.createPdf(docDefinition).download('result.pdf');
+                  console.log('PDF згенеровано успішно.');
                 } catch (error) {
                   console.error('Помилка генерації PDF:', error);
                   alert('Не вдалося згенерувати PDF. Перевірте консоль браузера для деталей.');
@@ -2877,8 +2894,12 @@ app.get('/result', checkAuth, async (req, res) => {
               });
             }
 
-            if (restartButton) {
+            if (!restartButton) {
+              console.error('Кнопка повернення не знайдена!');
+            } else {
+              console.log('Кнопка повернення знайдена, додаємо обробник події.');
               restartButton.addEventListener('click', () => {
+                console.log('Натискання кнопки повернення, перенаправлення на /select-test');
                 window.location.href = '/select-test';
               });
             }
