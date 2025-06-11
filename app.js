@@ -49,7 +49,7 @@ const transporter = nodemailer.createTransport({
   service: 'gmail',
   auth: {
     user: process.env.EMAIL_USER || 'alphacentertest@gmail.com',
-    pass: process.env.EMAIL_PASS || ':bnnz<fnmrsdobysxtcnmysrjve'
+    pass: process.env.EMAIL_PASS || 'xfcd cvkl xiii qhtl'
   }
 });
 
@@ -815,8 +815,6 @@ const logActivity = async (user, action, ipAddress, additionalInfo = {}, session
   try {
     const startTime = Date.now();
     const timestamp = new Date();
-    const timeOffset = 3 * 60 * 60 * 1000;
-    const adjustedTimestamp = new Date(timestamp.getTime() + timeOffset);
     await db.collection('activity_log').insertOne({
       user,
       action,
@@ -1270,10 +1268,6 @@ const saveResult = async (user, testNumber, score, totalPoints, startTime, endTi
   try {
     await session.withTransaction(async () => {
       const duration = Math.round((endTime - startTime) / 1000);
-      const timeOffset = 3 * 60 * 60 * 1000;
-      const adjustedStartTime = new Date(startTime + timeOffset);
-      const adjustedEndTime = new Date(endTime + timeOffset);
-
       const result = {
         user,
         testNumber,
@@ -1283,8 +1277,8 @@ const saveResult = async (user, testNumber, score, totalPoints, startTime, endTi
         correctClicks,
         totalQuestions,
         percentage,
-        startTime: adjustedStartTime.toISOString(),
-        endTime: adjustedEndTime.toISOString(),
+        startTime: new Date(startTime).toISOString(),
+        endTime: new Date(endTime).toISOString(),
         duration,
         answers: Object.fromEntries(Object.entries(answers).sort((a, b) => parseInt(a[0]) - parseInt(b[0]))),
         scoresPerQuestion,
@@ -1521,12 +1515,13 @@ app.post('/feedback', checkAuth, [
       user,
       message,
       timestamp,
-      ipAddress
+      ipAddress,
+      read: false // Додаємо поле для позначки прочитання
     });
 
     logger.info('Зворотний зв’язок збережено', { user, message });
 
-    // (Опціонально) Надсилання email адміністратору
+    // Надсилання email адміністратору
     try {
       const mailOptions = {
         from: process.env.EMAIL_USER || 'alphacentertest@gmail.com',
@@ -1535,14 +1530,18 @@ app.post('/feedback', checkAuth, [
         text: `
           Користувач: ${user}
           Повідомлення: ${message}
-          Час: ${timestamp}
+          Час: ${new Date(timestamp).toLocaleString('uk-UA')}
           IP-адреса: ${ipAddress}
         `
       };
       await transporter.sendMail(mailOptions);
-      logger.info('Email зворотного зв’язку надіслано', { user });
+      logger.info('Email зворотного зв’язку надіслано', { user, email: process.env.EMAIL_USER });
     } catch (emailError) {
-      logger.error('Помилка відправки email зворотного зв’язку', { message: emailError.message, stack: emailError.stack });
+      logger.error('Помилка відправки email зворотного зв’язку', { 
+        message: emailError.message, 
+        stack: emailError.stack, 
+        emailUser: process.env.EMAIL_USER 
+      });
     }
 
     res.json({ success: true });
@@ -1571,6 +1570,9 @@ app.get('/admin/feedback', checkAuth, checkAdmin, async (req, res) => {
 
     const totalFeedback = await db.collection('feedback').countDocuments();
     const totalPages = Math.ceil(totalFeedback / limit);
+
+    // Позначити всі повідомлення як прочитані
+    await db.collection('feedback').updateMany({ read: false }, { $set: { read: true } });
 
     const html = `
       <!DOCTYPE html>
@@ -3753,9 +3755,12 @@ app.get('/results', checkAuth, async (req, res) => {
 });
 
 // Маршрут для адмін-панелі
-app.get('/admin', checkAuth, checkAdmin, (req, res) => {
+app.get('/admin', checkAuth, checkAdmin, async (req, res) => {
   const startTime = Date.now();
   try {
+    // Підрахунок непрочитаних повідомлень
+    const unreadFeedbackCount = await db.collection('feedback').countDocuments({ read: false });
+
     const html = `
       <!DOCTYPE html>
       <html lang="uk">
@@ -3766,14 +3771,31 @@ app.get('/admin', checkAuth, checkAdmin, (req, res) => {
           <style>
             body { font-family: Arial, sans-serif; text-align: center; padding: 50px; font-size: 24px; margin: 0; }
             h1 { font-size: 36px; margin-bottom: 20px; }
-            button { padding: 15px 30px; margin: 10px; font-size: 24px; cursor: pointer; width: 300px; border: none; border-radius: 5px; background-color: #4CAF50; color: white; }
+            button { padding: 15px 30px; margin: 10px; font-size: 24px; cursor: pointer; width: 300px; border: none; border-radius: 5px; background-color: #4CAF50; color: white; position: relative; }
             button:hover { background-color: #45a049; }
+            #feedback-btn { 
+              background-color: ${unreadFeedbackCount > 0 ? '#ef5350' : '#4CAF50'}; 
+            }
+            #feedback-btn:hover { 
+              background-color: ${unreadFeedbackCount > 0 ? '#d32f2f' : '#45a049'}; 
+            }
+            .notification-badge {
+              position: absolute;
+              top: -10px;
+              right: -10px;
+              background-color: #ff9800;
+              color: white;
+              border-radius: 50%;
+              padding: 5px 10px;
+              font-size: 14px;
+            }
             #logout { background-color: #ef5350; color: white; }
             @media (max-width: 600px) {
               body { padding: 20px; padding-bottom: 80px; }
               h1 { font-size: 32px; }
               button { font-size: 20px; width: 90%; padding: 15px; }
               #logout { position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%); width: 90%; }
+              .notification-badge { font-size: 12px; padding: 3px 8px; }
             }
           </style>
         </head>
@@ -3787,7 +3809,10 @@ app.get('/admin', checkAuth, checkAdmin, (req, res) => {
           <button onclick="window.location.href='/admin/edit-tests'">Редагувати назви тестів</button><br>
           <button onclick="window.location.href='/admin/create-test'">Створити новий тест</button><br>
           <button onclick="window.location.href='/admin/activity-log'">Журнал дій</button><br>
-          <button onclick="window.location.href='/admin/feedback'">Зворотний зв’язок</button><br>
+          <button id="feedback-btn" onclick="window.location.href='/admin/feedback'">
+            Зворотний зв’язок
+            ${unreadFeedbackCount > 0 ? `<span class="notification-badge">${unreadFeedbackCount}</span>` : ''}
+          </button><br>
           <button id="logout" onclick="logout()">Вийти</button>
           <script>
             async function logout() {
@@ -3821,6 +3846,9 @@ app.get('/admin', checkAuth, checkAdmin, (req, res) => {
       </html>
     `;
     res.send(html);
+  } catch (error) {
+    logger.error('Помилка в /admin', { message: error.message, stack: error.stack });
+    res.status(500).send('Помилка при завантаженні адмін-панелі');
   } finally {
     const endTime = Date.now();
     logger.info('Маршрут /admin виконано', { duration: `${endTime - startTime} мс` });
