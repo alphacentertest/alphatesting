@@ -16,6 +16,7 @@ const session = require('express-session');
 const Tokens = require('csrf');
 const tokens = new Tokens();
 const MongoStore = require('connect-mongo');
+const { ObjectId } = require('mongodb');
 
 // Ініціалізація Express-додатку
 const app = express();
@@ -1554,6 +1555,45 @@ app.post('/feedback', checkAuth, [
   }
 });
 
+app.post('/admin/feedback/delete/:id', checkAuth, checkAdmin, async (req, res) => {
+  const startTime = Date.now();
+  try {
+    const feedbackId = req.params.id;
+    if (!ObjectId.isValid(feedbackId)) {
+      return res.status(400).json({ success: false, message: 'Невірний ID повідомлення' });
+    }
+
+    const result = await db.collection('feedback').deleteOne({ _id: new ObjectId(feedbackId) });
+    if (result.deletedCount === 0) {
+      return res.status(404).json({ success: false, message: 'Повідомлення не знайдено' });
+    }
+
+    logger.info('Видалено повідомлення зворотного зв’язку', { feedbackId, user: req.user });
+    res.json({ success: true });
+  } catch (error) {
+    logger.error('Помилка видалення повідомлення', { message: error.message, stack: error.stack });
+    res.status(500).json({ success: false, message: 'Помилка при видаленні повідомлення' });
+  } finally {
+    const endTime = Date.now();
+    logger.info('Маршрут /admin/feedback/delete/:id виконано', { duration: `${endTime - startTime} мс` });
+  }
+});
+
+app.post('/admin/feedback/delete-all', checkAuth, checkAdmin, async (req, res) => {
+  const startTime = Date.now();
+  try {
+    const result = await db.collection('feedback').deleteMany({});
+    logger.info('Видалено всі повідомлення зворотного зв’язку', { deletedCount: result.deletedCount, user: req.user });
+    res.json({ success: true });
+  } catch (error) {
+    logger.error('Помилка видалення всіх повідомлень', { message: error.message, stack: error.stack });
+    res.status(500).json({ success: false, message: 'Помилка при видаленні всіх повідомлень' });
+  } finally {
+    const endTime = Date.now();
+    logger.info('Маршрут /admin/feedback/delete-all виконано', { duration: `${endTime - startTime} мс` });
+  }
+});
+
 app.get('/admin/feedback', checkAuth, checkAdmin, async (req, res) => {
   const startTime = Date.now();
   try {
@@ -1588,7 +1628,7 @@ app.get('/admin/feedback', checkAuth, checkAdmin, async (req, res) => {
               background-color: #f5f5f5;
             }
             .container {
-              max-width: 800px;
+              max-width: 900px;
               margin: 0 auto;
               background-color: white;
               padding: 20px;
@@ -1618,17 +1658,34 @@ app.get('/admin/feedback', checkAuth, checkAdmin, async (req, res) => {
               max-width: 400px;
               word-wrap: break-word;
             }
-            .nav-btn {
-              padding: 10px 20px;
-              margin: 10px 0;
+            .nav-btn, .delete-btn, .delete-all-btn {
+              padding: 8px 16px;
               cursor: pointer;
               border: none;
               border-radius: 5px;
+              font-size: 14px;
+              margin: 5px;
+            }
+            .nav-btn {
               background-color: #007bff;
               color: white;
             }
             .nav-btn:hover {
               background-color: #0056b3;
+            }
+            .delete-btn {
+              background-color: #ef5350;
+              color: white;
+            }
+            .delete-btn:hover {
+              background-color: #d32f2f;
+            }
+            .delete-all-btn {
+              background-color: #d32f2f;
+              color: white;
+            }
+            .delete-all-btn:hover {
+              background-color: #b71c1c;
             }
             .pagination {
               margin-top: 20px;
@@ -1655,8 +1712,9 @@ app.get('/admin/feedback', checkAuth, checkAdmin, async (req, res) => {
               .message {
                 max-width: 200px;
               }
-              .nav-btn {
+              .nav-btn, .delete-btn, .delete-all-btn {
                 width: 100%;
+                box-sizing: border-box;
               }
             }
           </style>
@@ -1665,12 +1723,14 @@ app.get('/admin/feedback', checkAuth, checkAdmin, async (req, res) => {
           <div class="container">
             <h1>Зворотний зв’язок від користувачів</h1>
             <button class="nav-btn" onclick="window.location.href='/admin'">Повернутися до адмін-панелі</button>
+            <button class="delete-all-btn" onclick="deleteAllFeedback()">Видалити всі повідомлення</button>
             <table>
               <tr>
                 <th>Користувач</th>
                 <th>Повідомлення</th>
                 <th>Час</th>
                 <th>IP-адреса</th>
+                <th>Дії</th>
               </tr>
               ${feedback.length > 0 ? feedback.map(f => `
                 <tr>
@@ -1678,8 +1738,11 @@ app.get('/admin/feedback', checkAuth, checkAdmin, async (req, res) => {
                   <td class="message">${f.message.replace(/</g, '&lt;').replace(/>/g, '&gt;')}</td>
                   <td>${new Date(f.timestamp).toLocaleString('uk-UA')}</td>
                   <td>${f.ipAddress}</td>
+                  <td>
+                    <button class="delete-btn" onclick="deleteFeedback('${f._id}')">Видалити</button>
+                  </td>
                 </tr>
-              `).join('') : '<tr><td colspan="4">Немає повідомлень</td></tr>'}
+              `).join('') : '<tr><td colspan="5">Немає повідомлень</td></tr>'}
             </table>
             <div class="pagination">
               ${page > 1 ? `<a href="/admin/feedback?page=${page - 1}">Попередня</a>` : ''}
@@ -1687,6 +1750,51 @@ app.get('/admin/feedback', checkAuth, checkAdmin, async (req, res) => {
               ${page < totalPages ? `<a href="/admin/feedback?page=${page + 1}">Наступна</a>` : ''}
             </div>
           </div>
+          <script>
+            async function deleteFeedback(id) {
+              if (!confirm('Ви впевнені, що хочете видалити це повідомлення?')) return;
+              const formData = new URLSearchParams();
+              formData.append('_csrf', '${res.locals._csrf}');
+              try {
+                const response = await fetch('/admin/feedback/delete/' + id, {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                  body: formData
+                });
+                const result = await response.json();
+                if (result.success) {
+                  window.location.reload();
+                } else {
+                  alert('Помилка видалення: ' + result.message);
+                }
+              } catch (error) {
+                console.error('Помилка видалення:', error);
+                alert('Не вдалося видалити повідомлення.');
+              }
+            }
+
+            async function deleteAllFeedback() {
+              if (!confirm('Ви впевнені, що хочете видалити ВСІ повідомлення?')) return;
+              const formData = new URLSearchParams();
+              formData.append('_csrf', '${res.locals._csrf}');
+              try {
+                const response = await fetch('/admin/feedback/delete-all', {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                  body: formData
+                });
+                const result = await response.json();
+                if (result.success) {
+                  window.location.reload();
+                } else {
+                  alert('Помилка видалення: ' + result.message);
+                }
+              } catch (error) {
+                console.error('Помилка видалення всіх повідомлень:', error);
+                alert('Не вдалося видалити всі повідомлення.');
+              }
+            }
+          </script>
         </body>
       </html>
     `;
@@ -6206,7 +6314,7 @@ app.get('/admin/activity-log', checkAuth, checkAdmin, async (req, res) => {
   const startTime = Date.now();
   try {
     const page = parseInt(req.query.page) || 1;
-    const limit = 20;
+    const limit = 50;
     const skip = (page - 1) * limit;
 
     const activities = await db.collection('activity_log')
@@ -6219,59 +6327,110 @@ app.get('/admin/activity-log', checkAuth, checkAdmin, async (req, res) => {
     const totalActivities = await db.collection('activity_log').countDocuments();
     const totalPages = Math.ceil(totalActivities / limit);
 
-    let html = `
+    const html = `
       <!DOCTYPE html>
       <html lang="uk">
         <head>
           <meta charset="UTF-8">
-          <title>Журнал активності</title>
+          <meta name="viewport" content="width=device-width, initial-scale=1.0">
+          <title>Журнал дій</title>
           <style>
-            body { font-family: Arial, sans-serif; padding: 20px; }
-            table { border-collapse: collapse; width: 100%; margin-top: 20px; }
-            th, td { border: 1px solid black; padding: 8px; text-align: left; }
-            th { background-color: #f2f2f2; }
-            .error { color: red; }
-            .nav-btn { padding: 10px 20px; margin: 5px; cursor: pointer; border: none; border-radius: 5px; background-color: #007bff; color: white; }
-            .pagination { margin-top: 20px; }
-            .pagination a { margin: 0 5px; padding: 5px 10px; background-color: #007bff; color: white; text-decoration: none; border-radius: 5px; }
-            .pagination a:hover { background-color: #0056b3; }
+            body {
+              font-family: Arial, sans-serif;
+              padding: 20px;
+              background-color: #f5f5f5;
+            }
+            .container {
+              max-width: 800px;
+              margin: 0 auto;
+              background-color: white;
+              padding: 20px;
+              border-radius: 8px;
+              box-shadow: 0 0 10px rgba(0, 0, 0, 0.1);
+            }
+            h1 {
+              font-size: 24px;
+              text-align: center;
+              margin-bottom: 20px;
+            }
+            table {
+              border-collapse: collapse;
+              width: 100%;
+              margin-top: 20px;
+            }
+            th, td {
+              border: 1px solid #ddd;
+              padding: 8px;
+              text-align: left;
+            }
+            th {
+              background-color: #f2f2f2;
+            }
+            .nav-btn {
+              padding: 10px 20px;
+              margin: 10px 0;
+              cursor: pointer;
+              border: none;
+              border-radius: 5px;
+              background-color: #007bff;
+              color: white;
+            }
+            .nav-btn:hover {
+              background-color: #0056b3;
+            }
+            .pagination {
+              margin-top: 20px;
+              text-align: center;
+            }
+            .pagination a {
+              margin: 0 5px;
+              padding: 5px 10px;
+              background-color: #007bff;
+              color: white;
+              text-decoration: none;
+              border-radius: 5px;
+            }
+            .pagination a:hover {
+              background-color: #0056b3;
+            }
+            @media (max-width: 600px) {
+              h1 {
+                font-size: 20px;
+              }
+              table {
+                font-size: 14px;
+              }
+              .nav-btn {
+                width: 100%;
+              }
+            }
           </style>
         </head>
         <body>
-          <h1>Журнал активності</h1>
-          <button class="nav-btn" onclick="window.location.href='/admin'">Повернутися до адмін-панелі</button>
-          <table>
-            <tr>
-              <th>Користувач</th>
-              <th>Дія</th>
-              <th>IP-адреса</th>
-              <th>Час</th>
-              <th>Додаткова інформація</th>
-            </tr>
-    `;
-    if (!activities || activities.length === 0) {
-      html += '<tr><td colspan="5">Немає записів активності</td></tr>';
-    } else {
-      activities.forEach(activity => {
-        const timestamp = new Date(activity.timestamp).toLocaleString('uk-UA');
-        const additionalInfo = JSON.stringify(activity.additionalInfo, null, 2);
-        html += `
-          <tr>
-            <td>${activity.user}</td>
-            <td>${activity.action}</td>
-            <td>${activity.ipAddress}</td>
-            <td>${timestamp}</td>
-            <td><pre>${additionalInfo}</pre></td>
-          </tr>
-        `;
-      });
-    }
-    html += `
-          </table>
-          <div class="pagination">
-            ${page > 1 ? `<a href="/admin/activity-log?page=${page - 1}">Попередня</a>` : ''}
-            <span>Сторінка ${page} з ${totalPages}</span>
-            ${page < totalPages ? `<a href="/admin/activity-log?page=${page + 1}">Наступна</a>` : ''}
+          <div class="container">
+            <h1>Журнал дій</h1>
+            <button class="nav-btn" onclick="window.location.href='/admin'">Повернутися до адмін-панелі</button>
+            <table>
+              <tr>
+                <th>Користувач</th>
+                <th>Дія</th>
+                <th>IP-адреса</th>
+                <th>Час</th>
+              </tr>
+              ${activities.length > 0 ? activities.map(a => `
+                <tr>
+                  <td>${a.user}</td>
+                  <td>${a.action}</td>
+                  <td>${a.ipAddress}</td>
+                  <td>${new Date(a.timestamp).toLocaleString('uk-UA')}</td>
+                </tr>
+              `).join('') : '<tr><td colspan="4">Немає записів</td></tr>'}
+            </table>
+            <div class="pagination">
+              ${page > 1 ? `<a href="/admin/activity-log?page=${page - 1}">Попередня</a>` : ''}
+              <span>Сторінка ${page} з ${totalPages}</span>
+              ${page < totalPages ? `<a href="/admin/activity-log?page=${page + 1}">Наступна</a>` : ''}
+            </div>
           </div>
         </body>
       </html>
@@ -6279,7 +6438,7 @@ app.get('/admin/activity-log', checkAuth, checkAdmin, async (req, res) => {
     res.send(html);
   } catch (error) {
     logger.error('Помилка в /admin/activity-log', { message: error.message, stack: error.stack });
-    res.status(500).send('Помилка при завантаженні журналу активності');
+    res.status(500).send('Помилка при завантаженні журналу дій');
   } finally {
     const endTime = Date.now();
     logger.info('Маршрут /admin/activity-log виконано', { duration: `${endTime - startTime} мс` });
