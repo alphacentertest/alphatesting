@@ -16,7 +16,6 @@ const session = require('express-session');
 const Tokens = require('csrf');
 const tokens = new Tokens();
 const MongoStore = require('connect-mongo');
-const { ObjectId } = require('mongodb');
 
 // Ініціалізація Express-додатку
 const app = express();
