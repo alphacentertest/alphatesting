@@ -53,7 +53,6 @@ const transporter = nodemailer.createTransport({
   }
 });
 
-
 // Функція для відправки email про підозрілу активність
 const sendSuspiciousActivityEmail = async (user, activityDetails) => {
   try {
@@ -273,6 +272,7 @@ app.use((req, res, next) => {
     logger.info('Згенеровано новий CSRF-секрет через відсутність у сесії', { secret: req.session.csrfSecret });
   }
   const token = tokens.create(req.session.csrfSecret);
+  res.locals = res.locals || {}; // Ініціалізуємо res.locals, якщо не існує
   res.locals._csrf = token;
   res.cookie('XSRF-TOKEN', token.toString(), { httpOnly: false });
   logger.info('Згенеровано CSRF-токен', { token });
@@ -284,7 +284,7 @@ app.use((req, res, next) => {
   if (['POST', 'PUT', 'DELETE'].includes(req.method)) {
     const token = req.body._csrf || req.headers['x-csrf-token'] || req.headers['xsrf-token'];
     if (!token) {
-      logger.error('Відсутній CSRF-токен у запиті', { method: req.method, url: req.url });
+      logger.error('Відсутній CSRF-токен у запиті', { method: req.method, url: req.url, body: req.body, headers: req.headers });
       return res.status(403).json({ success: false, message: 'CSRF-токен відсутній' });
     }
     if (!req.session.csrfSecret) {
@@ -684,7 +684,7 @@ const initializeServer = async () => {
     await db.collection('questions').createIndex({ testNumber: 1, variant: 1 });
     await db.collection('test_results').createIndex({ user: 1, testNumber: 1, endTime: -1 });
     await db.collection('activity_log').createIndex({ user: 1, timestamp: -1 });
-    await db.collection('test_attempts').createIndex({ user: 1, testNumber: 1, attemptDate: 1 }); // Виправлено порожні рядки
+    await db.collection('test_attempts').createIndex({ user: 1, testNumber: 1, attemptDate: 1 });
     await db.collection('login_attempts').createIndex({ ipAddress: 1, lastAttempt: 1 });
     await db.collection('tests').createIndex({ testNumber: 1 }, { unique: true });
     await db.collection('active_tests').createIndex({ user: 1 }, { unique: true });
@@ -4559,7 +4559,7 @@ app.get('/admin/import-users', checkAuth, checkAdmin, (req, res) => {
         <body>
           <h1>Імпорт користувачів із Excel</h1>
           <form id="import-form">
-            <input type="hidden" name="_csrf" id="_csrf" value="${res.locals._csrf}">
+            <input type="hidden" name="_csrf" id="_csrf" value="${res.locals._csrf || ''}">
             <label for="file">Виберіть файл users.xlsx:</label>
             <input type="file" id="file" name="file" accept=".xlsx" required>
             <button type="submit" class="submit-btn" id="submit-btn">Завантажити</button>
@@ -4589,6 +4589,7 @@ app.get('/admin/import-users', checkAuth, checkAdmin, (req, res) => {
 
               const formData = new FormData();
               formData.append('file', fileInput.files[0]);
+              formData.append('_csrf', csrfToken);
 
               try {
                 const response = await fetch('/admin/import-users', {
@@ -4613,7 +4614,7 @@ app.get('/admin/import-users', checkAuth, checkAdmin, (req, res) => {
                 submitBtn.disabled = false;
                 submitBtn.textContent = 'Завантажити';
               }
-                        });
+            });
           </script>
         </body>
       </html>
@@ -4710,7 +4711,7 @@ app.get('/admin/import-questions', checkAuth, checkAdmin, (req, res) => {
         <body>
           <h1>Імпорт питань із Excel</h1>
           <form id="import-form">
-            <input type="hidden" name="_csrf" id="_csrf" value="${res.locals._csrf}">
+            <input type="hidden" name="_csrf" id="_csrf" value="${res.locals._csrf || ''}">
             <label for="testNumber">Номер тесту:</label>
             <select id="testNumber" name="testNumber" required>
               ${Object.keys(testNames).map(num => `<option value="${num}">${testNames[num].name.replace(/"/g, '\\"')}</option>`).join('')}
@@ -4746,6 +4747,7 @@ app.get('/admin/import-questions', checkAuth, checkAdmin, (req, res) => {
               const formData = new FormData();
               formData.append('testNumber', testNumber);
               formData.append('file', fileInput.files[0]);
+              formData.append('_csrf', csrfToken);
 
               try {
                 const response = await fetch('/admin/import-questions', {
