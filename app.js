@@ -49,9 +49,10 @@ const transporter = nodemailer.createTransport({
   service: 'gmail',
   auth: {
     user: process.env.EMAIL_USER || 'alphacentertest@gmail.com',
-    pass: process.env.EMAIL_PASS || ':bnnz<fnmrsdobysxtcnmysrjve'
+    pass: process.env.EMAIL_PASS || 'xfcd cvkl xiii qhtl'
   }
 });
+
 
 // Функція для відправки email про підозрілу активність
 const sendSuspiciousActivityEmail = async (user, activityDetails) => {
@@ -243,6 +244,8 @@ app.use(session({
     dbName: 'alpha',
     collectionName: 'sessions',
     ttl: 24 * 60 * 60 // 24 години
+  }).on('error', (error) => {
+    logger.error('Помилка MongoStore', { message: error.message, stack: error.stack });
   }),
   cookie: {
     secure: process.env.NODE_ENV === 'production',
@@ -251,6 +254,12 @@ app.use(session({
     maxAge: 24 * 60 * 60 * 1000 // 24 години
   }
 }));
+
+// Логування отриманих cookie для діагностики
+app.use((req, res, next) => {
+  logger.info('Отримано cookie', { cookies: req.cookies, sessionID: req.sessionID });
+  next();
+});
 
 app.use((req, res, next) => {
   logger.info('Запит отримано', { url: req.url, method: req.method, userRole: req.userRole, timestamp: new Date().toISOString(), args: process.argv });
@@ -261,11 +270,11 @@ app.use((req, res, next) => {
 app.use((req, res, next) => {
   if (!req.session.csrfSecret) {
     req.session.csrfSecret = tokens.secretSync();
-    logger.info('Згенеровано новий CSRF-секрет', { secret: req.session.csrfSecret });
+    logger.info('Згенеровано новий CSRF-секрет через відсутність у сесії', { secret: req.session.csrfSecret });
   }
   const token = tokens.create(req.session.csrfSecret);
   res.locals._csrf = token;
-  res.cookie('XSRF-TOKEN', token, { httpOnly: false });
+  res.cookie('XSRF-TOKEN', token.toString(), { httpOnly: false });
   logger.info('Згенеровано CSRF-токен', { token });
   next();
 });
@@ -273,13 +282,13 @@ app.use((req, res, next) => {
 // Валідація CSRF-токенів для POST-запитів
 app.use((req, res, next) => {
   if (['POST', 'PUT', 'DELETE'].includes(req.method)) {
-    const token = req.body._csrf || req.headers['x-csrf-token'];
+    const token = req.body._csrf || req.headers['x-csrf-token'] || req.headers['xsrf-token'];
     if (!token) {
       logger.error('Відсутній CSRF-токен у запиті', { method: req.method, url: req.url });
       return res.status(403).json({ success: false, message: 'CSRF-токен відсутній' });
     }
     if (!req.session.csrfSecret) {
-      logger.error('Відсутній CSRF-секрет у сесії', { sessionId: req.sessionID });
+      logger.error('Відсутній CSRF-секрет у сесії', { sessionId: req.sessionID || 'unknown' });
       return res.status(403).json({ success: false, message: 'Помилка сесії: CSRF секрет відсутній' });
     }
     if (!tokens.verify(req.session.csrfSecret, token)) {
@@ -675,7 +684,7 @@ const initializeServer = async () => {
     await db.collection('questions').createIndex({ testNumber: 1, variant: 1 });
     await db.collection('test_results').createIndex({ user: 1, testNumber: 1, endTime: -1 });
     await db.collection('activity_log').createIndex({ user: 1, timestamp: -1 });
-    await db.collection('test_attempts').createIndex({ user: 1, testNumber: 1, attemptDate: 1 });
+    await db.collection('test_attempts').createIndex({ user: 1, testNumber: '', attemptDate: '' });
     await db.collection('login_attempts').createIndex({ ipAddress: 1, lastAttempt: 1 });
     await db.collection('tests').createIndex({ testNumber: 1 }, { unique: true });
     await db.collection('active_tests').createIndex({ user: 1 }, { unique: true });
