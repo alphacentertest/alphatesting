@@ -259,18 +259,23 @@ app.use((req, res, next) => {
 
 // Middleware для генерації CSRF-токенів
 app.use((req, res, next) => {
+  // Ініціалізація res.locals, якщо він ще не існує
+  res.locals = res.locals || {};
+  
   if (!req.session) {
-    logger.error('Сесія відсутня у запиті', { url: req.url, method: req.method });
+    console.error('Сесія відсутня у запиті', { url: req.url, method: req.method });
     return res.status(500).send('Помилка сервера: сесія недоступна');
   }
+  
   if (!req.session.csrfSecret) {
     req.session.csrfSecret = tokens.secretSync();
-    logger.info('Згенеровано новий CSRF-секрет', { secret: req.session.csrfSecret });
+    console.log('Згенеровано новий CSRF-секрет', { secret: req.session.csrfSecret });
   }
+  
   const token = tokens.create(req.session.csrfSecret);
   res.locals._csrf = token;
   res.cookie('XSRF-TOKEN', token, { httpOnly: false });
-  logger.info('Згенеровано CSRF-токен', { token });
+  console.log('Згенеровано CSRF-токен', { token, url: req.url });
   next();
 });
 
@@ -5518,32 +5523,26 @@ app.get('/admin/import-questions', checkAuth, checkAdmin, (req, res) => {
 
 // Маршрут для обробки імпорту питань
 app.post('/admin/import-questions', checkAuth, checkAdmin, upload.single('file'), async (req, res) => {
-  const startTime = Date.now();
   try {
+    // Ініціалізація res.locals, якщо він відсутній
+    res.locals = res.locals || {};
+    
     const token = req.headers['x-csrf-token'] || req.body._csrf;
     if (!token || !req.session.csrfSecret || !tokens.verify(req.session.csrfSecret, token)) {
-      logger.error('Невірний або відсутній CSRF-токен у /admin/import-questions', {
-        token,
-        csrfSecret: req.session.csrfSecret
-      });
+      console.error('Невірний або відсутній CSRF-токен', { token, csrfSecret: req.session.csrfSecret });
+      
+      // Генерація нового токена для сторінки помилки
+      const newToken = tokens.create(req.session.csrfSecret || tokens.secretSync());
+      res.locals._csrf = newToken;
+      res.cookie('XSRF-TOKEN', newToken, { httpOnly: false });
+      
       return res.status(403).send(`
-        <!DOCTYPE html>
-        <html lang="uk">
-          <head>
-            <meta charset="UTF-8">
-            <title>Помилка CSRF</title>
-            <style>
-              body { font-family: Arial, sans-serif; padding: 20px; text-align: center; }
-              .error { color: red; }
-              button { padding: 10px 20px; margin: 5px; cursor: pointer; border: none; border-radius: 5px; background-color: #007bff; color: white; }
-            </style>
-          </head>
-          <body>
-            <h1>Помилка CSRF</h1>
-            <p class="error">Недійсний CSRF-токен. Оновіть сторінку та спробуйте знову.</p>
-            <button onclick="window.location.href='/admin/import-questions'">Спробувати знову</button>
-          </body>
-        </html>
+        <h1>Помилка CSRF</h1>
+        <p>Недійсний CSRF-токен. Оновіть сторінку та спробуйте знову.</p>
+        <form method="GET" action="/admin/import-questions">
+          <input type="hidden" name="_csrf" value="${newToken}">
+          <button type="submit">Спробувати знову</button>
+        </form>
       `);
     }
 
@@ -5616,29 +5615,21 @@ app.post('/admin/import-questions', checkAuth, checkAdmin, upload.single('file')
       </html>
     `);
   } catch (error) {
-    logger.error('Помилка імпорту питань', { message: error.message, stack: error.stack });
+    console.error('Помилка імпорту питань', { message: error.message, stack: error.stack });
+    
+    // Генерація нового токена для сторінки помилки
+    const newToken = tokens.create(req.session.csrfSecret || tokens.secretSync());
+    res.locals._csrf = newToken;
+    res.cookie('XSRF-TOKEN', newToken, { httpOnly: false });
+    
     res.status(500).send(`
-      <!DOCTYPE html>
-      <html lang="uk">
-        <head>
-          <meta charset="UTF-8">
-          <title>Помилка імпорту</title>
-          <style>
-            body { font-family: Arial, sans-serif; padding: 20px; text-align: center; }
-            .error { color: red; }
-            button { padding: 10px 20px; margin: 5px; cursor: pointer; border: none; border-radius: 5px; background-color: #007bff; color: white; }
-          </style>
-        </head>
-        <body>
-          <h1>Помилка імпорту питань</h1>
-          <p class="error">${error.message}</p>
-          <button onclick="window.location.href='/admin/import-questions'">Спробувати знову</button>
-        </body>
-      </html>
+      <h1>Помилка імпорту</h1>
+      <p>${error.message}</p>
+      <form method="GET" action="/admin/import-questions">
+        <input type="hidden" name="_csrf" value="${newToken}">
+        <button type="submit">Спробувати знову</button>
+      </form>
     `);
-  } finally {
-    const endTime = Date.now();
-    logger.info('Маршрут /admin/import-questions (POST) виконано', { duration: `${endTime - startTime} мс` });
   }
 });
 
