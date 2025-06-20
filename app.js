@@ -242,25 +242,27 @@ app.use(session({
     client: client,
     dbName: 'alpha',
     collectionName: 'sessions',
-    ttl: 24 * 60 * 60
-  }).on('error', (error) => {
-    logger.error('Помилка MongoStore', { message: error.message, stack: error.stack });
+    ttl: 24 * 60 * 60 // 24 години
   }),
   cookie: {
     secure: process.env.NODE_ENV === 'production',
     httpOnly: true,
     sameSite: process.env.NODE_ENV === 'production' ? 'none' : 'lax',
-    maxAge: 24 * 60 * 60 * 1000
+    maxAge: 24 * 60 * 60 * 1000 // 24 години
   }
 }));
 
 app.use((req, res, next) => {
-  logger.info('Перевірка сесії в CSRF middleware', {
-    sessionExists: !!req.session,
-    csrfSecret: req.session?.csrfSecret,
-    url: req.url,
-    method: req.method
-  });
+  logger.info('Запит отримано', { url: req.url, method: req.method, userRole: req.userRole, timestamp: new Date().toISOString(), args: process.argv });
+  next();
+});
+
+// Middleware для генерації CSRF-токенів
+app.use((req, res, next) => {
+  if (!req.session) {
+    logger.error('Сесія відсутня у запиті', { url: req.url, method: req.method });
+    return res.status(500).send('Помилка сервера: сесія недоступна');
+  }
   if (!req.session.csrfSecret) {
     req.session.csrfSecret = tokens.secretSync();
     logger.info('Згенеровано новий CSRF-секрет', { secret: req.session.csrfSecret });
@@ -271,28 +273,27 @@ app.use((req, res, next) => {
   logger.info('Згенеровано CSRF-токен', { token });
   next();
 });
-app.use(ensureInitialized);
 
 // Валідація CSRF-токенів для POST-запитів
 app.use((req, res, next) => {
   if (['POST', 'PUT', 'DELETE'].includes(req.method)) {
     const token = req.body._csrf || req.headers['x-csrf-token'];
     if (!token) {
-      logger.error('Missing CSRF token in request', { method: req.method, url: req.url });
+      logger.error('Відсутній CSRF-токен у запиті', { method: req.method, url: req.url });
       return res.status(403).json({ success: false, message: 'CSRF-токен відсутній' });
     }
     if (!req.session.csrfSecret) {
-      logger.error('Missing CSRF secret in session', { sessionId: req.sessionID });
+      logger.error('Відсутній CSRF-секрет у сесії', { sessionId: req.sessionID });
       return res.status(403).json({ success: false, message: 'Помилка сесії: CSRF секрет відсутній' });
     }
     if (!tokens.verify(req.session.csrfSecret, token)) {
-      logger.error('CSRF token verification failed', {
+      logger.error('Помилка валідації CSRF-токена', {
         expectedSecret: req.session.csrfSecret,
         receivedToken: token
       });
       return res.status(403).json({ success: false, message: 'Недійсний CSRF-токен' });
     }
-    logger.info('CSRF token successfully validated', { token });
+    logger.info('CSRF-токен успішно валідовано', { token });
   }
   next();
 });
@@ -5398,11 +5399,17 @@ app.post('/admin/import-users', checkAuth, checkAdmin, upload.single('file'), as
 // Маршрут для імпорту питань
 app.get('/admin/import-questions', checkAuth, checkAdmin, (req, res) => {
   const startTime = Date.now();
+  logger.info('Початок обробки /admin/import-questions (GET)', {
+    csrfToken: res.locals._csrf,
+    sessionExists: !!req.session,
+    csrfSecret: req.session?.csrfSecret
+  });
   try {
     if (!testNames || !Object.keys(testNames).length) {
       throw new Error('Список тестів недоступний');
     }
-    // Перевірка і встановлення CSRF-токена, якщо він відсутній
+    
+    // Перевірка та резервне генерування CSRF-токена
     if (!res.locals._csrf) {
       logger.warn('CSRF-токен відсутній у /admin/import-questions, генеруємо новий');
       if (!req.session.csrfSecret) {
@@ -5498,38 +5505,11 @@ app.get('/admin/import-questions', checkAuth, checkAdmin, (req, res) => {
           </script>
         </body>
       </html>
-    `;
+    `.trim();
     res.send(html);
   } catch (error) {
     logger.error('Помилка в /admin/import-questions', { message: error.message, stack: error.stack });
-    // У блоці catch також забезпечуємо CSRF-токен
-    if (!res.locals._csrf) {
-      logger.warn('CSRF-токен відсутній у блоці catch /admin/import-questions, генеруємо новий');
-      if (!req.session.csrfSecret) {
-        req.session.csrfSecret = tokens.secretSync();
-      }
-      res.locals._csrf = tokens.create(req.session.csrfSecret);
-      res.cookie('XSRF-TOKEN', res.locals._csrf, { httpOnly: false });
-    }
-    res.status(500).send(`
-      <!DOCTYPE html>
-      <html lang="uk">
-        <head>
-          <meta charset="UTF-8">
-          <title>Помилка імпорту</title>
-          <style>
-            body { font-family: Arial, sans-serif; padding: 20px; text-align: center; }
-            .error { color: red; }
-            button { padding: 10px 20px; margin: 5px; cursor: pointer; border: none; border-radius: 5px; background-color: #007bff; color: white; }
-          </style>
-        </head>
-        <body>
-          <h1>Помилка імпорту питань</h1>
-          <p class="error">${error.message}</p>
-          <button onclick="window.location.href='/admin/import-questions'">Спробувати знову</button>
-        </body>
-      </html>
-    `);
+    res.status(500).send('Помилка при імпорті питань');
   } finally {
     const endTime = Date.now();
     logger.info('Маршрут /admin/import-questions виконано', { duration: `${endTime - startTime} мс` });
