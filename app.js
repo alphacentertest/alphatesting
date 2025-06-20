@@ -684,7 +684,7 @@ const initializeServer = async () => {
     await db.collection('questions').createIndex({ testNumber: 1, variant: 1 });
     await db.collection('test_results').createIndex({ user: 1, testNumber: 1, endTime: -1 });
     await db.collection('activity_log').createIndex({ user: 1, timestamp: -1 });
-    await db.collection('test_attempts').createIndex({ user: 1, testNumber: '', attemptDate: '' });
+    await db.collection('test_attempts').createIndex({ user: 1, testNumber: 1, attemptDate: 1 }); // Виправлено порожні рядки
     await db.collection('login_attempts').createIndex({ ipAddress: 1, lastAttempt: 1 });
     await db.collection('tests').createIndex({ testNumber: 1 }, { unique: true });
     await db.collection('active_tests').createIndex({ user: 1 }, { unique: true });
