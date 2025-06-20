@@ -13,17 +13,15 @@ const { body, validationResult } = require('express-validator');
 const jwt = require('jsonwebtoken');
 const winston = require('winston');
 const session = require('express-session');
-const Tokens = require('csrf');
-const tokens = new Tokens();
 const MongoStore = require('connect-mongo');
 
 // Ініціалізація Express-додатку
 const app = express();
 
-// Увімкнення довіри до проксі для коректної роботи за розгортання
+// Увімкнення довіри до проксі
 app.set('trust proxy', 1);
 
-// Налаштування логування за допомогою winston
+// Налаштування логування
 const logger = winston.createLogger({
   level: 'info',
   format: winston.format.combine(
@@ -37,14 +35,14 @@ const logger = winston.createLogger({
   ]
 });
 
-// Налаштування multer для зберігання файлів у пам’яті (сумісність із Vercel)
+// Налаштування multer
 const storage = multer.memoryStorage();
 const upload = multer({
   storage: storage,
-  limits: { fileSize: 4 * 1024 * 1024 } // Обмеження розміру файлу до 4 МБ
+  limits: { fileSize: 4 * 1024 * 1024 }
 });
 
-// Налаштування nodemailer для відправки email
+// Налаштування nodemailer
 const transporter = nodemailer.createTransport({
   service: 'gmail',
   auth: {
@@ -53,16 +51,15 @@ const transporter = nodemailer.createTransport({
   }
 });
 
-// Функція для відправки email про підозрілу активність
+// Функція для відправки email
 const sendSuspiciousActivityEmail = async (user, activityDetails) => {
   try {
     const mailOptions = {
-      from: process.env.EMAIL_USER || 'alphacentertest@gmail.com',
-      to: process.env.EMAIL_USER || 'alphacentertest@gmail.com',
-      subject: 'Підозріла активність у системі тестування',
+      from: process.env.EMAIL_USER,
+      to: process.env.EMAIL_USER,
+      subject: 'Підозріла активність',
       text: `
         Користувач: ${user}
-        Деталі активності:
         Час поза вкладкою: ${activityDetails.timeAwayPercent}%
         Переключення вкладок: ${activityDetails.switchCount}
         Середній час відповіді (сек): ${activityDetails.avgResponseTime}
@@ -70,90 +67,84 @@ const sendSuspiciousActivityEmail = async (user, activityDetails) => {
       `
     };
     await transporter.sendMail(mailOptions);
-    logger.info(`Email про підозрілу активність відправлено для користувача ${user}`);
+    logger.info(`Email відправлено для ${user}`);
   } catch (error) {
-    logger.error('Помилка відправки email про підозрілу активність', { message: error.message, stack: error.stack });
+    logger.error('Помилка відправки email', { message: error.message, stack: error.stack });
   }
 };
 
-// Конфігурація параметрів підозрілої активності
+// Конфігурація
 const config = {
   suspiciousActivity: {
-    timeAwayThreshold: 50, // Поріг часу поза вкладкою у відсотках
-    switchCountThreshold: 5 // Поріг кількості переключень вкладок
+    timeAwayThreshold: 50,
+    switchCountThreshold: 5
   }
 };
 
-// Налаштування підключення до MongoDB
+// Налаштування MongoDB
 const MONGODB_URI = process.env.MONGODB_URI || 'mongodb+srv://romanhaleckij7:DNMaH9w2X4gel3Xc@cluster0.r93r1p8.mongodb.net/alpha?retryWrites=true&w=majority';
 const client = new MongoClient(MONGODB_URI, {
   connectTimeoutMS: 5000,
   serverSelectionTimeoutMS: 5000
 });
-let db; // Змінна для збереження посилання на базу даних
+let db;
 
-// Клас CacheManager для кешування даних із сортуванням за полем order
+// Клас CacheManager
 class CacheManager {
   static cache = {};
 
-  // Отримання даних із кешу або бази даних
   static async getOrFetch(key, testNumber, fetchFn) {
     const cacheKey = `${key}:${testNumber}`;
     if (this.cache[cacheKey]) {
-      logger.info(`Трафік кешу для ${cacheKey}`);
+      logger.info(`Кеш для ${cacheKey}`);
       return this.cache[cacheKey];
     }
-
-    logger.info(`Промах кешу для ${cacheKey}, завантаження з БД`);
+    logger.info(`Промах кешу для ${cacheKey}`);
     const startTime = Date.now();
     const data = await fetchFn();
     this.cache[cacheKey] = data;
-    logger.info(`Оновлено кеш ${key} для тесту ${testNumber} з ${data.length} елементами за ${Date.now() - startTime} мс`);
+    logger.info(`Оновлено кеш ${key} за ${Date.now() - startTime} мс`);
     return data;
   }
 
-  // Інвалідувати кеш для певного ключа
   static async invalidateCache(key, testNumber) {
     const cacheKey = `${key}:${testNumber}`;
     delete this.cache[cacheKey];
-    logger.info(`Інвалідовано кеш для ${cacheKey}`);
+    logger.info(`Інвалідовано кеш ${cacheKey}`);
   }
 
-  // Отримання питань для конкретного тесту
   static async getQuestions(testNumber) {
     return await this.getOrFetch('questions', testNumber, async () => {
-      const questions = await db.collection('questions').find({ testNumber }).sort({ order: 1 }).toArray();
-      return questions;
+      return await db.collection('questions').find({ testNumber }).sort({ order: 1 }).toArray();
     });
   }
 
-  // Отримання всіх питань
   static async getAllQuestions() {
     return await this.getOrFetch('allQuestions', 'all', async () => {
-      const questions = await db.collection('questions').find({}).sort({ order: 1 }).toArray();
-      return questions;
+      return await db.collection('questions').find({}).sort({ order: 1 }).toArray();
     });
   }
 }
 
-// Кеш для зберігання даних користувачів і питань
+// Кеш
 let userCache = [];
 const questionsCache = {};
 
-// Функція для підключення до MongoDB із повторними спробами
+let isInitialized = false;
+let initializationError = null;
+let testNames = {};
+
+// Підключення до MongoDB
 const connectToMongoDB = async (attempt = 1, maxAttempts = 3) => {
   try {
-    logger.info(`Спроба підключення до MongoDB (Спроба ${attempt} з ${maxAttempts}) з URI: ${MONGODB_URI}`);
+    logger.info(`Спроба підключення до MongoDB (${attempt}/${maxAttempts})`);
     const startTime = Date.now();
     await client.connect();
-    const endTime = Date.now();
-    logger.info(`Підключено до MongoDB успішно за ${endTime - startTime} мс`);
     db = client.db('alpha');
-    logger.info('Ініціалізовано базу даних', { databaseName: db.databaseName });
+    logger.info(`Підключено до MongoDB за ${Date.now() - startTime} мс`, { databaseName: db.databaseName });
   } catch (error) {
-    logger.error('Помилка підключення до MongoDB', { message: error.message, stack: error.stack });
+    logger.error('Помилка підключення', { message: error.message, stack: error.stack });
     if (attempt < maxAttempts) {
-      logger.info('Повторна спроба підключення до MongoDB через 5 секунд...');
       await new Promise(resolve => setTimeout(resolve, 5000));
       return connectToMongoDB(attempt + 1, maxAttempts);
     }
@@ -161,11 +152,7 @@ const connectToMongoDB = async (attempt = 1, maxAttempts = 3) => {
   }
 };
 
-let isInitialized = false; // Статус ініціалізації сервера
-let initializationError = null; // Зберігання помилки ініціалізації
-let testNames = {}; // Об’єкт для зберігання назв тестів
-
-// Завантаження тестів із MongoDB
+// Завантаження тестів
 const loadTestsFromMongoDB = async () => {
   try {
     const tests = await db.collection('tests').find({}).toArray();
@@ -182,58 +169,56 @@ const loadTestsFromMongoDB = async () => {
         timePerQuestion: test.timePerQuestion || null
       };
     });
-    logger.info(`Завантажено ${tests.length} тестів із MongoDB`);
+    logger.info(`Завантажено ${tests.length} тестів`);
   } catch (error) {
-    logger.error('Помилка завантаження тестів із MongoDB', { message: error.message, stack: error.stack });
+    logger.error('Помилка завантаження тестів', { message: error.message, stack: error.stack });
     throw error;
   }
 };
 
-// Збереження тесту в MongoDB
+// Збереження тесту
 const saveTestToMongoDB = async (testNumber, testData) => {
   try {
     await db.collection('tests').updateOne(
       { testNumber },
-      { 
-        $set: { 
-          testNumber,
-          name: testData.name,
-          timeLimit: testData.timeLimit,
-          randomQuestions: testData.randomQuestions,
-          randomAnswers: testData.randomAnswers,
-          questionLimit: testData.questionLimit,
-          attemptLimit: testData.attemptLimit,
-          isQuickTest: testData.isQuickTest || false,
-          timePerQuestion: testData.timePerQuestion || null
-        }
-      },
+      { $set: { 
+        testNumber,
+        name: testData.name,
+        timeLimit: testData.timeLimit,
+        randomQuestions: testData.randomQuestions,
+        randomAnswers: testData.randomAnswers,
+        questionLimit: testData.questionLimit,
+        attemptLimit: testData.attemptLimit,
+        isQuickTest: testData.isQuickTest || false,
+        timePerQuestion: testData.timePerQuestion || null
+      }},
       { upsert: true }
     );
-    logger.info('Тест збережено в MongoDB', { testNumber });
+    logger.info('Тест збережено', { testNumber });
   } catch (error) {
-    logger.error('Помилка збереження тесту в MongoDB', { message: error.message, stack: error.stack });
+    logger.error('Помилка збереження тесту', { message: error.message, stack: error.stack });
     throw error;
   }
 };
 
-// Видалення тесту з MongoDB
+// Видалення тесту
 const deleteTestFromMongoDB = async (testNumber) => {
   try {
     await db.collection('tests').deleteOne({ testNumber });
-    logger.info('Тест видалено з MongoDB', { testNumber });
+    logger.info('Тест видалено', { testNumber });
   } catch (error) {
-    logger.error('Помилка видалення тесту з MongoDB', { testNumber, message: error.message, stack: error.stack });
+    logger.error('Помилка видалення тесту', { testNumber, message: error.message, stack: error.stack });
     throw error;
   }
 };
 
-// Налаштування middleware для Express
+// Middleware
 app.use(express.urlencoded({ extended: true }));
 app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
 app.use(cookieParser());
 
-// Налаштування express-session із MongoStore
+// Налаштування сесій
 app.use(session({
   secret: process.env.SESSION_SECRET || 'your-secret-key',
   resave: false,
@@ -242,59 +227,83 @@ app.use(session({
     client: client,
     dbName: 'alpha',
     collectionName: 'sessions',
-    ttl: 24 * 60 * 60 // 24 години
+    ttl: 24 * 60 * 60
+  }).on('error', (error) => {
+    logger.error('Помилка MongoStore', { message: error.message, stack: error.stack });
   }),
   cookie: {
     secure: process.env.NODE_ENV === 'production',
     httpOnly: true,
     sameSite: process.env.NODE_ENV === 'production' ? 'none' : 'lax',
-    maxAge: 24 * 60 * 60 * 1000 // 24 години
+    maxAge: 24 * 60 * 60 * 1000
   }
 }));
 
 app.use((req, res, next) => {
-  logger.info('Запит отримано', { url: req.url, method: req.method, userRole: req.userRole, timestamp: new Date().toISOString(), args: process.argv });
+  logger.info('Отримано cookie', { cookies: req.cookies, sessionID: req.sessionID || 'unknown' });
   next();
 });
 
-// Middleware для генерації CSRF-токенів
 app.use((req, res, next) => {
-  if (!req.session.csrfSecret) {
-    req.session.csrfSecret = tokens.secretSync();
-    logger.info('Згенеровано новий CSRF-секрет', { secret: req.session.csrfSecret });
+  logger.info('Запит отримано', { url: req.url, method: req.method, userRole: req.userRole, timestamp: new Date().toISOString() });
+  next();
+});
+
+// Ініціалізація res.locals
+app.use((req, res, next) => {
+  if (!res.locals) {
+    res.locals = {};
+    logger.info('Ініціалізовано res.locals', { url: req.url });
   }
-  const token = tokens.create(req.session.csrfSecret);
-  res.locals._csrf = token;
-  res.cookie('XSRF-TOKEN', token, { httpOnly: false });
-  logger.info('Згенеровано CSRF-токен', { token });
   next();
 });
 
-// Валідація CSRF-токенів для POST-запитів
+// Генерація CSRF-токена (залишаємо для інших маршрутів)
 app.use((req, res, next) => {
-  if (['POST', 'PUT', 'DELETE'].includes(req.method)) {
-    const token = req.body._csrf || req.headers['x-csrf-token'];
+  if (!req.session) {
+    logger.error('Сесія відсутня', { url: req.url });
+    return res.status(500).json({ success: false, message: 'Помилка сесії' });
+  }
+  if (!req.session.csrfSecret) {
+    req.session.csrfSecret = require('crypto').randomBytes(32).toString('hex');
+    logger.info('Згенеровано CSRF-секрет', { secret: req.session.csrfSecret });
+  }
+  const token = require('crypto').createHmac('sha256', req.session.csrfSecret).update(req.sessionID).digest('hex');
+  res.locals._csrf = token;
+  res.cookie('XSRF-TOKEN', token, { 
+    httpOnly: false, 
+    secure: process.env.NODE_ENV === 'production', 
+    sameSite: process.env.NODE_ENV === 'production' ? 'none' : 'lax' 
+  });
+  logger.info('Згенеровано CSRF-токен', { token, url: req.url });
+  next();
+});
+
+// CSRF-валідація (залишаємо для маршрутів, крім імпорту)
+app.use((req, res, next) => {
+  if (['POST', 'PUT', 'DELETE'].includes(req.method) && 
+      !req.url.startsWith('/admin/import-users') && 
+      !req.url.startsWith('/admin/import-questions')) {
+    const token = req.body._csrf || req.headers['x-csrf-token'] || req.headers['xsrf-token'];
     if (!token) {
-      logger.error('Відсутній CSRF-токен у запиті', { method: req.method, url: req.url });
+      logger.error('Відсутній CSRF-токен', { method: req.method, url: req.url, body: req.body, headers: req.headers });
       return res.status(403).json({ success: false, message: 'CSRF-токен відсутній' });
     }
-    if (!req.session.csrfSecret) {
-      logger.error('Відсутній CSRF-секрет у сесії', { sessionId: req.sessionID });
-      return res.status(403).json({ success: false, message: 'Помилка сесії: CSRF секрет відсутній' });
+    if (!req.session || !req.session.csrfSecret) {
+      logger.error('Відсутній CSRF-секрет', { sessionId: req.sessionID || 'unknown', url: req.url });
+      return res.status(403).json({ success: false, message: 'Помилка сесії' });
     }
-    if (!tokens.verify(req.session.csrfSecret, token)) {
-      logger.error('Помилка валідації CSRF-токена', {
-        expectedSecret: req.session.csrfSecret,
-        receivedToken: token
-      });
+    const computedToken = require('crypto').createHmac('sha256', req.session.csrfSecret).update(req.sessionID).digest('hex');
+    if (token !== computedToken) {
+      logger.error('Недійсний CSRF-токен', { expected: computedToken, received: token, url: req.url });
       return res.status(403).json({ success: false, message: 'Недійсний CSRF-токен' });
     }
-    logger.info('CSRF-токен успішно валідовано', { token });
+    logger.info('CSRF-токен валідовано', { token, url: req.url });
   }
   next();
 });
 
-// Middleware для запобігання кешуванню
+// Запобігання кешуванню
 app.use((req, res, next) => {
   res.set('Cache-Control', 'no-store, no-cache, must-revalidate, private');
   res.set('Pragma', 'no-cache');
@@ -302,22 +311,21 @@ app.use((req, res, next) => {
   next();
 });
 
-// Middleware для обробки помилок MongoDB
+// Обробка помилок MongoDB
 app.use((err, req, res, next) => {
   if (err.name === 'MongoNetworkError' || err.name === 'MongoServerError') {
     logger.error('Помилка MongoDB', { message: err.message, stack: err.stack });
-    res.status(503).json({ success: false, message: 'Помилка з’єднання з базою даних. Спробуйте пізніше.' });
+    res.status(503).json({ success: false, message: 'Помилка бази даних' });
   } else {
     next(err);
   }
 });
 
-// Middleware для додавання водяного знака та захисту від скріншотів
+// Водяний знак
 app.use((req, res, next) => {
   const originalSend = res.send;
   res.send = function (body) {
     if (typeof body === 'string' && body.includes('</body>') && req.user) {
-      // Додаємо водяний знак із ім’ям користувача та захист від скріншотів
       const watermarkScript = `
         <style>
           .watermark {
@@ -332,37 +340,22 @@ app.use((req, res, next) => {
         </style>
         <div class="watermark">Користувач: ${req.user}</div>
         <script>
-          // Блокуємо комбінації клавіш для скріншотів
           document.addEventListener('keydown', (e) => {
             if (
               e.key === 'PrintScreen' ||
-              (e.ctrlKey && (e.key === 'p' || e.key === 'P' || e.key === 's' || e.key === 'S')) ||
-              (e.metaKey && (e.key === 'p' || e.key === 'P' || e.key === 's' || e.key === 'S')) ||
+              (e.ctrlKey && ['p', 'P', 's', 'S'].includes(e.key)) ||
+              (e.metaKey && ['p', 'P', 's', 'S'].includes(e.key)) ||
               (e.altKey && e.key === 'PrintScreen') ||
-              (e.metaKey && e.shiftKey && (e.key === '3' || e.key === '4'))
+              (e.metaKey && e.shiftKey && ['3', '4'].includes(e.key))
             ) {
               e.preventDefault();
             }
           });
-
-          // Блокуємо контекстне меню
-          document.addEventListener('contextmenu', (e) => {
-            e.preventDefault();
-          });
-
-          // Блокуємо виділення тексту та копіювання
-          document.addEventListener('selectstart', (e) => {
-            e.preventDefault();
-          });
-          document.addEventListener('copy', (e) => {
-            e.preventDefault();
-          });
-
-          // Логуємо зміну видимості вкладки
+          document.addEventListener('contextmenu', (e) => e.preventDefault());
+          document.addEventListener('selectstart', (e) => e.preventDefault());
+          document.addEventListener('copy', (e) => e.preventDefault());
           document.addEventListener('visibilitychange', () => {
-            if (document.hidden) {
-              console.log('Вкладка стала невидимою — можлива спроба зробити скріншот');
-            }
+            if (document.hidden) console.log('Вкладка невидима');
           });
         </script>
       `;
@@ -373,15 +366,13 @@ app.use((req, res, next) => {
   next();
 });
 
-// Імпорт користувачів із Excel до MongoDB
+// Імпорт користувачів
 const importUsersToMongoDB = async (buffer) => {
   try {
     const workbook = new ExcelJS.Workbook();
     await workbook.xlsx.load(buffer);
     let sheet = workbook.getWorksheet('Users') || workbook.getWorksheet('Sheet1');
-    if (!sheet) {
-      throw new Error('Лист "Users" або "Sheet1" не знайдено у файлі');
-    }
+    if (!sheet) throw new Error('Лист "Users" або "Sheet1" не знайдено');
     const users = [];
     const saltRounds = 10;
     for (let rowNumber = 2; rowNumber <= sheet.rowCount; rowNumber++) {
@@ -395,53 +386,37 @@ const importUsersToMongoDB = async (buffer) => {
         users.push({ username, password: hashedPassword, role: userRole });
       }
     }
-    if (users.length === 0) {
-      throw new Error('Не знайдено користувачів у файлі');
-    }
+    if (!users.length) throw new Error('Не знайдено користувачів');
     await db.collection('users').deleteMany({});
-    logger.info('Очищено всіх користувачів перед імпортом');
     await db.collection('users').insertMany(users);
-    logger.info(`Імпортовано ${users.length} користувачів до MongoDB із хешованими паролями`);
+    logger.info(`Імпортовано ${users.length} користувачів`);
     await CacheManager.invalidateCache('users', null);
     await loadUsersToCache();
     return users.length;
   } catch (error) {
-    logger.error('Помилка імпорту користувачів до MongoDB', { message: error.message, stack: error.stack });
+    logger.error('Помилка імпорту користувачів', { message: error.message, stack: error.stack });
     throw error;
   }
 };
 
-// Імпорт питань із Excel до MongoDB
+// Імпорт питань
 const importQuestionsToMongoDB = async (buffer, testNumber) => {
   try {
-    logger.info('Відкриття workbook');
     const workbook = new ExcelJS.Workbook();
     await workbook.xlsx.load(buffer);
-    logger.info('Workbook успішно відкрито');
-
     const sheet = workbook.getWorksheet('Questions');
-    if (!sheet) {
-      throw new Error('Лист "Questions" не знайдено у файлі');
-    }
-    logger.info('Знайдено лист "Questions"', { rowCount: sheet.rowCount });
-
+    if (!sheet) throw new Error('Лист "Questions" не знайдено');
     const MAX_ROWS = 1000;
-    if (sheet.rowCount > MAX_ROWS + 1) {
-      throw new Error(`Занадто багато рядків (${sheet.rowCount - 1} питань). Максимальна кількість питань: ${MAX_ROWS}.`);
-    }
-
+    if (sheet.rowCount > MAX_ROWS + 1) throw new Error(`Занадто багато рядків (${sheet.rowCount - 1}). Макс: ${MAX_ROWS}`);
     const questions = [];
     sheet.eachRow({ includeEmpty: false }, (row, rowNumber) => {
       if (rowNumber > 1) {
         try {
-          logger.info(`Обробка рядка ${rowNumber}`);
           const rowValues = row.values.slice(1);
           let questionText = rowValues[1];
-          if (typeof questionText === 'object' && questionText !== null) {
-            questionText = questionText.text || questionText.value || '[Невірний текст питання]';
-          }
+          if (typeof questionText === 'object' && questionText) questionText = questionText.text || questionText.value || '[Невірний текст]';
           questionText = String(questionText || '').trim();
-          if (questionText === '') throw new Error('Текст питання відсутній');
+          if (!questionText) throw new Error('Текст питання відсутній');
           const picture = String(rowValues[0] || '').trim();
           let options = rowValues.slice(2, 14).filter(Boolean).map(val => String(val).trim());
           const correctAnswers = rowValues.slice(14, 26).filter(Boolean).map(val => String(val).trim());
@@ -449,14 +424,9 @@ const importQuestionsToMongoDB = async (buffer, testNumber) => {
           const points = Number(rowValues[27]) || 1;
           const variant = String(rowValues[28] || '').trim();
 
-          if (type === 'truefalse') {
-            options = ["Правда", "Неправда"];
-          }
+          if (type === 'truefalse') options = ["Правда", "Неправда"];
 
-          // Нормалізація назви зображення
-          const normalizedPicture = picture
-            ? picture.replace(/\.png$/i, '').replace(/^picture/i, 'Picture').replace(/\s+/g, '')
-            : null;
+          const normalizedPicture = picture ? picture.replace(/\.png$/i, '').replace(/^picture/i, 'Picture').replace(/\s+/g, '') : null;
 
           let questionData = {
             testNumber,
@@ -471,19 +441,14 @@ const importQuestionsToMongoDB = async (buffer, testNumber) => {
             order: rowNumber - 1
           };
 
-          // Перевірка наявності зображення
           if (normalizedPicture) {
-            logger.info(`Обробка поля зображення: ${normalizedPicture}`, { testNumber, rowNumber });
             const pictureMatch = normalizedPicture.match(/^Picture(\d+)$/i);
             if (pictureMatch) {
-              const pictureNumber = pictureMatch[1];
+              const pictureNumber = parseInt(pictureMatch[1], 10);
               const targetFileNameBase = `Picture${pictureNumber}`;
               const extensions = ['.png', '.jpg', '.jpeg', '.gif'];
-              let found = false;
               const imageDir = path.join(__dirname, 'public', 'images');
               const filesInDir = fs.existsSync(imageDir) ? fs.readdirSync(imageDir) : [];
-              logger.info(`Доступні файли в public/images: ${filesInDir.join(', ')}`, { testNumber, rowNumber });
-
               for (const ext of extensions) {
                 const expectedFileName = `${targetFileNameBase}${ext}`;
                 const fileExists = filesInDir.some(file => file.toLowerCase() === expectedFileName.toLowerCase());
@@ -492,20 +457,10 @@ const importQuestionsToMongoDB = async (buffer, testNumber) => {
                   const imagePath = path.join(imageDir, matchedFile);
                   if (fs.existsSync(imagePath)) {
                     questionData.picture = `/images/Picture${pictureNumber}${ext.toLowerCase()}`;
-                    logger.info(`Зображення знайдено: ${questionData.picture}`, { testNumber, rowNumber });
-                    found = true;
                     break;
-                  } else {
-                    logger.warn(`Файл ${matchedFile} знайдено в списку, але не існує на диску`, { testNumber, rowNumber });
                   }
                 }
               }
-              if (!found) {
-                logger.warn(`Зображення не знайдено для ${normalizedPicture}. Доступні файли: ${filesInDir.join(', ')}`, { testNumber, rowNumber });
-                questionData.picture = null;
-              }
-            } else {
-              logger.warn(`Невірний формат зображення: ${picture}. Очікуваний формат: PictureX або PictureX.png`, { testNumber, rowNumber });
             }
           }
 
@@ -514,80 +469,63 @@ const importQuestionsToMongoDB = async (buffer, testNumber) => {
               left: opt || '',
               right: questionData.correctAnswers[idx] || ''
             })).filter(pair => pair.left && pair.right);
-            if (questionData.pairs.length === 0) throw new Error('Для типу Matching потрібні пари відповідей');
+            if (!questionData.pairs.length) throw new Error('Для Matching потрібні пари');
             questionData.correctPairs = questionData.pairs.map(pair => [pair.left, pair.right]);
           }
 
           if (type === 'fillblank') {
-            questionText = questionText.replace(/\s*___\s*/g, '___');
-            const blankCount = (questionText.match(/___/g) || []).length;
-            if (blankCount === 0 || blankCount !== questionData.correctAnswers.length) throw new Error('Кількість пропусків у тексті питання не відповідає кількості правильних відповідей');
-            questionData.text = questionText;
+            questionData.text = questionText.replace(/\s*___/g, '___');
+            const blankCount = (questionData.text.match(/___/g) || []).length;
+            if (blankCount === 0 || blankCount !== questionData.correctAnswers.length) {
+              throw new Error('Пропуски не відповідають відповідям');
+            }
             questionData.blankCount = blankCount;
-
-            // Валідація правильних відповідей для fillblank
-            questionData.correctAnswers.forEach((correctAnswer, idx) => {
-              if (correctAnswer.includes('-')) {
-                const [min, max] = correctAnswer.split('-').map(val => parseFloat(val.trim()));
-                if (isNaN(min) || isNaN(max) || min > max) {
-                  throw new Error(`Невірний формат діапазону для правильної відповіді ${idx + 1} у рядку ${rowNumber}. Використовуйте формат "число1-число2", наприклад, "12-14", де число1 <= число2.`);
-                }
+            questionData.correctAnswers.forEach((answer, idx) => {
+              if (answer.includes('-')) {
+                const [min, max] = answer.split('-').map(val => parseFloat(val.trim()));
+                if (isNaN(min) || isNaN(max) || min > max) throw new Error(`Невірний діапазон для відповіді ${idx + 1}`);
               } else {
-                const value = parseFloat(correctAnswer);
-                if (isNaN(value)) {
-                  throw new Error(`Правильна відповідь ${idx + 1} у рядку ${rowNumber} для типу Fillblank має бути числом або діапазоном у форматі "число1-число2".`);
-                }
+                const value = parseFloat(answer);
+                if (isNaN(value)) throw new Error(`Відповідь ${idx + 1} має бути числом або діапазоном`);
               }
             });
           }
 
           if (type === 'singlechoice') {
-            if (correctAnswers.length !== 1 || options.length < 2) throw new Error('Для типу Single Choice потрібна одна правильна відповідь і мінімум 2 варіанти');
+            if (correctAnswers.length !== 1 || options.length < 2) throw new Error('Single Choice: потрібна 1 відповідь і ≥2 варіанти');
             questionData.correctAnswer = correctAnswers[0];
           }
 
           if (type === 'input') {
-            if (questionData.correctAnswers.length !== 1) {
-              throw new Error(`Для типу Input у рядку ${rowNumber} потрібна одна правильна відповідь`);
-            }
-            const correctAnswer = questionData.correctAnswers[0];
+            if (correctAnswers.length !== 1) throw new Error('Input: потрібна 1 відповідь');
+            const correctAnswer = correctAnswers[0];
             if (correctAnswer.includes('-')) {
               const [min, max] = correctAnswer.split('-').map(val => parseFloat(val.trim()));
-              if (isNaN(min) || isNaN(max) || min > max) {
-                throw new Error(`Невірний формат діапазону для правильної відповіді у рядку ${rowNumber}. Використовуйте формат "число1-число2", наприклад, "12-14", де число1 <= число2.`);
-              }
+              if (isNaN(min) || isNaN(max) || min > max) throw new Error('Невірний діапазон');
             } else {
               const value = parseFloat(correctAnswer);
-              if (isNaN(value)) {
-                throw new Error(`Правильна відповідь у рядку ${rowNumber} для типу Input має бути числом або діапазоном у форматі "число1-число2".`);
-              }
+              if (isNaN(value)) throw new Error('Відповідь має бути числом або діапазоном');
             }
           }
 
           questions.push(questionData);
-          logger.info(`Рядок ${rowNumber} успішно оброблено`);
         } catch (error) {
           throw new Error(`Помилка в рядку ${rowNumber}: ${error.message}`);
         }
       }
     });
-    if (questions.length === 0) {
-      throw new Error('Не знайдено питань у файлі');
-    }
-    logger.info('Видалення існуючих питань для тесту', { testNumber });
+    if (!questions.length) throw new Error('Не знайдено питань');
     await db.collection('questions').deleteMany({ testNumber });
-    logger.info('Вставка нових питань', { count: questions.length });
     await db.collection('questions').insertMany(questions);
-    logger.info(`Імпортовано ${questions.length} питань для тесту ${testNumber} до MongoDB`);
     await CacheManager.invalidateCache('questions', testNumber);
     return questions.length;
   } catch (error) {
-    logger.error('Помилка імпорту питань до MongoDB', { message: error.message, stack: error.stack });
+    logger.error('Помилка імпорту питань', { message: error.message, stack: error.stack });
     throw error;
   }
 };
 
-// Функція для випадкового перемішування масиву (Fisher-Yates)
+// Перемішування масиву
 const shuffleArray = (array) => {
   for (let i = array.length - 1; i > 0; i--) {
     const j = Math.floor(Math.random() * (i + 1));
@@ -596,57 +534,51 @@ const shuffleArray = (array) => {
   return array;
 };
 
-// Завантаження користувачів до кешу
+// Завантаження користувачів
 const loadUsersToCache = async () => {
   try {
     const startTime = Date.now();
     userCache = await db.collection('users').find({}).toArray();
-    const endTime = Date.now();
-    logger.info(`Оновлено кеш користувачів із ${userCache.length} користувачами за ${endTime - startTime} мс`);
+    logger.info(`Оновлено кеш користувачів: ${userCache.length} за ${Date.now() - startTime} мс`);
   } catch (error) {
-    logger.error('Помилка оновлення кешу користувачів', { message: error.message, stack: error.stack });
+    logger.error('Помилка кешу користувачів', { message: error.message, stack: error.stack });
     throw error;
   }
 };
 
-// Завантаження питань для тесту
+// Завантаження питань
 const loadQuestions = async (testNumber) => {
   try {
     const startTime = Date.now();
     if (questionsCache[testNumber]) {
-      const endTime = Date.now();
-      logger.info(`Завантажено ${questionsCache[testNumber].length} питань для тесту ${testNumber} з кешу за ${endTime - startTime} мс`);
+      logger.info(`Завантажено ${questionsCache[testNumber].length} питань з кешу`);
       return questionsCache[testNumber];
     }
-
     const questions = await db.collection('questions').find({ testNumber: testNumber.toString() }).sort({ order: 1 }).toArray();
-    const endTime = Date.now();
-    if (questions.length === 0) {
-      throw new Error(`Не знайдено питань у MongoDB для тесту ${testNumber}`);
-    }
+    if (!questions.length) throw new Error(`Не знайдено питань для тесту ${testNumber}`);
     questionsCache[testNumber] = questions;
-    logger.info(`Завантажено ${questions.length} питань для тесту ${testNumber} із MongoDB за ${endTime - startTime} мс`);
+    logger.info(`Завантажено ${questions.length} питань за ${Date.now() - startTime} мс`);
     return questions;
   } catch (error) {
-    logger.error(`Помилка в loadQuestions (тест ${testNumber})`, { message: error.message, stack: error.stack });
+    logger.error(`Помилка loadQuestions`, { message: error.message, stack: error.stack });
     throw error;
   }
 };
 
-// Middleware для перевірки ініціалізації сервера
+// Перевірка ініціалізації
 const ensureInitialized = (req, res, next) => {
   if (!isInitialized) {
     if (initializationError) {
-      logger.error('Сервер не ініціалізовано через помилку', { message: initializationError.message, stack: initializationError.stack });
-      return res.status(500).json({ success: false, message: `Помилка ініціалізації сервера: ${initializationError.message}` });
+      logger.error('Сервер не ініціалізовано', { message: initializationError.message, stack: initializationError.stack });
+      return res.status(500).json({ success: false, message: `Помилка ініціалізації: ${initializationError.message}` });
     }
-    logger.warn('Сервер ще ініціалізується...');
-    return res.status(503).json({ success: false, message: 'Сервер ініціалізується, спробуйте знову пізніше' });
+    logger.warn('Сервер ініціалізується');
+    return res.status(503).json({ success: false, message: 'Сервер ініціалізується' });
   }
   next();
 };
 
-// Оновлення паролів користувачів із хешуванням
+// Оновлення паролів
 const updateUserPasswords = async () => {
   const startTime = Date.now();
   const users = await db.collection('users').find({}).toArray();
@@ -660,15 +592,12 @@ const updateUserPasswords = async () => {
       );
     }
   }
-  const endTime = Date.now();
-  logger.info('Оновлено паролі користувачів із хешами', { duration: `${endTime - startTime} мс` });
+  logger.info(`Оновлено паролі за ${Date.now() - startTime} мс`);
   await CacheManager.invalidateCache('users', null);
 };
 
 // Ініціалізація сервера
 const initializeServer = async () => {
-  let attempt = 1;
-  const maxAttempts = 5;
   try {
     await connectToMongoDB();
     await db.collection('users').createIndex({ username: 1 }, { unique: true });
@@ -679,10 +608,8 @@ const initializeServer = async () => {
     await db.collection('login_attempts').createIndex({ ipAddress: 1, lastAttempt: 1 });
     await db.collection('tests').createIndex({ testNumber: 1 }, { unique: true });
     await db.collection('active_tests').createIndex({ user: 1 }, { unique: true });
-    await db.collection('feedback').createIndex({ user: 1, timestamp: -1 }); // Новий індекс
-    logger.info('Індекси MongoDB успішно створено');
+    logger.info('Індекси створено');
 
-    // Решта коду без змін
     const userCount = await db.collection('users').countDocuments();
     if (userCount > 0) {
       await db.collection('users').updateMany(
@@ -697,11 +624,11 @@ const initializeServer = async () => {
         { role: { $exists: false }, username: { $nin: ["admin", "Instructor"] } },
         { $set: { role: "user" } }
       );
-      logger.info('Міграція ролей для існуючих користувачів завершена');
+      logger.info('Міграція ролей завершена');
     }
 
     const testCount = await db.collection('tests').countDocuments();
-    if (testCount === 0) {
+    if (!testCount) {
       const defaultTests = {
         "1": { name: "Тест 1", timeLimit: 3600, randomQuestions: false, randomAnswers: false, questionLimit: null, attemptLimit: 1 },
         "2": { name: "Тест 2", timeLimit: 3600, randomQuestions: false, randomAnswers: false, questionLimit: null, attemptLimit: 1 },
@@ -710,7 +637,7 @@ const initializeServer = async () => {
       for (const [testNumber, testData] of Object.entries(defaultTests)) {
         await saveTestToMongoDB(testNumber, testData);
       }
-      logger.info('Міграція стандартних тестів до MongoDB', { count: Object.keys(defaultTests).length });
+      logger.info('Міграція тестів завершена', { count: Object.keys(defaultTests).length });
     }
 
     await updateUserPasswords();
@@ -720,43 +647,43 @@ const initializeServer = async () => {
     isInitialized = true;
     initializationError = null;
   } catch (error) {
-    logger.error('Помилка ініціалізації сервера', { message: error.message, stack: error.stack });
+    logger.error('Помилка ініціалізації', { message: error.message, stack: error.stack });
     initializationError = error;
     throw error;
   }
 };
 
-// Очищення старих записів журналу активності (старше 30 днів)
+// Очищення активності
 const cleanupActivityLog = async () => {
   try {
     const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
     const result = await db.collection('activity_log').deleteMany({
       timestamp: { $lt: thirtyDaysAgo.toISOString() }
     });
-    logger.info('Очищено старі записи журналу активності', { deletedCount: result.deletedCount });
+    logger.info('Очищено активність', { deletedCount: result.deletedCount });
   } catch (error) {
-    logger.error('Помилка очищення журналу активності', { message: error.message, stack: error.stack });
+    logger.error('Помилка очищення активності', { message: error.message, stack: error.stack });
   }
 };
 
-// Очищення старих записів active_tests (старше 24 годин)
+// Очищення тестів
 const cleanupActiveTests = async () => {
   try {
     const twentyFourHoursAgo = new Date(Date.now() - 24 * 60 * 60 * 1000);
     const result = await db.collection('active_tests').deleteMany({
       startTime: { $lt: twentyFourHoursAgo.getTime() }
     });
-    logger.info('Очищено старі активні тести', { deletedCount: result.deletedCount });
+    logger.info('Очищено тести', { deletedCount: result.deletedCount });
   } catch (error) {
-    logger.error('Помилка очищення активних тестів', { message: error.message, stack: error.stack });
+    logger.error('Помилка очищення тестів', { message: error.message, stack: error.stack });
   }
 };
 
-// Запуск періодичних задач очищення
+// Періодичне очищення
 setInterval(cleanupActivityLog, 24 * 60 * 60 * 1000);
 setInterval(cleanupActiveTests, 24 * 60 * 60 * 1000);
 
-// Асинхронна ініціалізація сервера
+// Ініціалізація
 (async () => {
   try {
     await initializeServer();
@@ -764,16 +691,15 @@ setInterval(cleanupActiveTests, 24 * 60 * 60 * 1000);
     await cleanupActivityLog();
     await cleanupActiveTests();
   } catch (error) {
-    logger.error('Помилка запуску сервера через помилку ініціалізації', { message: error.message, stack: error.stack });
+    logger.error('Помилка запуску', { message: error.message, stack: error.stack });
     process.exit(1);
   }
 })();
 
-// Налаштування обмеження спроб входу
+// Обмеження спроб входу
 const MAX_LOGIN_ATTEMPTS = 30;
 const ONE_DAY_MS = 24 * 60 * 60 * 1000;
 
-// Перевірка кількості спроб входу
 const checkLoginAttempts = async (ipAddress, reset = false) => {
   const now = Date.now();
   const startOfDay = new Date(now).setHours(0, 0, 0, 0);
@@ -800,7 +726,7 @@ const checkLoginAttempts = async (ipAddress, reset = false) => {
       lastAttempt: now
     });
   } else if (attempts.count >= MAX_LOGIN_ATTEMPTS) {
-    throw new Error('Перевищено ліміт спроб входу (30 на день). Спробуйте знову завтра.');
+    throw new Error('Перевищено ліміт спроб входу');
   }
 
   await db.collection('login_attempts').updateOne(
@@ -810,10 +736,9 @@ const checkLoginAttempts = async (ipAddress, reset = false) => {
   );
 };
 
-// Логування активності користувача
+// Логування активності
 const logActivity = async (user, action, ipAddress, additionalInfo = {}, session = null) => {
   try {
-    const startTime = Date.now();
     const timestamp = new Date();
     await db.collection('activity_log').insertOne({
       user,
@@ -822,35 +747,32 @@ const logActivity = async (user, action, ipAddress, additionalInfo = {}, session
       timestamp: timestamp.toISOString(),
       additionalInfo
     }, { session });
-    const endTime = Date.now();
-    logger.info(`Залогована активність: ${user} - ${action} о ${timestamp.toLocaleString('uk-UA')}`, { duration: `${endTime - startTime} мс` });
+    logger.info(`Активність: ${user} - ${action} о ${timestamp}`);
   } catch (error) {
-    logger.error('Помилка логування активності', { message: error.message, stack: error.stack });
+    logger.error('Помилка логування', { message: error.message, stack: error.stack });
     throw error;
   }
 };
 
-// Тестовий маршрут для перевірки підключення до MongoDB
+// Тест MongoDB
 app.get('/test-mongo', async (req, res) => {
   try {
-    if (!db) {
-      throw new Error('Підключення до MongoDB не встановлено');
-    }
+    if (!db) throw new Error('MongoDB не підключено');
     await db.collection('users').findOne();
-    res.json({ success: true, message: 'Підключення до MongoDB успішне' });
+    res.json({ success: true, message: 'MongoDB підключено' });
   } catch (error) {
     logger.error('Тест MongoDB провалився', { message: error.message, stack: error.stack });
-    res.status(500).json({ success: false, message: 'Помилка підключення до MongoDB', error: error.message });
+    res.status(500).json({ success: false, message: 'Помилка MongoDB' });
   }
 });
 
-// Тестовий маршрут API
+// Тест API
 app.get('/api/test', (req, res) => {
-  logger.info('Обробка запиту /api/test');
-  res.json({ success: true, message: 'Сервер Express працює на /api/test' });
+  logger.info('Запит /api/test');
+  res.json({ success: true, message: 'API працює' });
 });
 
-// Обробка запиту favicon.ico
+// Favicon
 app.get('/favicon.ico', (req, res) => {
   res.status(204).end();
 });
@@ -5246,9 +5168,13 @@ app.post('/admin/delete-question', checkAuth, checkAdmin, async (req, res) => {
 });
 
 // Маршрут для імпорту користувачів
-app.get('/admin/import-users', checkAuth, checkAdmin, (req, res) => {
+app.get('/admin/import-users', ensureInitialized, checkAuth, checkAdmin, (req, res) => {
   const startTime = Date.now();
   try {
+    if (!res.locals) {
+      res.locals = {};
+      logger.info('Ініціалізовано res.locals для /admin/import-users', { url: req.url });
+    }
     const html = `
       <!DOCTYPE html>
       <html lang="uk">
@@ -5268,8 +5194,7 @@ app.get('/admin/import-users', checkAuth, checkAdmin, (req, res) => {
         </head>
         <body>
           <h1>Імпорт користувачів із Excel</h1>
-          <form id="import-form">
-            <input type="hidden" name="_csrf" id="_csrf" value="${res.locals._csrf}">
+          <form id="import-form" enctype="multipart/form-data">
             <label for="file">Виберіть файл users.xlsx:</label>
             <input type="file" id="file" name="file" accept=".xlsx" required>
             <button type="submit" class="submit-btn" id="submit-btn">Завантажити</button>
@@ -5282,13 +5207,7 @@ app.get('/admin/import-users', checkAuth, checkAdmin, (req, res) => {
               const fileInput = document.getElementById('file');
               const errorMessage = document.getElementById('error-message');
               const submitBtn = document.getElementById('submit-btn');
-              const csrfToken = document.getElementById('_csrf').value;
-
-              if (!csrfToken) {
-                errorMessage.textContent = 'CSRF-токен відсутній. Оновіть сторінку та спробуйте знову.';
-                return;
-              }
-
+              
               if (!fileInput.files[0]) {
                 errorMessage.textContent = 'Файл не вибрано.';
                 return;
@@ -5300,47 +5219,79 @@ app.get('/admin/import-users', checkAuth, checkAdmin, (req, res) => {
               const formData = new FormData();
               formData.append('file', fileInput.files[0]);
 
+              // Отримання JWT із cookies
+              const token = document.cookie.split('; ').find(row => row.startsWith('token='))?.split('=')[1];
+              if (!token) {
+                errorMessage.textContent = 'Токен авторизації відсутній. Увійдіть знову.';
+                submitBtn.disabled = false;
+                submitBtn.textContent = 'Завантажити';
+                return;
+              }
+
               try {
                 const response = await fetch('/admin/import-users', {
                   method: 'POST',
                   body: formData,
                   headers: {
-                    'X-CSRF-Token': csrfToken
+                    'Authorization': 'Bearer ' + token
                   }
                 });
 
                 if (!response.ok) {
                   const result = await response.json();
-                  throw new Error(result.message || 'HTTP-помилка! статус: ' + response.status);
+                  throw new Error(result.message || 'Помилка: ' + response.status);
                 }
 
                 const result = await response.text();
                 document.body.innerHTML = result;
               } catch (error) {
-                console.error('Помилка під час завантаження файлу:', error);
-                errorMessage.textContent = 'Помилка при завантаженні файлу: ' + error.message;
+                console.error('Помилка:', error);
+                errorMessage.textContent = 'Помилка: ' + error.message;
               } finally {
                 submitBtn.disabled = false;
                 submitBtn.textContent = 'Завантажити';
               }
-                        });
+            });
           </script>
         </body>
       </html>
     `;
     res.send(html);
+    logger.info('Відображено форму імпорту користувачів', { url: req.url });
+  } catch (error) {
+    logger.error('Помилка в /admin/import-users (GET)', { message: error.message, stack: error.stack });
+    res.status(500).send(`
+      <!DOCTYPE html>
+      <html lang="uk">
+        <head>
+          <meta charset="UTF-8">
+          <title>Помилка</title>
+          <style>
+            body { font-family: Arial, sans-serif; padding: 20px; text-align: center; }
+            .error { color: red; }
+          </style>
+        </head>
+        <body>
+          <h1>Помилка завантаження форми</h1>
+          <p class="error">${error.message}</p>
+          <button onclick="window.location.href='/admin'">Повернутися до адмін-панелі</button>
+        </body>
+      </html>
+    `);
   } finally {
-    const endTime = Date.now();
-    logger.info('Маршрут /admin/import-users виконано', { duration: `${endTime - startTime} мс` });
+    logger.info('Маршрут /admin/import-users (GET) виконано', { duration: `${Date.now() - startTime} мс` });
   }
 });
 
-// Маршрут для обробки імпорту користувачів
-app.post('/admin/import-users', checkAuth, checkAdmin, upload.single('file'), async (req, res) => {
+// Обробка імпорту користувачів
+app.post('/admin/import-users', ensureInitialized, checkAuth, checkAdmin, upload.single('file'), async (req, res) => {
   const startTime = Date.now();
   try {
+    const token = req.headers['authorization']?.split(' ')[1] || req.cookies.token;
+    logger.info('Отримано JWT для /admin/import-users', { token: token ? '[присутній]' : '[відсутній]' });
+
     if (!req.file) {
-      logger.error('Файл не надано для імпорту користувачів');
+      logger.error('Файл не надано', { url: req.url });
       return res.status(400).send('Файл не надано');
     }
 
@@ -5355,7 +5306,7 @@ app.post('/admin/import-users', checkAuth, checkAdmin, upload.single('file'), as
           <title>Користувачів імпортовано</title>
           <style>
             body { font-family: Arial, sans-serif; padding: 20px; text-align: center; }
-            button { padding: 10px 20px; margin: 5px; cursor: pointer; border: none; border-radius: 5px; background-color: #4CAF50; color: white; }
+            button { padding: 10px 20px; cursor: pointer; border: none; border-radius: 5px; background-color: #4CAF50; color: white; }
             button:hover { background-color: #45a049; }
           </style>
         </head>
@@ -5366,7 +5317,7 @@ app.post('/admin/import-users', checkAuth, checkAdmin, upload.single('file'), as
       </html>
     `);
   } catch (error) {
-    logger.error('Помилка імпорту користувачів', { message: error.message, stack: error.stack });
+    logger.error('Помилка імпорту користувачів (POST)', { message: error.message, stack: error.stack });
     res.status(500).send(`
       <!DOCTYPE html>
       <html lang="uk">
@@ -5376,7 +5327,7 @@ app.post('/admin/import-users', checkAuth, checkAdmin, upload.single('file'), as
           <style>
             body { font-family: Arial, sans-serif; padding: 20px; text-align: center; }
             .error { color: red; }
-            button { padding: 10px 20px; margin: 5px; cursor: pointer; border: none; border-radius: 5px; background-color: #007bff; color: white; }
+            button { padding: 10px 20px; cursor: pointer; border: none; border-radius: 5px; background-color: #007bff; color: white; }
           </style>
         </head>
         <body>
@@ -5387,19 +5338,25 @@ app.post('/admin/import-users', checkAuth, checkAdmin, upload.single('file'), as
       </html>
     `);
   } finally {
-    const endTime = Date.now();
-    logger.info('Маршрут /admin/import-users (POST) виконано', { duration: `${endTime - startTime} мс` });
+    logger.info('Маршрут /admin/import-users (POST) виконано', { duration: `${Date.now() - startTime} мс` });
   }
 });
 
 // Маршрут для імпорту питань
-app.get('/admin/import-questions', checkAuth, checkAdmin, (req, res) => {
+app.get('/admin/import-questions', ensureInitialized, checkAuth, checkAdmin, async (req, res) => {
   const startTime = Date.now();
   try {
-    if (!testNames || !Object.keys(testNames).length) {
-      throw new Error('Список тестів недоступний');
+    if (!res.locals) {
+      res.locals = {};
+      logger.info('Ініціалізовано res.locals для /admin/import-questions', { url: req.url });
     }
-
+    if (!testNames || !Object.keys(testNames).length) {
+      logger.warn('Список тестів порожній, перезавантаження', { url: req.url });
+      await loadTestsFromMongoDB();
+      if (!Object.keys(testNames).length) {
+        throw new Error('Не вдалося завантажити список тестів');
+      }
+    }
     const html = `
       <!DOCTYPE html>
       <html lang="uk">
@@ -5419,8 +5376,7 @@ app.get('/admin/import-questions', checkAuth, checkAdmin, (req, res) => {
         </head>
         <body>
           <h1>Імпорт питань із Excel</h1>
-          <form id="import-form">
-            <input type="hidden" name="_csrf" id="_csrf" value="${res.locals._csrf}">
+          <form id="import-form" enctype="multipart/form-data">
             <label for="testNumber">Номер тесту:</label>
             <select id="testNumber" name="testNumber" required>
               ${Object.keys(testNames).map(num => `<option value="${num}">${testNames[num].name.replace(/"/g, '\\"')}</option>`).join('')}
@@ -5438,12 +5394,6 @@ app.get('/admin/import-questions', checkAuth, checkAdmin, (req, res) => {
               const fileInput = document.getElementById('file');
               const errorMessage = document.getElementById('error-message');
               const submitBtn = document.getElementById('submit-btn');
-              const csrfToken = document.getElementById('_csrf').value;
-
-              if (!csrfToken) {
-                errorMessage.textContent = 'CSRF-токен відсутній. Оновіть сторінку та спробуйте знову.';
-                return;
-              }
 
               if (!fileInput.files[0]) {
                 errorMessage.textContent = 'Файл не вибрано.';
@@ -5457,25 +5407,34 @@ app.get('/admin/import-questions', checkAuth, checkAdmin, (req, res) => {
               formData.append('testNumber', testNumber);
               formData.append('file', fileInput.files[0]);
 
+              // Отримання JWT із cookies
+              const token = document.cookie.split('; ').find(row => row.startsWith('token='))?.split('=')[1];
+              if (!token) {
+                errorMessage.textContent = 'Токен авторизації відсутній. Увійдіть знову.';
+                submitBtn.disabled = false;
+                submitBtn.textContent = 'Завантажити';
+                return;
+              }
+
               try {
                 const response = await fetch('/admin/import-questions', {
                   method: 'POST',
                   body: formData,
                   headers: {
-                    'X-CSRF-Token': csrfToken
+                    'Authorization': 'Bearer ' + token
                   }
                 });
 
                 if (!response.ok) {
                   const result = await response.json();
-                  throw new Error(result.message || 'HTTP-помилка! статус: ' + response.status);
+                  throw new Error(result.message || 'Помилка: ' + response.status);
                 }
 
                 const result = await response.text();
                 document.body.innerHTML = result;
               } catch (error) {
-                console.error('Помилка під час завантаження файлу:', error);
-                errorMessage.textContent = 'Помилка при завантаженні файлу: ' + error.message;
+                console.error('Помилка:', error);
+                errorMessage.textContent = 'Помилка: ' + error.message;
               } finally {
                 submitBtn.disabled = false;
                 submitBtn.textContent = 'Завантажити';
@@ -5486,26 +5445,46 @@ app.get('/admin/import-questions', checkAuth, checkAdmin, (req, res) => {
       </html>
     `;
     res.send(html);
+    logger.info('Відображено форму імпорту питань', { url: req.url });
   } catch (error) {
-    logger.error('Помилка в /admin/import-questions', { message: error.message, stack: error.stack });
-    res.status(500).send('Помилка при імпорті питань');
+    logger.error('Помилка в /admin/import-questions (GET)', { message: error.message, stack: error.stack });
+    res.status(500).send(`
+      <!DOCTYPE html>
+      <html lang="uk">
+        <head>
+          <meta charset="UTF-8">
+          <title>Помилка</title>
+          <style>
+            body { font-family: Arial, sans-serif; padding: 20px; text-align: center; }
+            .error { color: red; }
+          </style>
+        </head>
+        <body>
+          <h1>Помилка завантаження форми</h1>
+          <p class="error">${error.message}</p>
+          <button onclick="window.location.href='/admin'">Повернутися до адмін-панелі</button>
+        </body>
+      </html>
+    `);
   } finally {
-    const endTime = Date.now();
-    logger.info('Маршрут /admin/import-questions виконано', { duration: `${endTime - startTime} мс` });
+    logger.info('Маршрут /admin/import-questions (GET) виконано', { duration: `${Date.now() - startTime} мс` });
   }
 });
 
-// Маршрут для обробки імпорту питань
-app.post('/admin/import-questions', checkAuth, checkAdmin, upload.single('file'), async (req, res) => {
+// Обробка імпорту питань
+app.post('/admin/import-questions', ensureInitialized, checkAuth, checkAdmin, upload.single('file'), async (req, res) => {
   const startTime = Date.now();
   try {
+    const token = req.headers['authorization']?.split(' ')[1] || req.cookies.token;
+    logger.info('Отримано JWT для /admin/import-questions', { token: token ? '[присутній]' : '[відсутній]' });
+
     if (!req.file) {
-      logger.error('Файл не надано для імпорту питань');
+      logger.error('Файл не надано', { url: req.url });
       return res.status(400).send('Файл не надано');
     }
     const testNumber = req.body.testNumber;
     if (!testNumber || !testNames[testNumber]) {
-      logger.error('Невірний номер тесту для імпорту питань', { testNumber });
+      logger.error('Невірний номер тесту', { testNumber, url: req.url });
       return res.status(400).send('Невірний номер тесту');
     }
 
@@ -5520,7 +5499,7 @@ app.post('/admin/import-questions', checkAuth, checkAdmin, upload.single('file')
           <title>Питання імпортовано</title>
           <style>
             body { font-family: Arial, sans-serif; padding: 20px; text-align: center; }
-            button { padding: 10px 20px; margin: 5px; cursor: pointer; border: none; border-radius: 5px; background-color: #4CAF50; color: white; }
+            button { padding: 10px 20px; cursor: pointer; border: none; border-radius: 5px; background-color: #4CAF50; color: white; }
             button:hover { background-color: #45a049; }
           </style>
         </head>
@@ -5531,7 +5510,7 @@ app.post('/admin/import-questions', checkAuth, checkAdmin, upload.single('file')
       </html>
     `);
   } catch (error) {
-    logger.error('Помилка імпорту питань', { message: error.message, stack: error.stack });
+    logger.error('Помилка імпорту питань (POST)', { message: error.message, stack: error.stack });
     res.status(500).send(`
       <!DOCTYPE html>
       <html lang="uk">
@@ -5541,7 +5520,7 @@ app.post('/admin/import-questions', checkAuth, checkAdmin, upload.single('file')
           <style>
             body { font-family: Arial, sans-serif; padding: 20px; text-align: center; }
             .error { color: red; }
-            button { padding: 10px 20px; margin: 5px; cursor: pointer; border: none; border-radius: 5px; background-color: #007bff; color: white; }
+            button { padding: 10px 20px; cursor: pointer; border: none; border-radius: 5px; background-color: #007bff; color: white; }
           </style>
         </head>
         <body>
@@ -5552,8 +5531,7 @@ app.post('/admin/import-questions', checkAuth, checkAdmin, upload.single('file')
       </html>
     `);
   } finally {
-    const endTime = Date.now();
-    logger.info('Маршрут /admin/import-questions (POST) виконано', { duration: `${endTime - startTime} мс` });
+    logger.info('Маршрут /admin/import-questions (POST) виконано', { duration: `${Date.now() - startTime} мс` });
   }
 });
 
