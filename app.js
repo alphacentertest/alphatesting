@@ -908,7 +908,6 @@ app.post('/login', [
       return res.status(400).json({ success: false, message: 'Логін або пароль не вказано' });
     }
 
-    // Перевірка кешу користувачів
     if (userCache.length === 0) {
       logger.warn('Кеш користувачів порожній, повторне завантаження з MongoDB');
       await loadUsersToCache();
@@ -940,8 +939,17 @@ app.post('/login', [
       { expiresIn: '24h' }
     );
 
+    // Встановлення httpOnly cookie для серверної авторизації
     res.cookie('token', token, {
       httpOnly: true,
+      secure: process.env.NODE_ENV === 'production',
+      sameSite: process.env.NODE_ENV === 'production' ? 'none' : 'lax',
+      maxAge: 24 * 60 * 60 * 1000
+    });
+
+    // Встановлення не-httpOnly cookie для клієнтського доступу
+    res.cookie('auth_token', token, {
+      httpOnly: false,
       secure: process.env.NODE_ENV === 'production',
       sameSite: process.env.NODE_ENV === 'production' ? 'none' : 'lax',
       maxAge: 24 * 60 * 60 * 1000
@@ -958,8 +966,7 @@ app.post('/login', [
     logger.error('Помилка в /login', { message: error.message, stack: error.stack });
     res.status(error.message.includes('Перевищено ліміт') ? 429 : 500).json({ success: false, message: error.message || 'Помилка сервера' });
   } finally {
-    const endTime = Date.now();
-    logger.info('Маршрут /login виконано', { duration: `${endTime - startTime} мс` });
+    logger.info('Маршрут /login виконано', { duration: `${Date.now() - startTime} мс` });
   }
 });
 
@@ -3888,10 +3895,28 @@ app.get('/admin', checkAuth, checkAdmin, async (req, res) => {
 app.get('/admin/users', checkAuth, checkAdmin, async (req, res) => {
   const startTime = Date.now();
   try {
+    const page = parseInt(req.query.page) || 1;
+    const sortBy = req.query.sortBy || 'asc'; // 'asc' або 'desc'
+    const search = req.query.search || '';
+    const limit = 20;
+    const skip = (page - 1) * limit;
+
     let users = [];
     let errorMessage = '';
+    let totalUsers = 0;
+    let totalPages = 0;
+
     try {
-      users = await db.collection('users').find({}).toArray();
+      const query = search ? { username: { $regex: search, $options: 'i' } } : {};
+      totalUsers = await db.collection('users').countDocuments(query);
+      totalPages = Math.ceil(totalUsers / limit);
+
+      users = await db.collection('users')
+        .find(query)
+        .sort({ username: sortBy === 'asc' ? 1 : -1 })
+        .skip(skip)
+        .limit(limit)
+        .toArray();
       await CacheManager.invalidateCache('users', null);
     } catch (error) {
       logger.error('Помилка отримання користувачів із MongoDB', { message: error.message, stack: error.stack });
@@ -3910,16 +3935,31 @@ app.get('/admin/users', checkAuth, checkAdmin, async (req, res) => {
             th, td { border: 1px solid black; padding: 8px; text-align: left; }
             th { background-color: #f2f2f2; }
             .error { color: red; }
-            .nav-btn, .action-btn { padding: 10px 20px; margin: 5px; cursor: pointer; border: none; border-radius: 5px; }
+            .nav-btn, .action-btn, .sort-btn, .search-btn { padding: 10px 20px; margin: 5px; cursor: pointer; border: none; border-radius: 5px; }
             .action-btn.edit { background-color: #4CAF50; color: white; }
             .action-btn.delete { background-color: #ff4d4d; color: white; }
             .nav-btn { background-color: #007bff; color: white; }
+            .sort-btn { background-color: #6c757d; color: white; }
+            .search-btn { background-color: #28a745; color: white; }
+            input[type="text"] { padding: 8px; margin: 5px; width: 200px; }
+            .pagination { margin-top: 20px; }
+            .pagination a { margin: 0 5px; padding: 5px 10px; background-color: #007bff; color: white; text-decoration: none; border-radius: 5px; }
+            .pagination a:hover { background-color: #0056b3; }
           </style>
         </head>
         <body>
           <h1>Керування користувачами</h1>
-          <button class="nav-btn" onclick="window.location.href='/admin'">Повернутися до адмін-панелі</button>
-          <button class="nav-btn" onclick="window.location.href='/admin/add-user'">Додати користувача</button>
+          <div>
+            <button class="nav-btn" onclick="window.location.href='/admin'">Повернутися до адмін-панелі</button>
+            <button class="nav-btn" onclick="window.location.href='/admin/add-user'">Додати користувача</button>
+            <button class="sort-btn" onclick="window.location.href='/admin/users?page=${page}&sortBy=${sortBy === 'asc' ? 'desc' : 'asc'}&search=${encodeURIComponent(search)}'">Сортувати за алфавітом (${sortBy === 'asc' ? 'А-Я' : 'Я-А'})</button>
+          </div>
+          <div>
+            <form id="search-form">
+              <input type="text" id="search" name="search" placeholder="Пошук за логіном" value="${search}">
+              <button type="submit" class="search-btn">Пошук</button>
+            </form>
+          </div>
     `;
     if (errorMessage) {
       adminHtml += `<p class="error">${errorMessage}</p>`;
@@ -3948,6 +3988,11 @@ app.get('/admin/users', checkAuth, checkAdmin, async (req, res) => {
     }
     adminHtml += `
           </table>
+          <div class="pagination">
+            ${page > 1 ? `<a href="/admin/users?page=${page - 1}&sortBy=${sortBy}&search=${encodeURIComponent(search)}">Попередня</a>` : ''}
+            <span>Сторінка ${page} з ${totalPages}</span>
+            ${page < totalPages ? `<a href="/admin/users?page=${page + 1}&sortBy=${sortBy}&search=${encodeURIComponent(search)}">Наступна</a>` : ''}
+          </div>
           <script>
             async function deleteUser(username) {
               if (confirm('Ви впевнені, що хочете видалити користувача ' + username + '?')) {
@@ -3975,14 +4020,19 @@ app.get('/admin/users', checkAuth, checkAdmin, async (req, res) => {
                 }
               }
             }
+
+            document.getElementById('search-form').addEventListener('submit', (e) => {
+              e.preventDefault();
+              const search = document.getElementById('search').value;
+              window.location.href = '/admin/users?page=1&sortBy=${sortBy}&search=' + encodeURIComponent(search);
+            });
           </script>
         </body>
       </html>
     `;
     res.send(adminHtml);
   } finally {
-    const endTime = Date.now();
-    logger.info('Маршрут /admin/users виконано', { duration: `${endTime - startTime} мс` });
+    logger.info('Маршрут /admin/users виконано', { duration: `${Date.now() - startTime} мс` });
   }
 });
 
@@ -4271,7 +4321,8 @@ app.get('/admin/questions', checkAuth, checkAdmin, async (req, res) => {
   try {
     const page = parseInt(req.query.page) || 1;
     const sortBy = req.query.sortBy || 'order';
-    const limit = 10;
+    const testNumber = req.query.testNumber || '';
+    const limit = 50;
     const skip = (page - 1) * limit;
 
     let questions = [];
@@ -4280,12 +4331,13 @@ app.get('/admin/questions', checkAuth, checkAdmin, async (req, res) => {
     let totalPages = 0;
 
     try {
-      totalQuestions = await db.collection('questions').countDocuments();
+      const query = testNumber ? { testNumber } : {};
+      totalQuestions = await db.collection('questions').countDocuments(query);
       totalPages = Math.ceil(totalQuestions / limit);
 
       if (sortBy === 'testName') {
         questions = await db.collection('questions')
-          .find({})
+          .find(query)
           .skip(skip)
           .limit(limit)
           .toArray();
@@ -4297,7 +4349,7 @@ app.get('/admin/questions', checkAuth, checkAdmin, async (req, res) => {
         });
       } else {
         questions = await db.collection('questions')
-          .find({})
+          .find(query)
           .sort({ order: 1 })
           .skip(skip)
           .limit(limit)
@@ -4322,11 +4374,12 @@ app.get('/admin/questions', checkAuth, checkAdmin, async (req, res) => {
             th, td { border: 1px solid black; padding: 8px; text-align: left; }
             th { background-color: #f2f2f2; }
             .error { color: red; }
-            .nav-btn, .action-btn { padding: 10px 20px; margin: 5px; cursor: pointer; border: none; border-radius: 5px; }
+            .nav-btn, .action-btn, .sort-btn { padding: 10px 20px; margin: 5px; cursor: pointer; border: none; border-radius: 5px; }
             .action-btn.edit { background-color: #4CAF50; color: white; }
             .action-btn.delete { background-color: #ff4d4d; color: white; }
             .nav-btn { background-color: #007bff; color: white; }
-            .sort-btn { padding: 5px 10px; margin: 5px; cursor: pointer; border: none; border-radius: 5px; background-color: #007bff; color: white; }
+            .sort-btn { background-color: #6c757d; color: white; }
+            select { padding: 8px; margin: 5px; }
             .pagination { margin-top: 20px; }
             .pagination a { margin: 0 5px; padding: 5px 10px; background-color: #007bff; color: white; text-decoration: none; border-radius: 5px; }
             .pagination a:hover { background-color: #0056b3; }
@@ -4337,8 +4390,15 @@ app.get('/admin/questions', checkAuth, checkAdmin, async (req, res) => {
           <button class="nav-btn" onclick="window.location.href='/admin'">Повернутися до адмін-панелі</button>
           <button class="nav-btn" onclick="window.location.href='/admin/add-question'">Додати питання</button>
           <div>
-            <button class="sort-btn" onclick="window.location.href='/admin/questions?page=${page}&sortBy=order'">Сортувати за порядком</button>
-            <button class="sort-btn" onclick="window.location.href='/admin/questions?page=${page}&sortBy=testName'">Сортувати за назвою тесту</button>
+            <form id="filter-form">
+              <label for="testNumber">Фільтр за тестом:</label>
+              <select id="testNumber" name="testNumber" onchange="this.form.submit()">
+                <option value="">Усі тести</option>
+                ${Object.keys(testNames).map(num => `<option value="${num}" ${num === testNumber ? 'selected' : ''}>${testNames[num].name.replace(/"/g, '\\"')}</option>`).join('')}
+              </select>
+            </form>
+            <button class="sort-btn" onclick="window.location.href='/admin/questions?page=${page}&sortBy=order&testNumber=${encodeURIComponent(testNumber)}'">Сортувати за порядком</button>
+            <button class="sort-btn" onclick="window.location.href='/admin/questions?page=${page}&sortBy=testName&testNumber=${encodeURIComponent(testNumber)}'">Сортувати за назвою тесту</button>
           </div>
     `;
     if (errorMessage) {
@@ -4375,9 +4435,9 @@ app.get('/admin/questions', checkAuth, checkAdmin, async (req, res) => {
     adminHtml += `
           </table>
           <div class="pagination">
-            ${page > 1 ? `<a href="/admin/questions?page=${page - 1}&sortBy=${sortBy}">Попередня</a>` : ''}
+            ${page > 1 ? `<a href="/admin/questions?page=${page - 1}&sortBy=${sortBy}&testNumber=${encodeURIComponent(testNumber)}">Попередня</a>` : ''}
             <span>Сторінка ${page} з ${totalPages}</span>
-            ${page < totalPages ? `<a href="/admin/questions?page=${page + 1}&sortBy=${sortBy}">Наступна</a>` : ''}
+            ${page < totalPages ? `<a href="/admin/questions?page=${page + 1}&sortBy=${sortBy}&testNumber=${encodeURIComponent(testNumber)}">Наступна</a>` : ''}
           </div>
           <script>
             async function deleteQuestion(id) {
@@ -4412,8 +4472,7 @@ app.get('/admin/questions', checkAuth, checkAdmin, async (req, res) => {
     `;
     res.send(adminHtml);
   } finally {
-    const endTime = Date.now();
-    logger.info('Маршрут /admin/questions виконано', { duration: `${endTime - startTime} мс` });
+    logger.info('Маршрут /admin/questions виконано', { duration: `${Date.now() - startTime} мс` });
   }
 });
 
@@ -5210,6 +5269,7 @@ app.get('/admin/import-users', ensureInitialized, checkAuth, checkAdmin, (req, r
               
               if (!fileInput.files[0]) {
                 errorMessage.textContent = 'Файл не вибрано.';
+                console.error('Помилка: Файл не вибрано.');
                 return;
               }
 
@@ -5220,9 +5280,11 @@ app.get('/admin/import-users', ensureInitialized, checkAuth, checkAdmin, (req, r
               formData.append('file', fileInput.files[0]);
 
               // Отримання JWT із cookies
-              const token = document.cookie.split('; ').find(row => row.startsWith('token='))?.split('=')[1];
-              if (!token) {
+              const authToken = document.cookie.split('; ').find(row => row.startsWith('auth_token='))?.split('=')[1];
+              console.log('auth_token:', authToken ? 'Присутній' : 'Відсутній');
+              if (!authToken) {
                 errorMessage.textContent = 'Токен авторизації відсутній. Увійдіть знову.';
+                console.error('Помилка: auth_token відсутній у cookies:', document.cookie);
                 submitBtn.disabled = false;
                 submitBtn.textContent = 'Завантажити';
                 return;
@@ -5233,7 +5295,7 @@ app.get('/admin/import-users', ensureInitialized, checkAuth, checkAdmin, (req, r
                   method: 'POST',
                   body: formData,
                   headers: {
-                    'Authorization': 'Bearer ' + token
+                    'Authorization': 'Bearer ' + authToken
                   }
                 });
 
@@ -5245,7 +5307,7 @@ app.get('/admin/import-users', ensureInitialized, checkAuth, checkAdmin, (req, r
                 const result = await response.text();
                 document.body.innerHTML = result;
               } catch (error) {
-                console.error('Помилка:', error);
+                console.error('Помилка імпорту:', error);
                 errorMessage.textContent = 'Помилка: ' + error.message;
               } finally {
                 submitBtn.disabled = false;
@@ -5397,6 +5459,7 @@ app.get('/admin/import-questions', ensureInitialized, checkAuth, checkAdmin, asy
 
               if (!fileInput.files[0]) {
                 errorMessage.textContent = 'Файл не вибрано.';
+                console.error('Помилка: Файл не вибрано.');
                 return;
               }
 
@@ -5408,9 +5471,11 @@ app.get('/admin/import-questions', ensureInitialized, checkAuth, checkAdmin, asy
               formData.append('file', fileInput.files[0]);
 
               // Отримання JWT із cookies
-              const token = document.cookie.split('; ').find(row => row.startsWith('token='))?.split('=')[1];
-              if (!token) {
+              const authToken = document.cookie.split('; ').find(row => row.startsWith('auth_token='))?.split('=')[1];
+              console.log('auth_token:', authToken ? 'Присутній' : 'Відсутній');
+              if (!authToken) {
                 errorMessage.textContent = 'Токен авторизації відсутній. Увійдіть знову.';
+                console.error('Помилка: auth_token відсутній у cookies:', document.cookie);
                 submitBtn.disabled = false;
                 submitBtn.textContent = 'Завантажити';
                 return;
@@ -5421,7 +5486,7 @@ app.get('/admin/import-questions', ensureInitialized, checkAuth, checkAdmin, asy
                   method: 'POST',
                   body: formData,
                   headers: {
-                    'Authorization': 'Bearer ' + token
+                    'Authorization': 'Bearer ' + authToken
                   }
                 });
 
@@ -5433,7 +5498,7 @@ app.get('/admin/import-questions', ensureInitialized, checkAuth, checkAdmin, asy
                 const result = await response.text();
                 document.body.innerHTML = result;
               } catch (error) {
-                console.error('Помилка:', error);
+                console.error('Помилка імпорту:', error);
                 errorMessage.textContent = 'Помилка: ' + error.message;
               } finally {
                 submitBtn.disabled = false;
@@ -5543,8 +5608,22 @@ app.get('/admin/results', checkAuth, async (req, res) => {
       return res.status(403).send('Доступно тільки для адміністраторів та інструкторів');
     }
 
-    // Отримуємо всі результати та сортуємо за endTime у спадному порядку
-    const results = await db.collection('test_results').find({}).sort({ endTime: -1 }).toArray();
+    const page = parseInt(req.query.page) || 1;
+    const search = req.query.search || '';
+    const limit = 20;
+    const skip = (page - 1) * limit;
+
+    const query = search ? { user: { $regex: search, $options: 'i' } } : {};
+    const totalResults = await db.collection('test_results').countDocuments(query);
+    const totalPages = Math.ceil(totalResults / limit);
+
+    const results = await db.collection('test_results')
+      .find(query)
+      .sort({ endTime: -1 })
+      .skip(skip)
+      .limit(limit)
+      .toArray();
+
     let html = `
       <!DOCTYPE html>
       <html lang="uk">
@@ -5557,17 +5636,28 @@ app.get('/admin/results', checkAuth, async (req, res) => {
             th, td { border: 1px solid black; padding: 8px; text-align: left; }
             th { background-color: #f2f2f2; }
             .error { color: red; }
-            .nav-btn, .action-btn { padding: 10px 20px; margin: 5px; cursor: pointer; border: none; border-radius: 5px; }
+            .nav-btn, .action-btn, .search-btn { padding: 10px 20px; margin: 5px; cursor: pointer; border: none; border-radius: 5px; }
             .action-btn.view { background-color: #4CAF50; color: white; }
             .action-btn.delete { background-color: #ff4d4d; color: white; }
             .nav-btn { background-color: #007bff; color: white; }
+            .search-btn { background-color: #28a745; color: white; }
+            input[type="text"] { padding: 8px; margin: 5px; width: 200px; }
             .suspicious { color: red; }
             .details { white-space: pre-wrap; max-width: 300px; overflow-wrap: break-word; }
+            .pagination { margin-top: 20px; }
+            .pagination a { margin: 0 5px; padding: 5px 10px; background-color: #007bff; color: white; text-decoration: none; border-radius: 5px; }
+            .pagination a:hover { background-color: #0056b3; }
           </style>
         </head>
         <body>
           <h1>Результати тестів</h1>
           <button class="nav-btn" onclick="window.location.href='/select-test'">Повернутися до вибору тесту</button>
+          <div>
+            <form id="search-form">
+              <input type="text" id="search" name="search" placeholder="Пошук за логіном" value="${search}">
+              <button type="submit" class="search-btn">Пошук</button>
+            </form>
+          </div>
           <table>
             <tr>
               <th>Користувач</th>
@@ -5629,6 +5719,11 @@ app.get('/admin/results', checkAuth, async (req, res) => {
     }
     html += `
           </table>
+          <div class="pagination">
+            ${page > 1 ? `<a href="/admin/results?page=${page - 1}&search=${encodeURIComponent(search)}">Попередня</a>` : ''}
+            <span>Сторінка ${page} з ${totalPages}</span>
+            ${page < totalPages ? `<a href="/admin/results?page=${page + 1}&search=${encodeURIComponent(search)}">Наступна</a>` : ''}
+          </div>
           <script>
             async function viewResult(id) {
               window.location.href = '/admin/view-result?id=' + id;
@@ -5660,6 +5755,12 @@ app.get('/admin/results', checkAuth, async (req, res) => {
                 }
               }
             }
+
+            document.getElementById('search-form').addEventListener('submit', (e) => {
+              e.preventDefault();
+              const search = document.getElementById('search').value;
+              window.location.href = '/admin/results?page=1&search=' + encodeURIComponent(search);
+            });
           </script>
         </body>
       </html>
@@ -5669,8 +5770,7 @@ app.get('/admin/results', checkAuth, async (req, res) => {
     logger.error('Помилка в /admin/results', { message: error.message, stack: error.stack });
     res.status(500).send('Помилка при завантаженні результатів');
   } finally {
-    const endTime = Date.now();
-    logger.info('Маршрут /admin/results виконано', { duration: `${endTime - startTime} мс` });
+    logger.info('Маршрут /admin/results виконано', { duration: `${Date.now() - startTime} мс` });
   }
 });
 
@@ -6417,8 +6517,7 @@ app.get('/admin/activity-log', checkAuth, checkAdmin, async (req, res) => {
     logger.error('Помилка в /admin/activity-log', { message: error.message, stack: error.stack });
     res.status(500).send('Помилка при завантаженні журналу дій');
   } finally {
-    const endTime = Date.now();
-    logger.info('Маршрут /admin/activity-log виконано', { duration: `${endTime - startTime} мс` });
+    logger.info('Маршрут /admin/activity-log виконано', { duration: `${Date.now() - startTime} мс` });
   }
 });
 
