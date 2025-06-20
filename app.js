@@ -234,31 +234,53 @@ app.use(express.static(path.join(__dirname, 'public')));
 app.use(cookieParser());
 
 // Налаштування express-session із MongoStore
+const sessionStore = MongoStore.create({
+  client: client,
+  dbName: 'alpha',
+  collectionName: 'sessions',
+  ttl: 24 * 60 * 60
+}).on('error', (error) => {
+  logger.error('Помилка MongoStore', { message: error.message, stack: error.stack });
+});
+
+sessionStore.on('create', () => {
+  logger.info('MongoStore успішно створено');
+});
+
 app.use(session({
   secret: process.env.SESSION_SECRET || 'your-secret-key',
   resave: false,
   saveUninitialized: false,
-  store: MongoStore.create({
-    client: client,
-    dbName: 'alpha',
-    collectionName: 'sessions',
-    ttl: 24 * 60 * 60 // 24 години
-  }),
+  store: sessionStore,
   cookie: {
     secure: process.env.NODE_ENV === 'production',
     httpOnly: true,
     sameSite: process.env.NODE_ENV === 'production' ? 'none' : 'lax',
-    maxAge: 24 * 60 * 60 * 1000 // 24 години
+    maxAge: 24 * 60 * 60 * 1000
   }
 }));
 
 app.use((req, res, next) => {
-  logger.info('Запит отримано', { url: req.url, method: req.method, userRole: req.userRole, timestamp: new Date().toISOString(), args: process.argv });
+  logger.info('Перевірка ініціалізації', { isInitialized, initializationError: initializationError?.message });
+  if (!isInitialized) {
+    if (initializationError) {
+      logger.error('Сервер не ініціалізовано через помилку', { message: initializationError.message, stack: initializationError.stack });
+      return res.status(500).json({ success: false, message: `Помилка ініціалізації сервера: ${initializationError.message}` });
+    }
+    logger.warn('Сервер ще ініціалізується...');
+    return res.status(503).json({ success: false, message: 'Сервер ініціалізується, спробуйте знову пізніше' });
+  }
   next();
 });
 
 // Middleware для генерації CSRF-токенів
 app.use((req, res, next) => {
+  logger.info('Перевірка сесії в CSRF middleware', {
+    sessionExists: !!req.session,
+    csrfSecret: req.session?.csrfSecret,
+    url: req.url,
+    method: req.method
+  });
   if (!req.session.csrfSecret) {
     req.session.csrfSecret = tokens.secretSync();
     logger.info('Згенеровано новий CSRF-секрет', { secret: req.session.csrfSecret });
@@ -275,21 +297,21 @@ app.use((req, res, next) => {
   if (['POST', 'PUT', 'DELETE'].includes(req.method)) {
     const token = req.body._csrf || req.headers['x-csrf-token'];
     if (!token) {
-      logger.error('Відсутній CSRF-токен у запиті', { method: req.method, url: req.url });
+      logger.error('Missing CSRF token in request', { method: req.method, url: req.url });
       return res.status(403).json({ success: false, message: 'CSRF-токен відсутній' });
     }
     if (!req.session.csrfSecret) {
-      logger.error('Відсутній CSRF-секрет у сесії', { sessionId: req.sessionID });
+      logger.error('Missing CSRF secret in session', { sessionId: req.sessionID });
       return res.status(403).json({ success: false, message: 'Помилка сесії: CSRF секрет відсутній' });
     }
     if (!tokens.verify(req.session.csrfSecret, token)) {
-      logger.error('Помилка валідації CSRF-токена', {
+      logger.error('CSRF token verification failed', {
         expectedSecret: req.session.csrfSecret,
         receivedToken: token
       });
       return res.status(403).json({ success: false, message: 'Недійсний CSRF-токен' });
     }
-    logger.info('CSRF-токен успішно валідовано', { token });
+    logger.info('CSRF token successfully validated', { token });
   }
   next();
 });
@@ -5496,64 +5518,109 @@ app.get('/admin/import-questions', checkAuth, checkAdmin, (req, res) => {
 });
 
 // Маршрут для обробки імпорту питань
-app.post('/admin/import-questions', checkAuth, checkAdmin, upload.single('file'), async (req, res) => {
+app.get('/admin/import-questions', checkAuth, checkAdmin, (req, res) => {
   const startTime = Date.now();
   try {
-    if (!req.file) {
-      logger.error('Файл не надано для імпорту питань');
-      return res.status(400).send('Файл не надано');
+    if (!testNames || !Object.keys(testNames).length) {
+      throw new Error('Список тестів недоступний');
     }
-    const testNumber = req.body.testNumber;
-    if (!testNumber || !testNames[testNumber]) {
-      logger.error('Невірний номер тесту для імпорту питань', { testNumber });
-      return res.status(400).send('Невірний номер тесту');
+    if (!res.locals._csrf) {
+      logger.warn('CSRF token missing in /admin/import-questions, generating new token');
+      res.locals._csrf = tokens.create(req.session.csrfSecret || tokens.secretSync());
     }
 
-    const count = await importQuestionsToMongoDB(req.file.buffer, testNumber);
-    logger.info(`Імпортовано ${count} питань для тесту ${testNumber}`);
-
-    res.send(`
+    const html = `
       <!DOCTYPE html>
       <html lang="uk">
         <head>
           <meta charset="UTF-8">
-          <title>Питання імпортовано</title>
+          <title>Імпорт питань</title>
           <style>
-            body { font-family: Arial, sans-serif; padding: 20px; text-align: center; }
-            button { padding: 10px 20px; margin: 5px; cursor: pointer; border: none; border-radius: 5px; background-color: #4CAF50; color: white; }
-            button:hover { background-color: #45a049; }
-          </style>
-        </head>
-        <body>
-          <h1>Успішно імпортовано ${count} питань для тесту ${testNames[testNumber].name.replace(/"/g, '\\"')}</h1>
-          <button onclick="window.location.href='/admin/questions'">Повернутися до списку питань</button>
-        </body>
-      </html>
-    `);
-  } catch (error) {
-    logger.error('Помилка імпорту питань', { message: error.message, stack: error.stack });
-    res.status(500).send(`
-      <!DOCTYPE html>
-      <html lang="uk">
-        <head>
-          <meta charset="UTF-8">
-          <title>Помилка імпорту</title>
-          <style>
-            body { font-family: Arial, sans-serif; padding: 20px; text-align: center; }
+            body { font-family: Arial, sans-serif; padding: 20px; }
+            label { display: block; margin: 10px 0 5px; }
+            input, select { padding: 5px; margin-bottom: 10px; }
+            button { padding: 10px 20px; margin: 5px; cursor: pointer; border: none; border-radius: 5px; }
+            .nav-btn { background-color: #007bff; color: white; }
+            .submit-btn { background-color: #4CAF50; color: white; }
+            .submit-btn:disabled { background-color: #cccccc; cursor: not-allowed; }
             .error { color: red; }
-            button { padding: 10px 20px; margin: 5px; cursor: pointer; border: none; border-radius: 5px; background-color: #007bff; color: white; }
           </style>
         </head>
         <body>
-          <h1>Помилка імпорту питань</h1>
-          <p class="error">${error.message}</p>
-          <button onclick="window.location.href='/admin/import-questions'">Спробувати знову</button>
+          <h1>Імпорт питань із Excel</h1>
+          <form id="import-form">
+            <input type="hidden" name="_csrf" id="_csrf" value="${res.locals._csrf}">
+            <label for="testNumber">Номер тесту:</label>
+            <select id="testNumber" name="testNumber" required>
+              ${Object.keys(testNames).map(num => `<option value="${num}">${testNames[num].name.replace(/"/g, '\\"')}</option>`).join('')}
+            </select>
+            <label for="file">Виберіть файл questions.xlsx:</label>
+            <input type="file" id="file" name="file" accept=".xlsx" required>
+            <button type="submit" class="submit-btn" id="submit-btn">Завантажити</button>
+          </form>
+          <div id="error-message" class="error"></div>
+          <button class="nav-btn" onclick="window.location.href='/admin'">Повернутися до адмін-панелі</button>
+          <script>
+            document.getElementById('import-form').addEventListener('submit', async (e) => {
+              e.preventDefault();
+              const testNumber = document.getElementById('testNumber').value;
+              const fileInput = document.getElementById('file');
+              const errorMessage = document.getElementById('error-message');
+              const submitBtn = document.getElementById('submit-btn');
+              const csrfToken = document.getElementById('_csrf').value;
+
+              if (!csrfToken) {
+                errorMessage.textContent = 'CSRF-токен відсутній. Оновіть сторінку та спробуйте знову.';
+                return;
+              }
+
+              if (!fileInput.files[0]) {
+                errorMessage.textContent = 'Файл не вибрано.';
+                return;
+              }
+
+              submitBtn.disabled = true;
+              submitBtn.textContent = 'Завантаження...';
+
+              const formData = new FormData();
+              formData.append('testNumber', testNumber);
+              formData.append('file', fileInput.files[0]);
+
+              try {
+                const response = await fetch('/admin/import-questions', {
+                  method: 'POST',
+                  body: formData,
+                  headers: {
+                    'X-CSRF-Token': csrfToken
+                  }
+                });
+
+                if (!response.ok) {
+                  const result = await response.json();
+                  throw new Error(result.message || 'HTTP-помилка! статус: ' + response.status);
+                }
+
+                const result = await response.text();
+                document.body.innerHTML = result;
+              } catch (error) {
+                console.error('Помилка під час завантаження файлу:', error);
+                errorMessage.textContent = 'Помилка при завантаженні файлу: ' + error.message;
+              } finally {
+                submitBtn.disabled = false;
+                submitBtn.textContent = 'Завантажити';
+              }
+            });
+          </script>
         </body>
       </html>
-    `);
+    `;
+    res.send(html);
+  } catch (error) {
+    logger.error('Error in /admin/import-questions', { message: error.message, stack: error.stack });
+    res.status(500).send('Помилка при імпорті питань');
   } finally {
     const endTime = Date.now();
-    logger.info('Маршрут /admin/import-questions (POST) виконано', { duration: `${endTime - startTime} мс` });
+    logger.info('Route /admin/import-questions completed', { duration: `${endTime - startTime} ms` });
   }
 });
 
