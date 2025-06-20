@@ -1959,10 +1959,10 @@ app.get('/instructions', checkAuth, (req, res) => {
 
             <h2>3. Проведення тесту</h2>
             <ul>
-              <li><strong>Відповідайте на питання послідовно:</strong> Пересувайтеся між питаннями за допомогою кнопок "Назад" і "Далі". Переконайтеся, що всі відповіді збережено перед переходом. Ви можете пропускати деякі питання і рухатись далі. Якщо Ви пропустили питання і не дали на нього відповідь, то в полосі прогресу кружечок з цим питанням буде червоного кольору і Ви зможете швидко знайти пропущене питання.</li>
+              <li><strong>Відповідайте на питання послідовно:</strong> Пересувайтеся між питаннями за допомогою кнопок "Назад" і "Далі". Ви можете пропускати деякі питання і рухатись далі. Якщо Ви пропустили питання і не дали на нього відповідь, то в полосі прогресу кружечок з цим питанням буде червоного кольору і Ви зможете швидко знайти пропущене питання.</li>
               <li><strong>Перевіряйте відповіді:</strong> Перед завершенням тесту переконайтеся, що всі питання заповнені. Ви можете повертатися до попередніх питань, якщо це дозволено.</li>
               <li><strong>Дотримуйтесь таймера:</strong> Звертайте увагу на таймер у верхній частині екрана. Якщо час закінчиться, тест завершиться автоматично.</li>
-              <li><strong>Увага до інструкцій під питаннями:</strong> Звертайте увагу на написи під текстом кожного питання, адже тести містять питання різних типів. Деякі питання мають лише одну правильну відповідь (питання типу "singlechoice"), напис під такими питаннями буде «Виберіть правильну відповідь». Питання мультивибору (типу "multiple") мають декілька правильних відповідей. Напис під цими питанням буде «Виберіть усі правильні вибори». Вибір правильної кількості відповідей критично важливий для точного результату. Також є питання типу "input", в яких Вам необхідно у вікні відповіді ввести власноручно відповідь. У питаннях типу "fillblank" Вам необхідно буде заповнити пропуски у реченні. В питаннях типу "ordering" Вам будуть представлені варіанти відповідей, які необхідно буде розташувати у правильній послідовності переміщаючи їх. В питаннях типу "matching" Вам необхідно буде скласти пари, перетягуючи елементи і ставлячи їх один навпроти підходящого. Якщо Ви проходите тести з телефону, в яких зазвичай екрани мають невелике розширення, то на питаннях цього типу Вам необхідно буде розвернути телефон в альбомну розкладку, тоді Ви зможете коректно виконати такі пункти тесту.</li>
+              <li><strong>Увага до інструкцій під питаннями:</strong> Звертайте увагу на написи під текстом кожного питання, адже тести містять питання різних типів. Деякі питання мають лише одну правильну відповідь (питання типу "singlechoice"), напис під такими питаннями буде «Виберіть правильну відповідь». Питання мультивибору (типу "multiple") мають декілька правильних відповідей. Напис під цими питанням буде «Виберіть усі правильні відповіді». Вибір правильної кількості відповідей критично важливий для точного результату. Також є питання типу "input", в яких Вам необхідно у вікні відповіді ввести власноручно відповідь. У питаннях типу "fillblank" Вам необхідно буде заповнити пропуски у реченні. У питаннях типу "ordering" Вам будуть представлені варіанти відповідей (пункти), які необхідно буде розташувати у правильній послідовності переміщаючи (перетягуючи) їх. У питаннях типу "matching" Вам необхідно буде скласти пари, перетягуючи елементи і сопоставлячи їх один навпроти іншого. Якщо Ви проходите тести з телефону, в яких зазвичай екрани мають невелике розширення, то на питаннях цього типу Вам необхідно буде розвернути телефон в альбомну розкладку, тоді Ви зможете коректно виконати такі пункти тесту.</li>
               <img src="/images/image1.jpg" alt="Інструкція для користувачів" onerror="this.style.display='none';">
             </ul>
 
@@ -1981,7 +1981,7 @@ app.get('/instructions', checkAuth, (req, res) => {
             </ul>
 
             <h2>6. Контактна інформація</h2>
-            <p>Якщо у вас виникли труднощі або питання, зверніться до адміністратора через відповідний канал підтримки (наприклад, електронну пошту чи форму зворотного зв’язку).</p>
+            <p>Якщо у вас виникли труднощі або питання, зверніться до адміністратора через відповідний канал підтримки (наприклад, форму зворотного зв’язку).</p>
 
             <p style="text-align: center; font-size: 18px; margin-top: 20px;">Бажаємо успіхів у проходженні тестів! 😊</p>
             <a href="/select-test" class="nav-btn">Назад до вибору тесту</a>
@@ -3895,27 +3895,17 @@ app.get('/admin', checkAuth, checkAdmin, async (req, res) => {
 app.get('/admin/users', checkAuth, checkAdmin, async (req, res) => {
   const startTime = Date.now();
   try {
-    const page = parseInt(req.query.page) || 1;
     const sortBy = req.query.sortBy || 'asc'; // 'asc' або 'desc'
     const search = req.query.search || '';
-    const limit = 20;
-    const skip = (page - 1) * limit;
 
     let users = [];
     let errorMessage = '';
-    let totalUsers = 0;
-    let totalPages = 0;
 
     try {
       const query = search ? { username: { $regex: search, $options: 'i' } } : {};
-      totalUsers = await db.collection('users').countDocuments(query);
-      totalPages = Math.ceil(totalUsers / limit);
-
       users = await db.collection('users')
         .find(query)
         .sort({ username: sortBy === 'asc' ? 1 : -1 })
-        .skip(skip)
-        .limit(limit)
         .toArray();
       await CacheManager.invalidateCache('users', null);
     } catch (error) {
@@ -3942,9 +3932,6 @@ app.get('/admin/users', checkAuth, checkAdmin, async (req, res) => {
             .sort-btn { background-color: #6c757d; color: white; }
             .search-btn { background-color: #28a745; color: white; }
             input[type="text"] { padding: 8px; margin: 5px; width: 200px; }
-            .pagination { margin-top: 20px; }
-            .pagination a { margin: 0 5px; padding: 5px 10px; background-color: #007bff; color: white; text-decoration: none; border-radius: 5px; }
-            .pagination a:hover { background-color: #0056b3; }
           </style>
         </head>
         <body>
@@ -3952,7 +3939,7 @@ app.get('/admin/users', checkAuth, checkAdmin, async (req, res) => {
           <div>
             <button class="nav-btn" onclick="window.location.href='/admin'">Повернутися до адмін-панелі</button>
             <button class="nav-btn" onclick="window.location.href='/admin/add-user'">Додати користувача</button>
-            <button class="sort-btn" onclick="window.location.href='/admin/users?page=${page}&sortBy=${sortBy === 'asc' ? 'desc' : 'asc'}&search=${encodeURIComponent(search)}'">Сортувати за алфавітом (${sortBy === 'asc' ? 'А-Я' : 'Я-А'})</button>
+            <button class="sort-btn" onclick="window.location.href='/admin/users?sortBy=${sortBy === 'asc' ? 'desc' : 'asc'}&search=${encodeURIComponent(search)}'">Сортувати за алфавітом (${sortBy === 'asc' ? 'А-Я' : 'Я-А'})</button>
           </div>
           <div>
             <form id="search-form">
@@ -3988,11 +3975,6 @@ app.get('/admin/users', checkAuth, checkAdmin, async (req, res) => {
     }
     adminHtml += `
           </table>
-          <div class="pagination">
-            ${page > 1 ? `<a href="/admin/users?page=${page - 1}&sortBy=${sortBy}&search=${encodeURIComponent(search)}">Попередня</a>` : ''}
-            <span>Сторінка ${page} з ${totalPages}</span>
-            ${page < totalPages ? `<a href="/admin/users?page=${page + 1}&sortBy=${sortBy}&search=${encodeURIComponent(search)}">Наступна</a>` : ''}
-          </div>
           <script>
             async function deleteUser(username) {
               if (confirm('Ви впевнені, що хочете видалити користувача ' + username + '?')) {
@@ -4024,7 +4006,7 @@ app.get('/admin/users', checkAuth, checkAdmin, async (req, res) => {
             document.getElementById('search-form').addEventListener('submit', (e) => {
               e.preventDefault();
               const search = document.getElementById('search').value;
-              window.location.href = '/admin/users?page=1&sortBy=${sortBy}&search=' + encodeURIComponent(search);
+              window.location.href = '/admin/users?sortBy=${sortBy}&search=' + encodeURIComponent(search);
             });
           </script>
         </body>
@@ -5608,20 +5590,12 @@ app.get('/admin/results', checkAuth, async (req, res) => {
       return res.status(403).send('Доступно тільки для адміністраторів та інструкторів');
     }
 
-    const page = parseInt(req.query.page) || 1;
     const search = req.query.search || '';
-    const limit = 20;
-    const skip = (page - 1) * limit;
 
     const query = search ? { user: { $regex: search, $options: 'i' } } : {};
-    const totalResults = await db.collection('test_results').countDocuments(query);
-    const totalPages = Math.ceil(totalResults / limit);
-
     const results = await db.collection('test_results')
       .find(query)
       .sort({ endTime: -1 })
-      .skip(skip)
-      .limit(limit)
       .toArray();
 
     let html = `
@@ -5644,9 +5618,6 @@ app.get('/admin/results', checkAuth, async (req, res) => {
             input[type="text"] { padding: 8px; margin: 5px; width: 200px; }
             .suspicious { color: red; }
             .details { white-space: pre-wrap; max-width: 300px; overflow-wrap: break-word; }
-            .pagination { margin-top: 20px; }
-            .pagination a { margin: 0 5px; padding: 5px 10px; background-color: #007bff; color: white; text-decoration: none; border-radius: 5px; }
-            .pagination a:hover { background-color: #0056b3; }
           </style>
         </head>
         <body>
@@ -5719,11 +5690,6 @@ app.get('/admin/results', checkAuth, async (req, res) => {
     }
     html += `
           </table>
-          <div class="pagination">
-            ${page > 1 ? `<a href="/admin/results?page=${page - 1}&search=${encodeURIComponent(search)}">Попередня</a>` : ''}
-            <span>Сторінка ${page} з ${totalPages}</span>
-            ${page < totalPages ? `<a href="/admin/results?page=${page + 1}&search=${encodeURIComponent(search)}">Наступна</a>` : ''}
-          </div>
           <script>
             async function viewResult(id) {
               window.location.href = '/admin/view-result?id=' + id;
@@ -5759,7 +5725,7 @@ app.get('/admin/results', checkAuth, async (req, res) => {
             document.getElementById('search-form').addEventListener('submit', (e) => {
               e.preventDefault();
               const search = document.getElementById('search').value;
-              window.location.href = '/admin/results?page=1&search=' + encodeURIComponent(search);
+              window.location.href = '/admin/results?search=' + encodeURIComponent(search);
             });
           </script>
         </body>
@@ -6390,19 +6356,13 @@ app.post('/admin/create-test', checkAuth, checkAdmin, [
 app.get('/admin/activity-log', checkAuth, checkAdmin, async (req, res) => {
   const startTime = Date.now();
   try {
-    const page = parseInt(req.query.page) || 1;
-    const limit = 50;
-    const skip = (page - 1) * limit;
+    const search = req.query.search || '';
 
+    const query = search ? { user: { $regex: search, $options: 'i' } } : {};
     const activities = await db.collection('activity_log')
-      .find({})
+      .find(query)
       .sort({ timestamp: -1 })
-      .skip(skip)
-      .limit(limit)
       .toArray();
-
-    const totalActivities = await db.collection('activity_log').countDocuments();
-    const totalPages = Math.ceil(totalActivities / limit);
 
     const html = `
       <!DOCTYPE html>
@@ -6443,33 +6403,10 @@ app.get('/admin/activity-log', checkAuth, checkAdmin, async (req, res) => {
             th {
               background-color: #f2f2f2;
             }
-            .nav-btn {
-              padding: 10px 20px;
-              margin: 10px 0;
-              cursor: pointer;
-              border: none;
-              border-radius: 5px;
-              background-color: #007bff;
-              color: white;
-            }
-            .nav-btn:hover {
-              background-color: #0056b3;
-            }
-            .pagination {
-              margin-top: 20px;
-              text-align: center;
-            }
-            .pagination a {
-              margin: 0 5px;
-              padding: 5px 10px;
-              background-color: #007bff;
-              color: white;
-              text-decoration: none;
-              border-radius: 5px;
-            }
-            .pagination a:hover {
-              background-color: #0056b3;
-            }
+            .nav-btn, .search-btn { padding: 10px 20px; margin: 10px 5px; cursor: pointer; border: none; border-radius: 5px; }
+            .nav-btn { background-color: #007bff; color: white; }
+            .search-btn { background-color: #28a745; color: white; }
+            input[type="text"] { padding: 8px; margin: 5px; width: 200px; }
             @media (max-width: 600px) {
               h1 {
                 font-size: 20px;
@@ -6477,7 +6414,7 @@ app.get('/admin/activity-log', checkAuth, checkAdmin, async (req, res) => {
               table {
                 font-size: 14px;
               }
-              .nav-btn {
+              .nav-btn, .search-btn {
                 width: 100%;
               }
             }
@@ -6487,6 +6424,12 @@ app.get('/admin/activity-log', checkAuth, checkAdmin, async (req, res) => {
           <div class="container">
             <h1>Журнал дій</h1>
             <button class="nav-btn" onclick="window.location.href='/admin'">Повернутися до адмін-панелі</button>
+            <div>
+              <form id="search-form">
+                <input type="text" id="search" name="search" placeholder="Пошук за логіном" value="${search}">
+                <button type="submit" class="search-btn">Пошук</button>
+              </form>
+            </div>
             <table>
               <tr>
                 <th>Користувач</th>
@@ -6503,12 +6446,14 @@ app.get('/admin/activity-log', checkAuth, checkAdmin, async (req, res) => {
                 </tr>
               `).join('') : '<tr><td colspan="4">Немає записів</td></tr>'}
             </table>
-            <div class="pagination">
-              ${page > 1 ? `<a href="/admin/activity-log?page=${page - 1}">Попередня</a>` : ''}
-              <span>Сторінка ${page} з ${totalPages}</span>
-              ${page < totalPages ? `<a href="/admin/activity-log?page=${page + 1}">Наступна</a>` : ''}
-            </div>
           </div>
+          <script>
+            document.getElementById('search-form').addEventListener('submit', (e) => {
+              e.preventDefault();
+              const search = document.getElementById('search').value;
+              window.location.href = '/admin/activity-log?search=' + encodeURIComponent(search);
+            });
+          </script>
         </body>
       </html>
     `;
