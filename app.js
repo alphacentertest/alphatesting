@@ -1962,7 +1962,7 @@ app.get('/instructions', checkAuth, (req, res) => {
               <li><strong>Відповідайте на питання послідовно:</strong> Пересувайтеся між питаннями за допомогою кнопок "Назад" і "Далі". Ви можете пропускати деякі питання і рухатись далі. Якщо Ви пропустили питання і не дали на нього відповідь, то в полосі прогресу кружечок з цим питанням буде червоного кольору і Ви зможете швидко знайти пропущене питання.</li>
               <li><strong>Перевіряйте відповіді:</strong> Перед завершенням тесту переконайтеся, що всі питання заповнені. Ви можете повертатися до попередніх питань, якщо це дозволено.</li>
               <li><strong>Дотримуйтесь таймера:</strong> Звертайте увагу на таймер у верхній частині екрана. Якщо час закінчиться, тест завершиться автоматично.</li>
-              <li><strong>Увага до інструкцій під питаннями:</strong> Звертайте увагу на написи під текстом кожного питання, адже тести містять питання різних типів. Деякі питання мають лише одну правильну відповідь (питання типу "singlechoice"), напис під такими питаннями буде «Виберіть правильну відповідь». Питання мультивибору (типу "multiple") мають декілька правильних відповідей. Напис під цими питанням буде «Виберіть усі правильні відповіді». Вибір правильної кількості відповідей критично важливий для точного результату. Також є питання типу "input", в яких Вам необхідно у вікні відповіді ввести власноручно відповідь. У питаннях типу "fillblank" Вам необхідно буде заповнити пропуски у реченні. У питаннях типу "ordering" Вам будуть представлені варіанти відповідей (пункти), які необхідно буде розташувати у правильній послідовності переміщаючи (перетягуючи) їх. У питаннях типу "matching" Вам необхідно буде скласти пари, перетягуючи елементи і сопоставлячи їх один навпроти іншого. Якщо Ви проходите тести з телефону, в яких зазвичай екрани мають невелике розширення, то на питаннях цього типу Вам необхідно буде розвернути телефон в альбомну розкладку, тоді Ви зможете коректно виконати такі пункти тесту.</li>
+              <li><strong>Увага до інструкцій під питаннями:</strong> Звертайте увагу на написи під текстом кожного питання, адже тести містять питання різних типів. Деякі питання мають лише одну правильну відповідь (питання типу "singlechoice"), напис під такими питаннями буде «Виберіть правильну відповідь». Питання мультивибору (типу "multiple") мають декілька правильних відповідей. Напис під цими питанням буде «Виберіть усі правильні відповіді». Вибір правильної кількості відповідей критично важливий для точного результату. Також є питання типу "input", в яких Вам необхідно у вікні відповіді ввести власноручно відповідь. У питаннях типу "fillblank" Вам необхідно буде заповнити пропуски у реченні. У питаннях типу "ordering" Вам будуть представлені варіанти відповідей (пункти), які необхідно буде розташувати у правильній послідовності переміщаючи (перетягуючи) їх. У питаннях типу "matching" Вам необхідно буде скласти пари, перетягуючи елементи і зіставляючи їх один навпроти іншого. Якщо Ви проходите тести з телефону, в яких зазвичай екрани мають невелике розширення, то на питаннях цього типу Вам необхідно буде розвернути телефон в альбомну розкладку, тоді Ви зможете коректно виконати такі пункти тесту.</li>
               <img src="/images/image1.jpg" alt="Інструкція для користувачів" onerror="this.style.display='none';">
             </ul>
 
@@ -6352,6 +6352,23 @@ app.post('/admin/create-test', checkAuth, checkAdmin, [
   }
 });
 
+// Маршрут для очищення журналу активності
+app.post('/admin/clear-activity-log', checkAuth, checkAdmin, async (req, res) => {
+  const startTime = Date.now();
+  try {
+    const ipAddress = req.headers['x-forwarded-for'] || req.socket.remoteAddress;
+    const result = await db.collection('activity_log').deleteMany({});
+    logger.info('Журнал дій очищено', { deletedCount: result.deletedCount, user: req.user, ipAddress });
+    await logActivity(req.user, 'очистив журнал дій', ipAddress, { deletedCount: result.deletedCount });
+    res.json({ success: true });
+  } catch (error) {
+    logger.error('Помилка очищення журналу дій', { message: error.message, stack: error.stack });
+    res.status(500).json({ success: false, message: 'Помилка при очищенні журналу' });
+  } finally {
+    logger.info('Маршрут /admin/clear-activity-log виконано', { duration: `${Date.now() - startTime} мс` });
+  }
+});
+
 // Маршрут для перегляду журналу активності
 app.get('/admin/activity-log', checkAuth, checkAdmin, async (req, res) => {
   const startTime = Date.now();
@@ -6403,10 +6420,33 @@ app.get('/admin/activity-log', checkAuth, checkAdmin, async (req, res) => {
             th {
               background-color: #f2f2f2;
             }
-            .nav-btn, .search-btn { padding: 10px 20px; margin: 10px 5px; cursor: pointer; border: none; border-radius: 5px; }
-            .nav-btn { background-color: #007bff; color: white; }
-            .search-btn { background-color: #28a745; color: white; }
-            input[type="text"] { padding: 8px; margin: 5px; width: 200px; }
+            .nav-btn, .search-btn, .clear-btn {
+              padding: 10px 20px;
+              margin: 10px 5px;
+              cursor: pointer;
+              border: none;
+              border-radius: 5px;
+            }
+            .nav-btn {
+              background-color: #007bff;
+              color: white;
+            }
+            .search-btn {
+              background-color: #28a745;
+              color: white;
+            }
+            .clear-btn {
+              background-color: #ff4d4d;
+              color: white;
+            }
+            .nav-btn:hover { background-color: #0056b3; }
+            .search-btn:hover { background-color: #218838; }
+            .clear-btn:hover { background-color: #d32f2f; }
+            input[type="text"] {
+              padding: 8px;
+              margin: 5px;
+              width: 200px;
+            }
             @media (max-width: 600px) {
               h1 {
                 font-size: 20px;
@@ -6414,7 +6454,7 @@ app.get('/admin/activity-log', checkAuth, checkAdmin, async (req, res) => {
               table {
                 font-size: 14px;
               }
-              .nav-btn, .search-btn {
+              .nav-btn, .search-btn, .clear-btn {
                 width: 100%;
               }
             }
@@ -6424,6 +6464,7 @@ app.get('/admin/activity-log', checkAuth, checkAdmin, async (req, res) => {
           <div class="container">
             <h1>Журнал дій</h1>
             <button class="nav-btn" onclick="window.location.href='/admin'">Повернутися до адмін-панелі</button>
+            <button class="clear-btn" onclick="clearActivityLog()">Очистити журнал дій</button>
             <div>
               <form id="search-form">
                 <input type="text" id="search" name="search" placeholder="Пошук за логіном" value="${search}">
@@ -6453,6 +6494,32 @@ app.get('/admin/activity-log', checkAuth, checkAdmin, async (req, res) => {
               const search = document.getElementById('search').value;
               window.location.href = '/admin/activity-log?search=' + encodeURIComponent(search);
             });
+
+            async function clearActivityLog() {
+              if (confirm('Ви впевнені, що хочете очистити весь журнал дій? Цю дію неможливо скасувати.')) {
+                try {
+                  const formData = new URLSearchParams();
+                  formData.append('_csrf', '${res.locals._csrf}');
+                  const response = await fetch('/admin/clear-activity-log', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                    body: formData
+                  });
+                  if (!response.ok) {
+                    throw new Error('HTTP-помилка! статус: ' + response.status);
+                  }
+                  const result = await response.json();
+                  if (result.success) {
+                    window.location.reload();
+                  } else {
+                    alert('Помилка при очищенні журналу: ' + result.message);
+                  }
+                } catch (error) {
+                  console.error('Помилка очищення журналу:', error);
+                  alert('Не вдалося очистити журнал. Перевірте ваше з’єднання з Інтернетом.');
+                }
+              }
+            }
           </script>
         </body>
       </html>
