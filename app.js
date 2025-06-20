@@ -606,7 +606,10 @@ const updateUserPasswords = async () => {
 // Ініціалізація сервера
 const initializeServer = async () => {
   try {
+    logger.info('Початок ініціалізації сервера');
     await connectToMongoDB();
+    logger.info('MongoDB підключено');
+
     await db.collection('users').createIndex({ username: 1 }, { unique: true });
     await db.collection('questions').createIndex({ testNumber: 1, variant: 1 });
     await db.collection('test_results').createIndex({ user: 1, testNumber: 1, endTime: -1 });
@@ -615,10 +618,9 @@ const initializeServer = async () => {
     await db.collection('login_attempts').createIndex({ ipAddress: 1, lastAttempt: 1 });
     await db.collection('tests').createIndex({ testNumber: 1 }, { unique: true });
     await db.collection('active_tests').createIndex({ user: 1 }, { unique: true });
-    await db.collection('sections').createIndex({ name: 1 }, { unique: true }); // Новий індекс для розділів
+    await db.collection('sections').createIndex({ name: 1 }, { unique: true });
     logger.info('Індекси створено');
 
-    // Створення папки для матеріалів
     const materialsDir = path.join(__dirname, 'public', 'materials');
     if (!fs.existsSync(materialsDir)) {
       fs.mkdirSync(materialsDir, { recursive: true });
@@ -626,6 +628,7 @@ const initializeServer = async () => {
     }
 
     const userCount = await db.collection('users').countDocuments();
+    logger.info('Кількість користувачів у базі', { userCount });
     if (userCount > 0) {
       await db.collection('users').updateMany(
         { role: { $exists: false }, username: "admin" },
@@ -643,6 +646,7 @@ const initializeServer = async () => {
     }
 
     const testCount = await db.collection('tests').countDocuments();
+    logger.info('Кількість тестів у базі', { testCount });
     if (!testCount) {
       const defaultTests = {
         "1": { name: "Тест 1", timeLimit: 3600, randomQuestions: false, randomAnswers: false, questionLimit: null, attemptLimit: 1 },
@@ -657,10 +661,12 @@ const initializeServer = async () => {
 
     await updateUserPasswords();
     await loadUsersToCache();
+    logger.info('Кеш користувачів завантажено', { userCacheLength: userCache.length });
     await loadTestsFromMongoDB();
     await CacheManager.invalidateCache('questions', null);
     isInitialized = true;
     initializationError = null;
+    logger.info('Сервер ініціалізовано успішно');
   } catch (error) {
     logger.error('Помилка ініціалізації', { message: error.message, stack: error.stack });
     initializationError = error;
@@ -910,10 +916,14 @@ app.post('/login', [
   const startTime = Date.now();
   try {
     const ipAddress = req.headers['x-forwarded-for'] || req.socket.remoteAddress;
+    logger.info('Початок обробки /login', { ipAddress, body: req.body });
+
     await checkLoginAttempts(ipAddress);
+    logger.info('Перевірка спроб входу пройдена');
 
     const errors = validationResult(req);
     if (!errors.isEmpty()) {
+      logger.warn('Помилки валідації', { errors: errors.array() });
       return res.status(400).json({ success: false, message: errors.array()[0].msg });
     }
 
@@ -935,13 +945,14 @@ app.post('/login', [
     }
 
     const foundUser = userCache.find(user => user.username === username);
-    logger.info('Користувача знайдено в кеші', { username, cachedPassword: foundUser?.password });
+    logger.info('Пошук користувача в кеші', { username, found: !!foundUser });
 
     if (!foundUser) {
       logger.warn('Користувача не знайдено', { username });
       return res.status(401).json({ success: false, message: 'Невірний логін або пароль' });
     }
 
+    logger.info('Перевірка пароля', { username });
     const passwordMatch = await bcrypt.compare(password, foundUser.password);
     if (!passwordMatch) {
       logger.warn('Невірний пароль для користувача', { username });
@@ -949,12 +960,14 @@ app.post('/login', [
     }
 
     await checkLoginAttempts(ipAddress, true);
+    logger.info('Скидання лімітів спроб входу', { ipAddress });
 
     const token = jwt.sign(
       { username: foundUser.username, role: foundUser.role },
       process.env.JWT_SECRET || 'your-secret-key',
       { expiresIn: '24h' }
     );
+    logger.info('JWT-токен згенеровано', { username });
 
     res.cookie('token', token, {
       httpOnly: true,
@@ -971,10 +984,11 @@ app.post('/login', [
     });
 
     await logActivity(foundUser.username, 'увійшов на сайт', ipAddress);
+    logger.info('Активність користувача залогована', { username });
 
     res.json({ success: true, redirect: foundUser.role === 'admin' ? '/admin' : '/select-section' });
   } catch (error) {
-    logger.error('Помилка в /login', { message: error.message, stack: error.stack });
+    logger.error('Помилка в /login', { message: error.message, stack: error.stack, username: req.body.username });
     res.status(error.message.includes('Перевищено ліміт') ? 429 : 500).json({ success: false, message: error.message || 'Помилка сервера' });
   } finally {
     logger.info('Маршрут /login виконано', { duration: `${Date.now() - startTime} мс` });
