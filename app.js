@@ -49,7 +49,7 @@ const transporter = nodemailer.createTransport({
   service: 'gmail',
   auth: {
     user: process.env.EMAIL_USER || 'alphacentertest@gmail.com',
-    pass: process.env.EMAIL_PASS || 'xfcd cvkl xiii qhtl'
+    pass: process.env.EMAIL_PASS || ':bnnz<fnmrsdobysxtcnmysrjve'
   }
 });
 
@@ -679,10 +679,8 @@ const initializeServer = async () => {
     await db.collection('login_attempts').createIndex({ ipAddress: 1, lastAttempt: 1 });
     await db.collection('tests').createIndex({ testNumber: 1 }, { unique: true });
     await db.collection('active_tests').createIndex({ user: 1 }, { unique: true });
-    await db.collection('feedback').createIndex({ user: 1, timestamp: -1 }); // Новий індекс
     logger.info('Індекси MongoDB успішно створено');
 
-    // Решта коду без змін
     const userCount = await db.collection('users').countDocuments();
     if (userCount > 0) {
       await db.collection('users').updateMany(
@@ -815,15 +813,17 @@ const logActivity = async (user, action, ipAddress, additionalInfo = {}, session
   try {
     const startTime = Date.now();
     const timestamp = new Date();
+    const timeOffset = 3 * 60 * 60 * 1000;
+    const adjustedTimestamp = new Date(timestamp.getTime() + timeOffset);
     await db.collection('activity_log').insertOne({
       user,
       action,
       ipAddress,
-      timestamp: timestamp.toISOString(),
+      timestamp: adjustedTimestamp.toISOString(),
       additionalInfo
     }, { session });
     const endTime = Date.now();
-    logger.info(`Залогована активність: ${user} - ${action} о ${timestamp.toLocaleString('uk-UA')}`, { duration: `${endTime - startTime} мс` });
+    logger.info(`Залогована активність: ${user} - ${action} о ${adjustedTimestamp}, IP: ${ipAddress}`, { duration: `${endTime - startTime} мс` });
   } catch (error) {
     logger.error('Помилка логування активності', { message: error.message, stack: error.stack });
     throw error;
@@ -1091,108 +1091,33 @@ app.get('/select-test', checkAuth, async (req, res) => {
           <meta name="viewport" content="width=device-width, initial-scale=1.0">
           <title>Вибір тесту</title>
           <style>
-            body { 
-              font-family: Arial, sans-serif; 
-              text-align: center; 
-              padding: 20px; 
-              padding-bottom: 80px; 
-              margin: 0; 
-              background-color: #f5f5f5;
-            }
-            h1 { 
-              font-size: 24px; 
-              margin-bottom: 20px; 
-              color: #333;
-            }
-            .test-buttons { 
-              display: flex; 
-              flex-direction: column; 
-              align-items: center; 
-              gap: 10px; 
-            }
-            button, .instructions-btn, .feedback-btn { 
-              padding: 10px; 
-              font-size: 18px; 
-              cursor: pointer; 
-              width: 200px; 
-              border: none; 
-              border-radius: 5px; 
-              color: white; 
-              text-align: center;
-              text-decoration: none;
-            }
-            button.test-btn { 
-              background-color: #4CAF50; 
-            }
-            button.test-btn:hover { 
-              background-color: #45a049; 
-            }
-            .instructions-btn { 
-              background-color: #ffeb3b; 
-              color: #333; 
-            }
-            .instructions-btn:hover { 
-              background-color: #ffd700; 
-            }
-            .feedback-btn { 
-              background-color: #ffeb3b; 
-              color: #333; 
-            }
-            .feedback-btn:hover { 
-              background-color: #ffd700; 
-            }
-            #logout { 
-              background-color: #ef5350; 
-              position: fixed; 
-              bottom: 20px; 
-              left: 50%; 
-              transform: translateX(-50%); 
-              width: 200px; 
-            }
-            #logout:hover { 
-              background-color: #d32f2f; 
-            }
-            .no-tests { 
-              color: red; 
-              font-size: 18px; 
-              margin-top: 20px; 
-            }
-            .results-btn { 
-              background-color: #007bff; 
-              margin-top: 20px; 
-            }
-            .results-btn:hover { 
-              background-color: #0056b3; 
-            }
+            body { font-family: Arial, sans-serif; text-align: center; padding: 20px; padding-bottom: 80px; margin: 0; }
+            h1 { font-size: 24px; margin-bottom: 20px; }
+            .test-buttons { display: flex; flex-direction: column; align-items: center; gap: 10px; }
+            button { padding: 10px; font-size: 18px; cursor: pointer; width: 200px; border: none; border-radius: 5px; background-color: #4CAF50; color: white; }
+            button:hover { background-color: #45a049; }
+            #logout { background-color: #ef5350; color: white; position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%); width: 200px; }
+            .no-tests { color: red; font-size: 18px; margin-top: 20px; }
+            .results-btn { background-color: #007bff; color: white; margin-top: 20px; }
             @media (max-width: 600px) {
-              h1 { 
-                font-size: 20px; 
-              }
-              button, .instructions-btn, .feedback-btn { 
-                font-size: 16px; 
-                width: 90%; 
-                padding: 15px; 
-              }
-              #logout { 
-                width: 90%; 
-              }
+              h1 { font-size: 28px; }
+              button { font-size: 20px; width: 90%; padding: 15px; }
+              #logout { width: 90%; }
             }
           </style>
         </head>
         <body>
           <h1>Виберіть тест</h1>
-          <div class="test-buttons">
+                    <div class="test-buttons">
             ${Object.entries(testNames).length > 0
               ? Object.entries(testNames).map(([num, data]) => `
-                  <button class="test-btn" onclick="window.location.href='/test?test=${num}'">${data.name.replace(/"/g, '\\"')}</button>
+                  <button onclick="window.location.href='/test?test=${num}'">${data.name.replace(/"/g, '\\"')}</button>
                 `).join('')
               : '<p class="no-tests">Немає доступних тестів</p>'
             }
             ${req.userRole === 'instructor' ? `
               <button class="results-btn" onclick="window.location.href='/admin/results'">Переглянути результати</button>
             ` : ''}
-            <a href="/instructions" class="instructions-btn">Інструкція до тестів</a>
-            <a href="/feedback" class="feedback-btn">Зворотний зв’язок</a>
           </div>
           <button id="logout" onclick="logout()">Вийти</button>
           <script>
@@ -1268,6 +1193,10 @@ const saveResult = async (user, testNumber, score, totalPoints, startTime, endTi
   try {
     await session.withTransaction(async () => {
       const duration = Math.round((endTime - startTime) / 1000);
+      const timeOffset = 3 * 60 * 60 * 1000;
+      const adjustedStartTime = new Date(startTime + timeOffset);
+      const adjustedEndTime = new Date(endTime + timeOffset);
+
       const result = {
         user,
         testNumber,
@@ -1277,8 +1206,8 @@ const saveResult = async (user, testNumber, score, totalPoints, startTime, endTi
         correctClicks,
         totalQuestions,
         percentage,
-        startTime: new Date(startTime).toISOString(),
-        endTime: new Date(endTime).toISOString(),
+        startTime: adjustedStartTime.toISOString(),
+        endTime: adjustedEndTime.toISOString(),
         duration,
         answers: Object.fromEntries(Object.entries(answers).sort((a, b) => parseInt(a[0]) - parseInt(b[0]))),
         scoresPerQuestion,
@@ -1338,474 +1267,6 @@ const checkTestAttempts = async (user, testNumber) => {
     throw error;
   }
 };
-
-app.get('/feedback', checkAuth, (req, res) => {
-  const startTime = Date.now();
-  try {
-    const html = `
-      <!DOCTYPE html>
-      <html lang="uk">
-        <head>
-          <meta charset="UTF-8">
-          <meta name="viewport" content="width=device-width, initial-scale=1.0">
-          <title>Зворотний зв’язок</title>
-          <style>
-            body {
-              font-family: Arial, sans-serif;
-              margin: 0;
-              padding: 20px;
-              background-color: #f5f5f5;
-              text-align: center;
-            }
-            .container {
-              max-width: 600px;
-              margin: 0 auto;
-              background-color: white;
-              padding: 20px;
-              border-radius: 8px;
-              box-shadow: 0 0 10px rgba(0, 0, 0, 0.1);
-            }
-            h1 {
-              font-size: 24px;
-              margin-bottom: 20px;
-              color: #333;
-            }
-            label {
-              display: block;
-              font-size: 16px;
-              margin-bottom: 5px;
-              text-align: left;
-            }
-            textarea {
-              width: 100%;
-              height: 150px;
-              padding: 10px;
-              font-size: 16px;
-              border: 1px solid #ccc;
-              border-radius: 5px;
-              margin-bottom: 10px;
-              box-sizing: border-box;
-            }
-            button {
-              padding: 10px 20px;
-              font-size: 16px;
-              cursor: pointer;
-              border: none;
-              border-radius: 5px;
-              background-color: #4CAF50;
-              color: white;
-            }
-            button:hover {
-              background-color: #45a049;
-            }
-            button:disabled {
-              background-color: #cccccc;
-              cursor: not-allowed;
-            }
-            .error {
-              color: red;
-              margin-top: 10px;
-              font-size: 14px;
-            }
-            .back-btn {
-              background-color: #007bff;
-              margin-top: 10px;
-            }
-            .back-btn:hover {
-              background-color: #0056b3;
-            }
-            @media (max-width: 600px) {
-              .container {
-                padding: 15px;
-              }
-              h1 {
-                font-size: 20px;
-              }
-              textarea {
-                font-size: 14px;
-              }
-              button {
-                width: 100%;
-                font-size: 14px;
-              }
-            }
-          </style>
-        </head>
-        <body>
-          <div class="container">
-            <h1>Зворотний зв’язок</h1>
-            <form id="feedback-form" method="POST" action="/feedback">
-              <input type="hidden" name="_csrf" value="${res.locals._csrf}">
-              <label for="message">Ваше повідомлення:</label>
-              <textarea id="message" name="message" placeholder="Введіть ваше повідомлення, пропозицію або повідомте про проблему" required></textarea>
-              <button type="submit" id="submit-btn">Надіслати</button>
-            </form>
-            <div id="error-message" class="error"></div>
-            <button class="back-btn" onclick="window.location.href='/select-test'">Назад до вибору тесту</button>
-          </div>
-          <script>
-            document.getElementById('feedback-form').addEventListener('submit', async (e) => {
-              e.preventDefault();
-              const message = document.getElementById('message').value;
-              const errorMessage = document.getElementById('error-message');
-              const submitBtn = document.getElementById('submit-btn');
-
-              submitBtn.disabled = true;
-              submitBtn.textContent = 'Надсилання...';
-
-              const formData = new URLSearchParams();
-              formData.append('message', message);
-              formData.append('_csrf', document.querySelector('input[name="_csrf"]').value);
-
-              try {
-                const response = await fetch('/feedback', {
-                  method: 'POST',
-                  headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-                  body: formData
-                });
-
-                const result = await response.json();
-                if (result.success) {
-                  errorMessage.style.color = 'green';
-                  errorMessage.textContent = 'Повідомлення успішно надіслано!';
-                  document.getElementById('message').value = '';
-                } else {
-                  errorMessage.textContent = result.message || 'Помилка при надсиланні повідомлення.';
-                }
-              } catch (error) {
-                console.error('Помилка надсилання зворотного зв’язку:', error);
-                errorMessage.textContent = 'Не вдалося підключитися до сервера. Перевірте ваше з’єднання з Інтернетом.';
-              } finally {
-                submitBtn.disabled = false;
-                submitBtn.textContent = 'Надіслати';
-              }
-            });
-          </script>
-        </body>
-      </html>
-    `;
-    res.send(html);
-  } catch (error) {
-    logger.error('Помилка в /feedback', { message: error.message, stack: error.stack });
-    res.status(500).send('Помилка при завантаженні форми зворотного зв’язку');
-  } finally {
-    const endTime = Date.now();
-    logger.info('Маршрут /feedback виконано', { duration: `${endTime - startTime} мс` });
-  }
-});
-
-app.post('/feedback', checkAuth, [
-  body('message')
-    .isLength({ min: 5, max: 1000 }).withMessage('Повідомлення має бути від 5 до 1000 символів')
-], async (req, res) => {
-  const startTime = Date.now();
-  try {
-    const errors = validationResult(req);
-    if (!errors.isEmpty()) {
-      return res.status(400).json({ success: false, message: errors.array()[0].msg });
-    }
-
-    const { message } = req.body;
-    const user = req.user;
-    const ipAddress = req.headers['x-forwarded-for'] || req.socket.remoteAddress;
-    const timestamp = new Date().toISOString();
-
-    // Збереження повідомлення в MongoDB
-    await db.collection('feedback').insertOne({
-      user,
-      message,
-      timestamp,
-      ipAddress,
-      read: false
-    });
-
-    logger.info('Зворотний зв’язок збережено', { user, message });
-
-    // Надсилання email адміністратору
-    try {
-      const mailOptions = {
-        from: process.env.EMAIL_USER || 'alphacentertest@gmail.com',
-        to: process.env.EMAIL_USER || 'alphacentertest@gmail.com',
-        subject: 'Нове повідомлення зворотного зв’язку',
-        text: `
-          Користувач: ${user}
-          Повідомлення: ${message}
-          Час: ${new Date(timestamp).toLocaleString('uk-UA')}
-          IP-адреса: ${ipAddress}
-        `
-      };
-      await transporter.sendMail(mailOptions);
-      logger.info('Email зворотного зв’язку надіслано', { user, email: process.env.EMAIL_USER });
-    } catch (emailError) {
-      logger.error('Помилка відправки email зворотного зв’язку', { 
-        message: emailError.message, 
-        stack: emailError.stack, 
-        emailUser: process.env.EMAIL_USER 
-      });
-    }
-
-    res.json({ success: true });
-  } catch (error) {
-    logger.error('Помилка в /feedback (POST)', { message: error.message, stack: error.stack });
-    res.status(500).json({ success: false, message: 'Помилка при надсиланні зворотного зв’язку' });
-  } finally {
-    const endTime = Date.now();
-    logger.info('Маршрут /feedback (POST) виконано', { duration: `${endTime - startTime} мс` });
-  }
-});
-
-app.post('/admin/feedback/delete/:id', checkAuth, checkAdmin, async (req, res) => {
-  const startTime = Date.now();
-  try {
-    const feedbackId = req.params.id;
-    if (!ObjectId.isValid(feedbackId)) {
-      return res.status(400).json({ success: false, message: 'Невірний ID повідомлення' });
-    }
-
-    const result = await db.collection('feedback').deleteOne({ _id: new ObjectId(feedbackId) });
-    if (result.deletedCount === 0) {
-      return res.status(404).json({ success: false, message: 'Повідомлення не знайдено' });
-    }
-
-    logger.info('Видалено повідомлення зворотного зв’язку', { feedbackId, user: req.user });
-    res.json({ success: true });
-  } catch (error) {
-    logger.error('Помилка видалення повідомлення', { message: error.message, stack: error.stack });
-    res.status(500).json({ success: false, message: 'Помилка при видаленні повідомлення' });
-  } finally {
-    const endTime = Date.now();
-    logger.info('Маршрут /admin/feedback/delete/:id виконано', { duration: `${endTime - startTime} мс` });
-  }
-});
-
-app.post('/admin/feedback/delete-all', checkAuth, checkAdmin, async (req, res) => {
-  const startTime = Date.now();
-  try {
-    const result = await db.collection('feedback').deleteMany({});
-    logger.info('Видалено всі повідомлення зворотного зв’язку', { deletedCount: result.deletedCount, user: req.user });
-    res.json({ success: true });
-  } catch (error) {
-    logger.error('Помилка видалення всіх повідомлень', { message: error.message, stack: error.stack });
-    res.status(500).json({ success: false, message: 'Помилка при видаленні всіх повідомлень' });
-  } finally {
-    const endTime = Date.now();
-    logger.info('Маршрут /admin/feedback/delete-all виконано', { duration: `${endTime - startTime} мс` });
-  }
-});
-
-app.get('/admin/feedback', checkAuth, checkAdmin, async (req, res) => {
-  const startTime = Date.now();
-  try {
-    const page = parseInt(req.query.page) || 1;
-    const limit = 20;
-    const skip = (page - 1) * limit;
-
-    const feedback = await db.collection('feedback')
-      .find({})
-      .sort({ timestamp: -1 })
-      .skip(skip)
-      .limit(limit)
-      .toArray();
-
-    const totalFeedback = await db.collection('feedback').countDocuments();
-    const totalPages = Math.ceil(totalFeedback / limit);
-
-    // Позначити всі повідомлення як прочитані
-    await db.collection('feedback').updateMany({ read: false }, { $set: { read: true } });
-
-    const html = `
-      <!DOCTYPE html>
-      <html lang="uk">
-        <head>
-          <meta charset="UTF-8">
-          <meta name="viewport" content="width=device-width, initial-scale=1.0">
-          <title>Зворотний зв’язок</title>
-          <style>
-            body {
-              font-family: Arial, sans-serif;
-              padding: 20px;
-              background-color: #f5f5f5;
-            }
-            .container {
-              max-width: 900px;
-              margin: 0 auto;
-              background-color: white;
-              padding: 20px;
-              border-radius: 8px;
-              box-shadow: 0 0 10px rgba(0, 0, 0, 0.1);
-            }
-            h1 {
-              font-size: 24px;
-              text-align: center;
-              margin-bottom: 20px;
-            }
-            table {
-              border-collapse: collapse;
-              width: 100%;
-              margin-top: 20px;
-            }
-            th, td {
-              border: 1px solid #ddd;
-              padding: 8px;
-              text-align: left;
-            }
-            th {
-              background-color: #f2f2f2;
-            }
-            .message {
-              white-space: pre-wrap;
-              max-width: 400px;
-              word-wrap: break-word;
-            }
-            .nav-btn, .delete-btn, .delete-all-btn {
-              padding: 8px 16px;
-              cursor: pointer;
-              border: none;
-              border-radius: 5px;
-              font-size: 14px;
-              margin: 5px;
-            }
-            .nav-btn {
-              background-color: #007bff;
-              color: white;
-            }
-            .nav-btn:hover {
-              background-color: #0056b3;
-            }
-            .delete-btn {
-              background-color: #ef5350;
-              color: white;
-            }
-            .delete-btn:hover {
-              background-color: #d32f2f;
-            }
-            .delete-all-btn {
-              background-color: #d32f2f;
-              color: white;
-            }
-            .delete-all-btn:hover {
-              background-color: #b71c1c;
-            }
-            .pagination {
-              margin-top: 20px;
-              text-align: center;
-            }
-            .pagination a {
-              margin: 0 5px;
-              padding: 5px 10px;
-              background-color: #007bff;
-              color: white;
-              text-decoration: none;
-              border-radius: 5px;
-            }
-            .pagination a:hover {
-              background-color: #0056b3;
-            }
-            @media (max-width: 600px) {
-              h1 {
-                font-size: 20px;
-              }
-              table {
-                font-size: 14px;
-              }
-              .message {
-                max-width: 200px;
-              }
-              .nav-btn, .delete-btn, .delete-all-btn {
-                width: 100%;
-                box-sizing: border-box;
-              }
-            }
-          </style>
-        </head>
-        <body>
-          <div class="container">
-            <h1>Зворотний зв’язок від користувачів</h1>
-            <button class="nav-btn" onclick="window.location.href='/admin'">Повернутися до адмін-панелі</button>
-            <button class="delete-all-btn" onclick="deleteAllFeedback()">Видалити всі повідомлення</button>
-            <table>
-              <tr>
-                <th>Користувач</th>
-                <th>Повідомлення</th>
-                <th>Час</th>
-                <th>IP-адреса</th>
-                <th>Дії</th>
-              </tr>
-              ${feedback.length > 0 ? feedback.map(f => `
-                <tr>
-                  <td>${f.user}</td>
-                  <td class="message">${f.message.replace(/</g, '&lt;').replace(/>/g, '&gt;')}</td>
-                  <td>${new Date(f.timestamp).toLocaleString('uk-UA')}</td>
-                  <td>${f.ipAddress}</td>
-                  <td>
-                    <button class="delete-btn" onclick="deleteFeedback('${f._id}')">Видалити</button>
-                  </td>
-                </tr>
-              `).join('') : '<tr><td colspan="5">Немає повідомлень</td></tr>'}
-            </table>
-            <div class="pagination">
-              ${page > 1 ? `<a href="/admin/feedback?page=${page - 1}">Попередня</a>` : ''}
-              <span>Сторінка ${page} з ${totalPages}</span>
-              ${page < totalPages ? `<a href="/admin/feedback?page=${page + 1}">Наступна</a>` : ''}
-            </div>
-          </div>
-          <script>
-            async function deleteFeedback(id) {
-              if (!confirm('Ви впевнені, що хочете видалити це повідомлення?')) return;
-              const formData = new URLSearchParams();
-              formData.append('_csrf', '${res.locals._csrf}');
-              try {
-                const response = await fetch('/admin/feedback/delete/' + id, {
-                  method: 'POST',
-                  headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-                  body: formData
-                });
-                const result = await response.json();
-                if (result.success) {
-                  window.location.reload();
-                } else {
-                  alert('Помилка видалення: ' + result.message);
-                }
-              } catch (error) {
-                console.error('Помилка видалення:', error);
-                alert('Не вдалося видалити повідомлення.');
-              }
-            }
-
-            async function deleteAllFeedback() {
-              if (!confirm('Ви впевнені, що хочете видалити ВСІ повідомлення?')) return;
-              const formData = new URLSearchParams();
-              formData.append('_csrf', '${res.locals._csrf}');
-              try {
-                const response = await fetch('/admin/feedback/delete-all', {
-                  method: 'POST',
-                  headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-                  body: formData
-                });
-                const result = await response.json();
-                if (result.success) {
-                  window.location.reload();
-                } else {
-                  alert('Помилка видалення: ' + result.message);
-                }
-              } catch (error) {
-                console.error('Помилка видалення всіх повідомлень:', error);
-                alert('Не вдалося видалити всі повідомлення.');
-              }
-            }
-          </script>
-        </body>
-      </html>
-    `;
-    res.send(html);
-  } catch (error) {
-    logger.error('Помилка в /admin/feedback', { message: error.message, stack: error.stack });
-    res.status(500).send('Помилка при завантаженні зворотного зв’язку');
-  } finally {
-    const endTime = Date.now();
-    logger.info('Маршрут /admin/feedback виконано', { duration: `${endTime - startTime} мс` });
-  }
-});
 
 // Початок тесту
 app.get('/test', checkAuth, async (req, res) => {
@@ -1916,157 +1377,6 @@ app.get('/test', checkAuth, async (req, res) => {
   } finally {
     const endTime = Date.now();
     logger.info('Маршрут /test виконано', { duration: `${endTime - startTime} мс` });
-  }
-});
-
-app.get('/instructions', checkAuth, (req, res) => {
-  const startTime = Date.now();
-  try {
-    const html = `
-      <!DOCTYPE html>
-      <html lang="uk">
-        <head>
-          <meta charset="UTF-8">
-          <meta name="viewport" content="width=device-width, initial-scale=1.0">
-          <title>Інструкція до тестів</title>
-          <style>
-            body {
-              font-family: Arial, sans-serif;
-              margin: 0;
-              padding: 20px;
-              background-color: #f5f5f5;
-              line-height: 1.6;
-              color: #333;
-            }
-            .container {
-              max-width: 800px;
-              margin: 0 auto;
-              background-color: white;
-              padding: 30px;
-              border-radius: 8px;
-              box-shadow: 0 0 10px rgba(0, 0, 0, 0.1);
-            }
-            h1 {
-              font-size: 28px;
-              text-align: center;
-              color: #2c3e50;
-              margin-bottom: 20px;
-            }
-            h2 {
-              font-size: 22px;
-              color: #34495e;
-              margin-top: 20px;
-              margin-bottom: 10px;
-            }
-            p, li {
-              font-size: 16px;
-              margin-bottom: 10px;
-            }
-            ul {
-              list-style-type: disc;
-              padding-left: 20px;
-            }
-            img {
-              max-width: 100%;
-              height: auto;
-              display: block;
-              margin: 20px auto;
-              border-radius: 5px;
-            }
-            .nav-btn {
-              display: inline-block;
-              padding: 10px 20px;
-              margin-top: 20px;
-              cursor: pointer;
-              border: none;
-              border-radius: 5px;
-              background-color: #4CAF50;
-              color: white;
-              text-decoration: none;
-              font-size: 16px;
-              text-align: center;
-            }
-            .nav-btn:hover {
-              background-color: #45a049;
-            }
-            @media (max-width: 600px) {
-              .container {
-                padding: 15px;
-              }
-              h1 {
-                font-size: 24px;
-              }
-              h2 {
-                font-size: 18px;
-              }
-              p, li {
-                font-size: 14px;
-              }
-              .nav-btn {
-                width: 100%;
-                box-sizing: border-box;
-              }
-            }
-          </style>
-        </head>
-        <body>
-          <div class="container">
-            <h1>Інструкція для користувачів: Як правильно проходити тести</h1>
-            <p>Вітаємо Вас в Центрі тестування! Щоб забезпечити найкращий досвід і отримати точні результати, будь ласка, дотримуйтесь цих рекомендацій:</p>
-            
-            <h2>1. Підготовка до тесту</h2>
-            <ul>
-              <li><strong>Перевірте з’єднання з Інтернетом:</strong> Переконайтеся, що ваше інтернет-з’єднання стабільне, щоб уникнути перерв під час тесту.</li>
-              <li><strong>Використовуйте сумісний браузер:</strong> Рекомендуємо використовувати актуальні версії браузерів, таких як Google Chrome, Mozilla Firefox або Microsoft Edge.</li>
-              <li><strong>Закрийте зайві вкладки та програми:</strong> Це допоможе уникнути відволікань і зменшить навантаження на пристрій.</li>
-              <li><strong>Ознайомтеся з інструкціями:</strong> Перед початком тесту уважно прочитайте цю інструкцію.</li>
-            </ul>
-
-            <h2>2. Початок тесту</h2>
-            <ul>
-              <li><strong>Оберіть тест:</strong> На сторінці вибору тесту виберіть тест із доступного списку.</li>
-              <li><strong>Не залишайте сторінку без потреби:</strong> Якщо Ви плануєте перерву, завершіть тест перед тим, як закривати вкладку, щоб уникнути втрати прогресу.</li>
-            </ul>
-
-            <h2>3. Проведення тесту</h2>
-            <ul>
-              <li><strong>Відповідайте на питання послідовно:</strong> Пересувайтеся між питаннями за допомогою кнопок "Назад" і "Далі". Переконайтеся, що всі відповіді збережено перед переходом. Ви можете пропускати деякі питання і рухатись далі. Якщо Ви пропустили питання і не дали на нього відповідь, то в полосі прогресу кружечок з цим питанням буде червоного кольору і Ви зможете швидко знайти пропущене питання.</li>
-              <li><strong>Перевіряйте відповіді:</strong> Перед завершенням тесту переконайтеся, що всі питання заповнені. Ви можете повертатися до попередніх питань, якщо це дозволено.</li>
-              <li><strong>Дотримуйтесь таймера:</strong> Звертайте увагу на таймер у верхній частині екрана. Якщо час закінчиться, тест завершиться автоматично.</li>
-              <li><strong>Увага до інструкцій під питаннями:</strong> Звертайте увагу на написи під текстом кожного питання, адже тести містять питання різних типів. Деякі питання мають лише одну правильну відповідь (питання типу "singlechoice"), напис під такими питаннями буде «Виберіть правильну відповідь». Питання мультивибору (типу "multiple") мають декілька правильних відповідей. Напис під цими питанням буде «Виберіть усі правильні вибори». Вибір правильної кількості відповідей критично важливий для точного результату. Також є питання типу "input", в яких Вам необхідно у вікні відповіді ввести власноручно відповідь. У питаннях типу "fillblank" Вам необхідно буде заповнити пропуски у реченні. В питаннях типу "ordering" Вам будуть представлені варіанти відповідей, які необхідно буде розташувати у правильній послідовності переміщаючи їх. В питаннях типу "matching" Вам необхідно буде скласти пари, перетягуючи елементи і ставлячи їх один навпроти підходящого. Якщо Ви проходите тести з телефону, в яких зазвичай екрани мають невелике розширення, то на питаннях цього типу Вам необхідно буде розвернути телефон в альбомну розкладку, тоді Ви зможете коректно виконати такі пункти тесту.</li>
-              <img src="/images/image1.jpg" alt="Інструкція для користувачів" onerror="this.style.display='none';">
-            </ul>
-
-            <h2>4. Завершення тесту</h2>
-            <ul>
-              <li><strong>Завершіть тест вручну:</strong> Натисніть кнопку "Завершити тест", коли закінчите, або дочекайтеся автоматичного завершення за таймером.</li>
-              <li><strong>Перегляньте результати:</strong> Після завершення тесту програма перенаправить Вас на сторінку з результатами, де буде відображено ваш бал, відсоток правильних відповідей та іншу основну інформацію.</li>
-              <li><strong>Експортуйте результати:</strong> Використовуйте кнопку "Експортувати в PDF", щоб зберегти результати тесту у зручному форматі.</li>
-            </ul>
-
-            <h2>5. На що звертати увагу</h2>
-            <ul>
-              <li><strong>Помилки сервера:</strong> Якщо з’являється повідомлення "Внутрішня помилка сервера", спробуйте перезавантажити сторінку. Якщо проблема повторюється, зверніться до адміністратора.</li>
-              <li><strong>Збереження прогресу:</strong> Відповіді автоматично зберігаються під час переходу між питаннями, але при довгих перервах або збою з’єднання прогрес може бути втрачений. Завжди завершуйте тест у межах одного сеансу.</li>
-              <li><strong>Сумнівна активність:</strong> Якщо ви багато перемикаєтеся між вкладками або проводите значний час поза тестом, це може бути зафіксовано системою для аналізу адміністратором.</li>
-            </ul>
-
-            <h2>6. Контактна інформація</h2>
-            <p>Якщо у вас виникли труднощі або питання, зверніться до адміністратора через відповідний канал підтримки (наприклад, електронну пошту чи форму зворотного зв’язку).</p>
-
-            <p style="text-align: center; font-size: 18px; margin-top: 20px;">Бажаємо успіхів у проходженні тестів! 😊</p>
-            <a href="/select-test" class="nav-btn">Назад до вибору тесту</a>
-          </div>
-        </body>
-      </html>
-    `;
-    res.send(html);
-  } catch (error) {
-    logger.error('Помилка в /instructions', { message: error.message, stack: error.stack });
-    res.status(500).send('Помилка при завантаженні інструкції');
-  } finally {
-    const endTime = Date.now();
-    logger.info('Маршрут /instructions виконано', { duration: `${endTime - startTime} мс` });
   }
 });
 
@@ -2901,11 +2211,10 @@ app.get('/test/question', checkAuth, async (req, res) => {
               lastGlobalUpdateTime = now;
 
               if (remainingTime <= 0) {
-                console.log('Глобальний таймер закінчився, збереження відповіді та перенаправлення через 1.5с');
                 saveCurrentAnswer(currentQuestionIndex).then(() => {
                   setTimeout(() => {
                     window.location.href = '/result';
-                  }, 1500); // Затримка 1.5 секунди
+                  }, 300);
                 });
               }
             }
@@ -2937,12 +2246,11 @@ app.get('/test/question', checkAuth, async (req, res) => {
               const questionTimerInterval = setInterval(() => {
                 updateQuestionTimer();
                 if (currentQuestionIndex >= totalQuestions - 1 && questionTimeRemaining <= 0 && !hasMovedToNext) {
-                  console.log('Таймер швидкого тесту закінчився, збереження відповіді та перенаправлення через 1.5с');
                   clearInterval(questionTimerInterval);
                   saveCurrentAnswer(currentQuestionIndex).then(() => {
                     setTimeout(() => {
                       window.location.href = '/result';
-                    }, 1500); // Затримка 1.5 секунди
+                    }, 300);
                   });
                 }
               }, 50);
@@ -3862,12 +3170,9 @@ app.get('/results', checkAuth, async (req, res) => {
 });
 
 // Маршрут для адмін-панелі
-app.get('/admin', checkAuth, checkAdmin, async (req, res) => {
+app.get('/admin', checkAuth, checkAdmin, (req, res) => {
   const startTime = Date.now();
   try {
-    // Підрахунок непрочитаних повідомлень зворотного зв’язку
-    const unreadFeedbackCount = await db.collection('feedback').countDocuments({ read: false });
-
     const html = `
       <!DOCTYPE html>
       <html lang="uk">
@@ -3878,31 +3183,14 @@ app.get('/admin', checkAuth, checkAdmin, async (req, res) => {
           <style>
             body { font-family: Arial, sans-serif; text-align: center; padding: 50px; font-size: 24px; margin: 0; }
             h1 { font-size: 36px; margin-bottom: 20px; }
-            button { padding: 15px 30px; margin: 10px; font-size: 24px; cursor: pointer; width: 300px; border: none; border-radius: 5px; background-color: #4CAF50; color: white; position: relative; }
+            button { padding: 15px 30px; margin: 10px; font-size: 24px; cursor: pointer; width: 300px; border: none; border-radius: 5px; background-color: #4CAF50; color: white; }
             button:hover { background-color: #45a049; }
-            #feedback-btn { 
-              background-color: ${unreadFeedbackCount > 0 ? '#ef5350' : '#4CAF50'}; /* Червоний, якщо є непрочитані */
-            }
-            #feedback-btn:hover { 
-              background-color: ${unreadFeedbackCount > 0 ? '#d32f2f' : '#45a049'}; 
-            }
-            .notification-badge {
-              position: absolute;
-              top: -10px;
-              right: -10px;
-              background-color: #ff9800;
-              color: white;
-              border-radius: 50%;
-              padding: 5px 10px;
-              font-size: 14px;
-            }
             #logout { background-color: #ef5350; color: white; }
             @media (max-width: 600px) {
               body { padding: 20px; padding-bottom: 80px; }
               h1 { font-size: 32px; }
               button { font-size: 20px; width: 90%; padding: 15px; }
               #logout { position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%); width: 90%; }
-              .notification-badge { font-size: 12px; padding: 3px 8px; }
             }
           </style>
         </head>
@@ -3916,10 +3204,6 @@ app.get('/admin', checkAuth, checkAdmin, async (req, res) => {
           <button onclick="window.location.href='/admin/edit-tests'">Редагувати назви тестів</button><br>
           <button onclick="window.location.href='/admin/create-test'">Створити новий тест</button><br>
           <button onclick="window.location.href='/admin/activity-log'">Журнал дій</button><br>
-          <button id="feedback-btn" onclick="window.location.href='/admin/feedback'">
-            Зворотний зв’язок
-            ${unreadFeedbackCount > 0 ? `<span class="notification-badge">${unreadFeedbackCount}</span>` : ''}
-          </button><br>
           <button id="logout" onclick="logout()">Вийти</button>
           <script>
             async function logout() {
@@ -3953,9 +3237,6 @@ app.get('/admin', checkAuth, checkAdmin, async (req, res) => {
       </html>
     `;
     res.send(html);
-  } catch (error) {
-    logger.error('Помилка в /admin', { message: error.message, stack: error.stack });
-    res.status(500).send('Помилка при завантаженні адмін-панелі');
   } finally {
     const endTime = Date.now();
     logger.info('Маршрут /admin виконано', { duration: `${endTime - startTime} мс` });
@@ -6313,7 +5594,7 @@ app.get('/admin/activity-log', checkAuth, checkAdmin, async (req, res) => {
   const startTime = Date.now();
   try {
     const page = parseInt(req.query.page) || 1;
-    const limit = 50;
+    const limit = 20;
     const skip = (page - 1) * limit;
 
     const activities = await db.collection('activity_log')
@@ -6326,110 +5607,59 @@ app.get('/admin/activity-log', checkAuth, checkAdmin, async (req, res) => {
     const totalActivities = await db.collection('activity_log').countDocuments();
     const totalPages = Math.ceil(totalActivities / limit);
 
-    const html = `
+    let html = `
       <!DOCTYPE html>
       <html lang="uk">
         <head>
           <meta charset="UTF-8">
-          <meta name="viewport" content="width=device-width, initial-scale=1.0">
-          <title>Журнал дій</title>
+          <title>Журнал активності</title>
           <style>
-            body {
-              font-family: Arial, sans-serif;
-              padding: 20px;
-              background-color: #f5f5f5;
-            }
-            .container {
-              max-width: 800px;
-              margin: 0 auto;
-              background-color: white;
-              padding: 20px;
-              border-radius: 8px;
-              box-shadow: 0 0 10px rgba(0, 0, 0, 0.1);
-            }
-            h1 {
-              font-size: 24px;
-              text-align: center;
-              margin-bottom: 20px;
-            }
-            table {
-              border-collapse: collapse;
-              width: 100%;
-              margin-top: 20px;
-            }
-            th, td {
-              border: 1px solid #ddd;
-              padding: 8px;
-              text-align: left;
-            }
-            th {
-              background-color: #f2f2f2;
-            }
-            .nav-btn {
-              padding: 10px 20px;
-              margin: 10px 0;
-              cursor: pointer;
-              border: none;
-              border-radius: 5px;
-              background-color: #007bff;
-              color: white;
-            }
-            .nav-btn:hover {
-              background-color: #0056b3;
-            }
-            .pagination {
-              margin-top: 20px;
-              text-align: center;
-            }
-            .pagination a {
-              margin: 0 5px;
-              padding: 5px 10px;
-              background-color: #007bff;
-              color: white;
-              text-decoration: none;
-              border-radius: 5px;
-            }
-            .pagination a:hover {
-              background-color: #0056b3;
-            }
-            @media (max-width: 600px) {
-              h1 {
-                font-size: 20px;
-              }
-              table {
-                font-size: 14px;
-              }
-              .nav-btn {
-                width: 100%;
-              }
-            }
+            body { font-family: Arial, sans-serif; padding: 20px; }
+            table { border-collapse: collapse; width: 100%; margin-top: 20px; }
+            th, td { border: 1px solid black; padding: 8px; text-align: left; }
+            th { background-color: #f2f2f2; }
+            .error { color: red; }
+            .nav-btn { padding: 10px 20px; margin: 5px; cursor: pointer; border: none; border-radius: 5px; background-color: #007bff; color: white; }
+            .pagination { margin-top: 20px; }
+            .pagination a { margin: 0 5px; padding: 5px 10px; background-color: #007bff; color: white; text-decoration: none; border-radius: 5px; }
+            .pagination a:hover { background-color: #0056b3; }
           </style>
         </head>
         <body>
-          <div class="container">
-            <h1>Журнал дій</h1>
-            <button class="nav-btn" onclick="window.location.href='/admin'">Повернутися до адмін-панелі</button>
-            <table>
-              <tr>
-                <th>Користувач</th>
-                <th>Дія</th>
-                <th>IP-адреса</th>
-                <th>Час</th>
-              </tr>
-              ${activities.length > 0 ? activities.map(a => `
-                <tr>
-                  <td>${a.user}</td>
-                  <td>${a.action}</td>
-                  <td>${a.ipAddress}</td>
-                  <td>${new Date(a.timestamp).toLocaleString('uk-UA')}</td>
-                </tr>
-              `).join('') : '<tr><td colspan="4">Немає записів</td></tr>'}
-            </table>
-            <div class="pagination">
-              ${page > 1 ? `<a href="/admin/activity-log?page=${page - 1}">Попередня</a>` : ''}
-              <span>Сторінка ${page} з ${totalPages}</span>
-              ${page < totalPages ? `<a href="/admin/activity-log?page=${page + 1}">Наступна</a>` : ''}
-            </div>
+          <h1>Журнал активності</h1>
+          <button class="nav-btn" onclick="window.location.href='/admin'">Повернутися до адмін-панелі</button>
+          <table>
+            <tr>
+              <th>Користувач</th>
+              <th>Дія</th>
+              <th>IP-адреса</th>
+              <th>Час</th>
+              <th>Додаткова інформація</th>
+            </tr>
+    `;
+    if (!activities || activities.length === 0) {
+      html += '<tr><td colspan="5">Немає записів активності</td></tr>';
+    } else {
+      activities.forEach(activity => {
+        const timestamp = new Date(activity.timestamp).toLocaleString('uk-UA');
+        const additionalInfo = JSON.stringify(activity.additionalInfo, null, 2);
+        html += `
+          <tr>
+            <td>${activity.user}</td>
+            <td>${activity.action}</td>
+            <td>${activity.ipAddress}</td>
+            <td>${timestamp}</td>
+            <td><pre>${additionalInfo}</pre></td>
+          </tr>
+        `;
+      });
+    }
+    html += `
+          </table>
+          <div class="pagination">
+            ${page > 1 ? `<a href="/admin/activity-log?page=${page - 1}">Попередня</a>` : ''}
+            <span>Сторінка ${page} з ${totalPages}</span>
+            ${page < totalPages ? `<a href="/admin/activity-log?page=${page + 1}">Наступна</a>` : ''}
           </div>
         </body>
       </html>
@@ -6437,7 +5667,7 @@ app.get('/admin/activity-log', checkAuth, checkAdmin, async (req, res) => {
     res.send(html);
   } catch (error) {
     logger.error('Помилка в /admin/activity-log', { message: error.message, stack: error.stack });
-    res.status(500).send('Помилка при завантаженні журналу дій');
+    res.status(500).send('Помилка при завантаженні журналу активності');
   } finally {
     const endTime = Date.now();
     logger.info('Маршрут /admin/activity-log виконано', { duration: `${endTime - startTime} мс` });
