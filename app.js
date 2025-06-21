@@ -797,7 +797,13 @@ app.get('/api/test', (req, res) => {
 
 // Favicon
 app.get('/favicon.ico', (req, res) => {
-  res.status(204).end();
+  try {
+    logger.info('Обробка запиту /favicon.ico');
+    res.status(204).end();
+  } catch (error) {
+    logger.error('Помилка в /favicon.ico', { message: error.message, stack: error.stack });
+    res.status(500).end();
+  }
 });
 
 // Головна сторінка з формою авторизації
@@ -915,15 +921,37 @@ app.post('/login', [
 ], async (req, res) => {
   const startTime = Date.now();
   try {
-    const ipAddress = req.headers['x-forwarded-for'] || req.socket.remoteAddress;
-    logger.info('Початок обробки /login', { ipAddress, body: req.body });
+    logger.info('Початок обробки запиту /login', { body: req.body });
 
+    // Перевірка сесії
+    if (!req.session) {
+      logger.error('Сесія відсутня в /login', { sessionID: req.sessionID || 'unknown' });
+      return res.status(500).json({ success: false, message: 'Помилка сесії' });
+    }
+    logger.info('Сесія перевірена', { sessionID: req.sessionID });
+
+    // Перевірка CSRF-токена
+    const csrfToken = (req.body && req.body._csrf) || (req.headers && (req.headers['x-csrf-token'] || req.headers['xsrf-token'])) || '';
+    logger.info('Отримано CSRF-токен', { csrfToken, body: req.body, headers: req.headers });
+    if (!csrfToken || csrfToken !== res.locals._csrf) {
+      logger.error('Невірний або відсутній CSRF-токен', { received: csrfToken, expected: res.locals._csrf });
+      return res.status(403).json({ success: false, message: 'Недійсний CSRF-токен' });
+    }
+
+    // Перевірка ініціалізації
+    if (!isInitialized) {
+      logger.error('Сервер ще не ініціалізовано', { isInitialized, initializationError });
+      return res.status(503).json({ success: false, message: 'Сервер ще ініціалізується' });
+    }
+    logger.info('Сервер ініціалізовано', { isInitialized });
+
+    const ipAddress = req.headers['x-forwarded-for'] || req.socket.remoteAddress;
+    logger.info('Перевірка лімітів входу', { ipAddress });
     await checkLoginAttempts(ipAddress);
-    logger.info('Перевірка спроб входу пройдена');
 
     const errors = validationResult(req);
     if (!errors.isEmpty()) {
-      logger.warn('Помилки валідації', { errors: errors.array() });
+      logger.warn('Помилки валідації в /login', { errors: errors.array() });
       return res.status(400).json({ success: false, message: errors.array()[0].msg });
     }
 
@@ -935,63 +963,84 @@ app.post('/login', [
       return res.status(400).json({ success: false, message: 'Логін або пароль не вказано' });
     }
 
+    logger.info('Завантаження кешу користувачів', { userCacheLength: userCache.length });
     if (userCache.length === 0) {
-      logger.warn('Кеш користувачів порожній, повторне завантаження з MongoDB');
+      logger.warn('Кеш користувачів порожній, повторне завантаження');
       await loadUsersToCache();
       if (userCache.length === 0) {
-        logger.error('Користувачів не знайдено в MongoDB після повторного завантаження');
-        throw new Error('Не вдалося завантажити користувачів з бази даних');
+        logger.error('Користувачів не знайдено після повторного завантаження');
+        return res.status(500).json({ success: false, message: 'Користувачі недоступні в базі даних' });
       }
     }
 
     const foundUser = userCache.find(user => user.username === username);
-    logger.info('Пошук користувача в кеші', { username, found: !!foundUser });
-
+    logger.info('Пошук користувача', { username, found: !!foundUser });
     if (!foundUser) {
       logger.warn('Користувача не знайдено', { username });
       return res.status(401).json({ success: false, message: 'Невірний логін або пароль' });
     }
 
     logger.info('Перевірка пароля', { username });
+    if (!foundUser.password || typeof foundUser.password !== 'string') {
+      logger.error('Некоректний пароль у базі', { username, password: foundUser.password });
+      return res.status(500).json({ success: false, message: 'Помилка даних користувача' });
+    }
+
     const passwordMatch = await bcrypt.compare(password, foundUser.password);
+    logger.info('Результат перевірки пароля', { username, match: passwordMatch });
     if (!passwordMatch) {
-      logger.warn('Невірний пароль для користувача', { username });
+      logger.warn('Невірний пароль', { username });
       return res.status(401).json({ success: false, message: 'Невірний логін або пароль' });
     }
 
     await checkLoginAttempts(ipAddress, true);
-    logger.info('Скидання лімітів спроб входу', { ipAddress });
+    logger.info('Ліміти входу скинуто', { ipAddress });
 
-    const token = jwt.sign(
+    const jwtSecret = process.env.JWT_SECRET || 'your-secret-key';
+    logger.info('Генерація JWT-токена', { username, jwtSecret: jwtSecret ? 'defined' : 'undefined' });
+    if (!jwtSecret) {
+      logger.error('JWT_SECRET не визначено');
+      return res.status(500).json({ success: false, message: 'Помилка конфігурації сервера' });
+    }
+
+    const jwtToken = jwt.sign(
       { username: foundUser.username, role: foundUser.role },
-      process.env.JWT_SECRET || 'your-secret-key',
+      jwtSecret,
       { expiresIn: '24h' }
     );
-    logger.info('JWT-токен згенеровано', { username });
 
-    res.cookie('token', token, {
+    res.cookie('token', jwtToken, {
       httpOnly: true,
       secure: process.env.NODE_ENV === 'production',
       sameSite: process.env.NODE_ENV === 'production' ? 'none' : 'lax',
       maxAge: 24 * 60 * 60 * 1000
     });
 
-    res.cookie('auth_token', token, {
+    res.cookie('auth_token', jwtToken, {
       httpOnly: false,
       secure: process.env.NODE_ENV === 'production',
       sameSite: process.env.NODE_ENV === 'production' ? 'none' : 'lax',
       maxAge: 24 * 60 * 60 * 1000
     });
+    logger.info('Cookies встановлено', { username });
 
     await logActivity(foundUser.username, 'увійшов на сайт', ipAddress);
-    logger.info('Активність користувача залогована', { username });
+    logger.info('Активність залогована', { username });
 
     res.json({ success: true, redirect: foundUser.role === 'admin' ? '/admin' : '/select-section' });
   } catch (error) {
-    logger.error('Помилка в /login', { message: error.message, stack: error.stack, username: req.body.username });
-    res.status(error.message.includes('Перевищено ліміт') ? 429 : 500).json({ success: false, message: error.message || 'Помилка сервера' });
+    logger.error('Критична помилка в /login', {
+      message: error.message,
+      stack: error.stack,
+      username: req.body.username,
+      sessionID: req.sessionID
+    });
+    res.status(error.message.includes('Перевищено ліміт') ? 429 : 500).json({
+      success: false,
+      message: error.message || 'Помилка сервера під час авторизації'
+    });
   } finally {
-    logger.info('Маршрут /login виконано', { duration: `${Date.now() - startTime} мс` });
+    logger.info('Маршрут /login завершився', { duration: `${Date.now() - startTime} мс` });
   }
 });
 
