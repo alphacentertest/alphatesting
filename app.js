@@ -7,7 +7,6 @@ const ExcelJS = require('exceljs');
 const { MongoClient, ObjectId } = require('mongodb');
 const bcrypt = require('bcrypt');
 const fs = require('fs');
-const multer = require('multer');
 const nodemailer = require('nodemailer');
 const { body, validationResult } = require('express-validator');
 const jwt = require('jsonwebtoken');
@@ -930,7 +929,7 @@ app.post('/login', [
     }
 
     // Очікування ініціалізації
-    const maxWaitTime = 10000; // 10 секунд
+    const maxWaitTime = 15000; // 15 секунд
     const waitStartTime = Date.now();
     while (!isInitialized && Date.now() - waitStartTime < maxWaitTime) {
       logger.info('Очікування ініціалізації сервера', { isInitialized, elapsed: Date.now() - waitStartTime });
@@ -1029,8 +1028,8 @@ app.post('/login', [
     logger.error('Критична помилка в /login', {
       message: error.message,
       stack: error.stack,
-      username: req.body.username,
-      sessionID: req.sessionID
+      username: req.body ? req.body.username : 'unknown',
+      sessionID: req.sessionID || 'unknown'
     });
     res.status(error.message.includes('Перевищено ліміт') ? 429 : 500).json({
       success: false,
@@ -4748,7 +4747,7 @@ app.get('/admin/add-section', checkAuth, checkAdmin, async (req, res) => {
         <body>
           <div class="container">
             <h1>Додати розділ</h1>
-            <form id="add-section-form" enctype="multipart/form-data">
+            <form id="add-section-form" enctype="multipart/form-data" action="/admin/add-section" method="post">
               <input type="hidden" name="_csrf" value="${res.locals._csrf}">
               <label for="name">Назва розділу:</label>
               <input type="text" id="name" name="name" placeholder="Введіть назву розділу" required>
@@ -4840,6 +4839,12 @@ app.post('/admin/add-section', checkAuth, checkAdmin, upload.single('image'), [
   const startTime = Date.now();
   try {
     logger.info('Початок обробки запиту /admin/add-section', { body: req.body, file: !!req.file });
+
+    // Перевірка наявності req.body
+    if (!req.body) {
+      logger.error('req.body відсутній у /admin/add-section', { headers: req.headers });
+      return res.status(400).json({ success: false, message: 'Некоректні дані форми' });
+    }
 
     // Перевірка CSRF-токена
     const csrfToken = (req.body && req.body._csrf) || (req.headers && (req.headers['x-csrf-token'] || req.headers['xsrf-token'])) || '';
