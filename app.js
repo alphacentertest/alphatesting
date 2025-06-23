@@ -638,22 +638,6 @@ const initializeServer = async () => {
       logger.info('Створено папку public/materials');
     }
 
-    // Перевірка користувачів
-    const userCheckStartTime = Date.now();
-    const userCount = await db.collection('users').countDocuments();
-    logger.info('Кількість користувачів у базі', { userCount });
-    if (userCount === 0) {
-      logger.warn('Колекція users порожня, створення тестового користувача');
-      const hashedPassword = await bcrypt.hash('testpassword', 10);
-      await db.collection('users').insertOne({
-        username: 'testuser',
-        password: hashedPassword,
-        role: 'user'
-      });
-      logger.info('Тестовий користувач створено');
-    }
-    logger.info(`Перевірка користувачів завершена за ${Date.now() - userCheckStartTime} мс`);
-
     // Завантаження кешу користувачів
     const cacheLoadStartTime = Date.now();
     logger.info('Завантаження кешу користувачів');
@@ -4855,47 +4839,61 @@ app.post('/admin/add-section', checkAuth, checkAdmin, upload.single('image'), [
 ], async (req, res) => {
   const startTime = Date.now();
   try {
+    logger.info('Початок обробки запиту /admin/add-section', { body: req.body, file: !!req.file });
+
+    // Перевірка CSRF-токена
+    const csrfToken = (req.body && req.body._csrf) || (req.headers && (req.headers['x-csrf-token'] || req.headers['xsrf-token'])) || '';
+    logger.info('Отримано CSRF-токен', { csrfToken, body: req.body, headers: req.headers });
+    if (!csrfToken || csrfToken !== res.locals._csrf) {
+      logger.error('Невірний або відсутній CSRF-токен', { received: csrfToken, expected: res.locals._csrf });
+      return res.status(403).json({ success: false, message: 'Недійсний CSRF-токен' });
+    }
+
     const errors = validationResult(req);
     if (!errors.isEmpty()) {
+      logger.warn('Помилки валідації', { errors: errors.array() });
       return res.status(400).json({ success: false, message: errors.array()[0].msg });
     }
 
     const { name, tests } = req.body;
     const testsArray = Array.isArray(tests) ? tests : tests ? [tests] : [];
+    logger.info('Отримано дані для нового розділу', { name, tests: testsArray });
 
     if (testsArray.length > 6) {
+      logger.warn('Занадто багато тестів', { testsCount: testsArray.length });
       return res.status(400).json({ success: false, message: 'Максимум 6 тестів на розділ' });
     }
 
     const existingSection = await db.collection('sections').findOne({ name });
     if (existingSection) {
+      logger.warn('Розділ із такою назвою вже існує', { name });
       return res.status(400).json({ success: false, message: 'Розділ із такою назвою вже існує' });
     }
 
-    let imagePath = null;
+    let imagePath = '/images/default-section.png';
     if (req.file) {
       const fileName = `section_${Date.now()}-${req.file.originalname}`;
       imagePath = `/images/${fileName}`;
       fs.writeFileSync(path.join(__dirname, 'public', 'images', fileName), req.file.buffer);
+      logger.info('Зображення збережено', { imagePath });
     }
 
-    const sectionData = {
+    const newSection = {
       name,
-      image: imagePath,
       tests: testsArray,
+      image: imagePath,
       materials: []
     };
 
-    await db.collection('sections').insertOne(sectionData);
-    logger.info('Розділ додано', { name, tests: testsArray });
+    await db.collection('sections').insertOne(newSection);
+    logger.info('Розділ створено', { name, tests: testsArray, user: req.user });
 
     res.json({ success: true });
   } catch (error) {
-    logger.error('Помилка додавання розділу', { message: error.message, stack: error.stack });
-    res.status(500).json({ success: false, message: 'Помилка при додаванні розділу' });
+    logger.error('Помилка створення розділу', { message: error.message, stack: error.stack, body: req.body });
+    res.status(500).json({ success: false, message: 'Помилка при створенні розділу' });
   } finally {
-    const endTime = Date.now();
-    logger.info('Маршрут /admin/add-section (POST) виконано', { duration: `${endTime - startTime} мс` });
+    logger.info('Маршрут /admin/add-section виконано', { duration: `${Date.now() - startTime} мс` });
   }
 });
 
