@@ -607,9 +607,12 @@ const updateUserPasswords = async () => {
 const initializeServer = async () => {
   try {
     logger.info('Початок ініціалізації сервера');
+
+    // Підключення до MongoDB
     await connectToMongoDB();
     logger.info('MongoDB підключено');
 
+    // Створення індексів
     await db.collection('users').createIndex({ username: 1 }, { unique: true });
     await db.collection('questions').createIndex({ testNumber: 1, variant: 1 });
     await db.collection('test_results').createIndex({ user: 1, testNumber: 1, endTime: -1 });
@@ -618,33 +621,47 @@ const initializeServer = async () => {
     await db.collection('login_attempts').createIndex({ ipAddress: 1, lastAttempt: 1 });
     await db.collection('tests').createIndex({ testNumber: 1 }, { unique: true });
     await db.collection('active_tests').createIndex({ user: 1 }, { unique: true });
+    await db.collection('sessions').createIndex({ expires: 1 }, { expireAfterSeconds: 0 });
     await db.collection('sections').createIndex({ name: 1 }, { unique: true });
     logger.info('Індекси створено');
 
+    // Створення папки для матеріалів
     const materialsDir = path.join(__dirname, 'public', 'materials');
     if (!fs.existsSync(materialsDir)) {
       fs.mkdirSync(materialsDir, { recursive: true });
       logger.info('Створено папку public/materials');
     }
 
+    // Перевірка користувачів
     const userCount = await db.collection('users').countDocuments();
     logger.info('Кількість користувачів у базі', { userCount });
-    if (userCount > 0) {
-      await db.collection('users').updateMany(
-        { role: { $exists: false }, username: "admin" },
-        { $set: { role: "admin" } }
-      );
-      await db.collection('users').updateMany(
-        { role: { $exists: false }, username: "Instructor" },
-        { $set: { role: "instructor" } }
-      );
-      await db.collection('users').updateMany(
-        { role: { $exists: false }, username: { $nin: ["admin", "Instructor"] } },
-        { $set: { role: "user" } }
-      );
-      logger.info('Міграція ролей завершена');
+    if (userCount === 0) {
+      logger.warn('Колекція users порожня, створення тестового користувача');
+      const hashedPassword = await bcrypt.hash('testpassword', 10);
+      await db.collection('users').insertOne({
+        username: 'testuser',
+        password: hashedPassword,
+        role: 'user'
+      });
+      logger.info('Тестовий користувач створено');
     }
 
+    // Міграція ролей
+    await db.collection('users').updateMany(
+      { role: { $exists: false }, username: "admin" },
+      { $set: { role: "admin" } }
+    );
+    await db.collection('users').updateMany(
+      { role: { $exists: false }, username: "Instructor" },
+      { $set: { role: "instructor" } }
+    );
+    await db.collection('users').updateMany(
+      { role: { $exists: false }, username: { $nin: ["admin", "Instructor"] } },
+      { $set: { role: "user" } }
+    );
+    logger.info('Міграція ролей завершена');
+
+    // Перевірка тестів
     const testCount = await db.collection('tests').countDocuments();
     logger.info('Кількість тестів у базі', { testCount });
     if (!testCount) {
@@ -659,10 +676,16 @@ const initializeServer = async () => {
       logger.info('Міграція тестів завершена', { count: Object.keys(defaultTests).length });
     }
 
+    // Оновлення паролів
     await updateUserPasswords();
+    logger.info('Паролі оновлено');
+
+    // Завантаження кешу
     await loadUsersToCache();
     logger.info('Кеш користувачів завантажено', { userCacheLength: userCache.length });
     await loadTestsFromMongoDB();
+    logger.info('Кеш тестів завантажено', { testNames: Object.keys(testNames) });
+
     await CacheManager.invalidateCache('questions', null);
     isInitialized = true;
     initializationError = null;
@@ -931,7 +954,7 @@ app.post('/login', [
     logger.info('Сесія перевірена', { sessionID: req.sessionID });
 
     // Перевірка CSRF-токена
-    const csrfToken = (req.body && req.body._csrf) || (req.headers && (req.headers['x-csrf-token'] || req.headers['xsrf-token'])) || '';
+    const csrfToken: string = (req.body && req.body._csrf) || (req.headers && (req.headers['x-csrf-token'] || req.headers['xsrf-token'])) || '';
     logger.info('Отримано CSRF-токен', { csrfToken, body: req.body, headers: req.headers });
     if (!csrfToken || csrfToken !== res.locals._csrf) {
       logger.error('Невірний або відсутній CSRF-токен', { received: csrfToken, expected: res.locals._csrf });
@@ -1003,7 +1026,7 @@ app.post('/login', [
       return res.status(500).json({ success: false, message: 'Помилка конфігурації сервера' });
     }
 
-    const jwtToken = jwt.sign(
+    const jwtToken: string = jwt.sign(
       { username: foundUser.username, role: foundUser.role },
       jwtSecret,
       { expiresIn: '24h' }
