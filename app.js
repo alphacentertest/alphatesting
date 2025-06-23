@@ -618,16 +618,16 @@ const initializeServer = async () => {
     logger.info('Створення індексів');
     const indexStartTime = Date.now();
     await Promise.all([
-      db.collection('users').createIndex({ username: 1 }, { unique: true }),
-      db.collection('questions').createIndex({ testNumber: 1, variant: 1 }),
-      db.collection('test_results').createIndex({ user: 1, testNumber: 1, endTime: -1 }),
-      db.collection('activity_log').createIndex({ user: 1, timestamp: -1 }),
-      db.collection('test_attempts').createIndex({ user: 1, testNumber: 1, attemptDate: 1 }),
-      db.collection('login_attempts').createIndex({ ipAddress: 1, lastAttempt: 1 }),
-      db.collection('tests').createIndex({ testNumber: 1 }, { unique: true }),
-      db.collection('active_tests').createIndex({ user: 1 }, { unique: true }),
-      db.collection('sessions').createIndex({ expires: 1 }, { expireAfterSeconds: 0 }),
-      db.collection('sections').createIndex({ name: 1 }, { unique: true })
+      db.collection('users').createIndex({ username: 1 }, { unique: true }).catch(err => logger.error('Помилка створення індексу users', { message: err.message })),
+      db.collection('questions').createIndex({ testNumber: 1, variant: 1 }).catch(err => logger.error('Помилка створення індексу questions', { message: err.message })),
+      db.collection('test_results').createIndex({ user: 1, testNumber: 1, endTime: -1 }).catch(err => logger.error('Помилка створення індексу test_results', { message: err.message })),
+      db.collection('activity_log').createIndex({ user: 1, timestamp: -1 }).catch(err => logger.error('Помилка створення індексу activity_log', { message: err.message })),
+      db.collection('test_attempts').createIndex({ user: 1, testNumber: 1, attemptDate: 1 }).catch(err => logger.error('Помилка створення індексу test_attempts', { message: err.message })),
+      db.collection('login_attempts').createIndex({ ipAddress: 1, lastAttempt: 1 }).catch(err => logger.error('Помилка створення індексу login_attempts', { message: err.message })),
+      db.collection('tests').createIndex({ testNumber: 1 }, { unique: true }).catch(err => logger.error('Помилка створення індексу tests', { message: err.message })),
+      db.collection('active_tests').createIndex({ user: 1 }, { unique: true }).catch(err => logger.error('Помилка створення індексу active_tests', { message: err.message })),
+      db.collection('sessions').createIndex({ expires: 1 }, { expireAfterSeconds: 0 }).catch(err => logger.error('Помилка створення індексу sessions', { message: err.message })),
+      db.collection('sections').createIndex({ name: 1 }, { unique: true }).catch(err => logger.error('Помилка створення індексу sections', { message: err.message }))
     ]);
     logger.info(`Індекси створено за ${Date.now() - indexStartTime} мс`);
 
@@ -661,15 +661,15 @@ const initializeServer = async () => {
       db.collection('users').updateMany(
         { role: { $exists: false }, username: "admin" },
         { $set: { role: "admin" } }
-      ),
+      ).catch(err => logger.error('Помилка міграції ролей admin', { message: err.message })),
       db.collection('users').updateMany(
         { role: { $exists: false }, username: "Instructor" },
         { $set: { role: "instructor" } }
-      ),
+      ).catch(err => logger.error('Помилка міграції ролей instructor', { message: err.message })),
       db.collection('users').updateMany(
         { role: { $exists: false }, username: { $nin: ["admin", "Instructor"] } },
         { $set: { role: "user" } }
-      )
+      ).catch(err => logger.error('Помилка міграції ролей user', { message: err.message }))
     ]);
     logger.info(`Міграція ролей завершена за ${Date.now() - roleMigrationStartTime} мс`);
 
@@ -686,7 +686,7 @@ const initializeServer = async () => {
       };
       await Promise.all(
         Object.entries(defaultTests).map(([testNumber, testData]) =>
-          saveTestToMongoDB(testNumber, testData)
+          saveTestToMongoDB(testNumber, testData).catch(err => logger.error('Помилка створення тесту', { testNumber, message: err.message }))
         )
       );
       logger.info('Міграція тестів завершена', { count: Object.keys(defaultTests).length });
@@ -696,18 +696,18 @@ const initializeServer = async () => {
     // Оновлення паролів
     const passwordUpdateStartTime = Date.now();
     logger.info('Початок оновлення паролів');
-    await updateUserPasswords();
+    await updateUserPasswords().catch(err => logger.error('Помилка оновлення паролів', { message: err.message }));
     logger.info(`Паролі оновлено за ${Date.now() - passwordUpdateStartTime} мс`);
 
     // Завантаження кешу
     const cacheLoadStartTime = Date.now();
     logger.info('Завантаження кешу користувачів');
-    await loadUsersToCache();
+    await loadUsersToCache().catch(err => logger.error('Помилка завантаження кешу користувачів', { message: err.message }));
     logger.info(`Кеш користувачів завантажено за ${Date.now() - cacheLoadStartTime} мс`, { userCacheLength: userCache.length });
 
     const testCacheLoadStartTime = Date.now();
     logger.info('Завантаження кешу тестів');
-    await loadTestsFromMongoDB();
+    await loadTestsFromMongoDB().catch(err => logger.error('Помилка завантаження кешу тестів', { message: err.message }));
     logger.info(`Кеш тестів завантажено за ${Date.now() - testCacheLoadStartTime} мс`, { testNames: Object.keys(testNames) });
 
     await CacheManager.invalidateCache('questions', null);
@@ -988,9 +988,15 @@ app.post('/login', [
       return res.status(403).json({ success: false, message: 'Недійсний CSRF-токен' });
     }
 
-    // Перевірка ініціалізації
+    // Очікування ініціалізації
+    const maxWaitTime = 30000; // 30 секунд
+    const waitStartTime = Date.now();
+    while (!isInitialized && Date.now() - waitStartTime < maxWaitTime) {
+      logger.info('Очікування ініціалізації сервера', { isInitialized, elapsed: Date.now() - waitStartTime });
+      await new Promise(resolve => setTimeout(resolve, 500)); // Чекаємо 500 мс
+    }
     if (!isInitialized) {
-      logger.error('Сервер ще не ініціалізовано', { isInitialized, initializationError });
+      logger.error('Сервер не ініціалізовано після очікування', { isInitialized, initializationError });
       return res.status(503).json({ success: false, message: 'Сервер ще ініціалізується' });
     }
     logger.info('Сервер ініціалізовано', { isInitialized });
