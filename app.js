@@ -654,62 +654,19 @@ const initializeServer = async () => {
     }
     logger.info(`Перевірка користувачів завершена за ${Date.now() - userCheckStartTime} мс`);
 
-    // Міграція ролей (паралельно)
-    const roleMigrationStartTime = Date.now();
-    logger.info('Початок міграції ролей');
-    await Promise.all([
-      db.collection('users').updateMany(
-        { role: { $exists: false }, username: "admin" },
-        { $set: { role: "admin" } }
-      ).catch(err => logger.error('Помилка міграції ролей admin', { message: err.message })),
-      db.collection('users').updateMany(
-        { role: { $exists: false }, username: "Instructor" },
-        { $set: { role: "instructor" } }
-      ).catch(err => logger.error('Помилка міграції ролей instructor', { message: err.message })),
-      db.collection('users').updateMany(
-        { role: { $exists: false }, username: { $nin: ["admin", "Instructor"] } },
-        { $set: { role: "user" } }
-      ).catch(err => logger.error('Помилка міграції ролей user', { message: err.message }))
-    ]);
-    logger.info(`Міграція ролей завершена за ${Date.now() - roleMigrationStartTime} мс`);
-
-    // Перевірка тестів
-    const testCheckStartTime = Date.now();
-    const testCount = await db.collection('tests').countDocuments();
-    logger.info('Кількість тестів у базі', { testCount });
-    if (!testCount) {
-      logger.info('Колекція tests порожня, створення тестових тестів');
-      const defaultTests = {
-        "1": { name: "Тест 1", timeLimit: 3600, randomQuestions: false, randomAnswers: false, questionLimit: null, attemptLimit: 1 },
-        "2": { name: "Тест 2", timeLimit: 3600, randomQuestions: false, randomAnswers: false, questionLimit: null, attemptLimit: 1 },
-        "3": { name: "Тест 3", timeLimit: 3600, randomQuestions: false, randomAnswers: false, questionLimit: null, attemptLimit: 1 }
-      };
-      await Promise.all(
-        Object.entries(defaultTests).map(([testNumber, testData]) =>
-          saveTestToMongoDB(testNumber, testData).catch(err => logger.error('Помилка створення тесту', { testNumber, message: err.message }))
-        )
-      );
-      logger.info('Міграція тестів завершена', { count: Object.keys(defaultTests).length });
-    }
-    logger.info(`Перевірка тестів завершена за ${Date.now() - testCheckStartTime} мс`);
-
-    // Оновлення паролів
-    const passwordUpdateStartTime = Date.now();
-    logger.info('Початок оновлення паролів');
-    await updateUserPasswords().catch(err => logger.error('Помилка оновлення паролів', { message: err.message }));
-    logger.info(`Паролі оновлено за ${Date.now() - passwordUpdateStartTime} мс`);
-
-    // Завантаження кешу
+    // Завантаження кешу користувачів
     const cacheLoadStartTime = Date.now();
     logger.info('Завантаження кешу користувачів');
     await loadUsersToCache().catch(err => logger.error('Помилка завантаження кешу користувачів', { message: err.message }));
     logger.info(`Кеш користувачів завантажено за ${Date.now() - cacheLoadStartTime} мс`, { userCacheLength: userCache.length });
 
+    // Завантаження кешу тестів
     const testCacheLoadStartTime = Date.now();
     logger.info('Завантаження кешу тестів');
     await loadTestsFromMongoDB().catch(err => logger.error('Помилка завантаження кешу тестів', { message: err.message }));
     logger.info(`Кеш тестів завантажено за ${Date.now() - testCacheLoadStartTime} мс`, { testNames: Object.keys(testNames) });
 
+    // Інвалідуємо кеш питань
     await CacheManager.invalidateCache('questions', null);
     logger.info('Кеш питань інвалідовано');
 
@@ -989,7 +946,7 @@ app.post('/login', [
     }
 
     // Очікування ініціалізації
-    const maxWaitTime = 30000; // 30 секунд
+    const maxWaitTime = 10000; // 10 секунд
     const waitStartTime = Date.now();
     while (!isInitialized && Date.now() - waitStartTime < maxWaitTime) {
       logger.info('Очікування ініціалізації сервера', { isInitialized, elapsed: Date.now() - waitStartTime });
