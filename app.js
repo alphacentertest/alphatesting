@@ -605,25 +605,31 @@ const updateUserPasswords = async () => {
 
 // Ініціалізація сервера
 const initializeServer = async () => {
+  const initStartTime = Date.now();
   try {
     logger.info('Початок ініціалізації сервера');
 
     // Підключення до MongoDB
+    logger.info('Спроба підключення до MongoDB');
     await connectToMongoDB();
-    logger.info('MongoDB підключено');
+    logger.info(`MongoDB підключено за ${Date.now() - initStartTime} мс`);
 
-    // Створення індексів
-    await db.collection('users').createIndex({ username: 1 }, { unique: true });
-    await db.collection('questions').createIndex({ testNumber: 1, variant: 1 });
-    await db.collection('test_results').createIndex({ user: 1, testNumber: 1, endTime: -1 });
-    await db.collection('activity_log').createIndex({ user: 1, timestamp: -1 });
-    await db.collection('test_attempts').createIndex({ user: 1, testNumber: 1, attemptDate: 1 });
-    await db.collection('login_attempts').createIndex({ ipAddress: 1, lastAttempt: 1 });
-    await db.collection('tests').createIndex({ testNumber: 1 }, { unique: true });
-    await db.collection('active_tests').createIndex({ user: 1 }, { unique: true });
-    await db.collection('sessions').createIndex({ expires: 1 }, { expireAfterSeconds: 0 });
-    await db.collection('sections').createIndex({ name: 1 }, { unique: true });
-    logger.info('Індекси створено');
+    // Створення індексів (паралельно)
+    logger.info('Створення індексів');
+    const indexStartTime = Date.now();
+    await Promise.all([
+      db.collection('users').createIndex({ username: 1 }, { unique: true }),
+      db.collection('questions').createIndex({ testNumber: 1, variant: 1 }),
+      db.collection('test_results').createIndex({ user: 1, testNumber: 1, endTime: -1 }),
+      db.collection('activity_log').createIndex({ user: 1, timestamp: -1 }),
+      db.collection('test_attempts').createIndex({ user: 1, testNumber: 1, attemptDate: 1 }),
+      db.collection('login_attempts').createIndex({ ipAddress: 1, lastAttempt: 1 }),
+      db.collection('tests').createIndex({ testNumber: 1 }, { unique: true }),
+      db.collection('active_tests').createIndex({ user: 1 }, { unique: true }),
+      db.collection('sessions').createIndex({ expires: 1 }, { expireAfterSeconds: 0 }),
+      db.collection('sections').createIndex({ name: 1 }, { unique: true })
+    ]);
+    logger.info(`Індекси створено за ${Date.now() - indexStartTime} мс`);
 
     // Створення папки для матеріалів
     const materialsDir = path.join(__dirname, 'public', 'materials');
@@ -633,6 +639,7 @@ const initializeServer = async () => {
     }
 
     // Перевірка користувачів
+    const userCheckStartTime = Date.now();
     const userCount = await db.collection('users').countDocuments();
     logger.info('Кількість користувачів у базі', { userCount });
     if (userCount === 0) {
@@ -645,54 +652,74 @@ const initializeServer = async () => {
       });
       logger.info('Тестовий користувач створено');
     }
+    logger.info(`Перевірка користувачів завершена за ${Date.now() - userCheckStartTime} мс`);
 
-    // Міграція ролей
-    await db.collection('users').updateMany(
-      { role: { $exists: false }, username: "admin" },
-      { $set: { role: "admin" } }
-    );
-    await db.collection('users').updateMany(
-      { role: { $exists: false }, username: "Instructor" },
-      { $set: { role: "instructor" } }
-    );
-    await db.collection('users').updateMany(
-      { role: { $exists: false }, username: { $nin: ["admin", "Instructor"] } },
-      { $set: { role: "user" } }
-    );
-    logger.info('Міграція ролей завершена');
+    // Міграція ролей (паралельно)
+    const roleMigrationStartTime = Date.now();
+    logger.info('Початок міграції ролей');
+    await Promise.all([
+      db.collection('users').updateMany(
+        { role: { $exists: false }, username: "admin" },
+        { $set: { role: "admin" } }
+      ),
+      db.collection('users').updateMany(
+        { role: { $exists: false }, username: "Instructor" },
+        { $set: { role: "instructor" } }
+      ),
+      db.collection('users').updateMany(
+        { role: { $exists: false }, username: { $nin: ["admin", "Instructor"] } },
+        { $set: { role: "user" } }
+      )
+    ]);
+    logger.info(`Міграція ролей завершена за ${Date.now() - roleMigrationStartTime} мс`);
 
     // Перевірка тестів
+    const testCheckStartTime = Date.now();
     const testCount = await db.collection('tests').countDocuments();
     logger.info('Кількість тестів у базі', { testCount });
     if (!testCount) {
+      logger.info('Колекція tests порожня, створення тестових тестів');
       const defaultTests = {
         "1": { name: "Тест 1", timeLimit: 3600, randomQuestions: false, randomAnswers: false, questionLimit: null, attemptLimit: 1 },
         "2": { name: "Тест 2", timeLimit: 3600, randomQuestions: false, randomAnswers: false, questionLimit: null, attemptLimit: 1 },
         "3": { name: "Тест 3", timeLimit: 3600, randomQuestions: false, randomAnswers: false, questionLimit: null, attemptLimit: 1 }
       };
-      for (const [testNumber, testData] of Object.entries(defaultTests)) {
-        await saveTestToMongoDB(testNumber, testData);
-      }
+      await Promise.all(
+        Object.entries(defaultTests).map(([testNumber, testData]) =>
+          saveTestToMongoDB(testNumber, testData)
+        )
+      );
       logger.info('Міграція тестів завершена', { count: Object.keys(defaultTests).length });
     }
+    logger.info(`Перевірка тестів завершена за ${Date.now() - testCheckStartTime} мс`);
 
     // Оновлення паролів
+    const passwordUpdateStartTime = Date.now();
+    logger.info('Початок оновлення паролів');
     await updateUserPasswords();
-    logger.info('Паролі оновлено');
+    logger.info(`Паролі оновлено за ${Date.now() - passwordUpdateStartTime} мс`);
 
     // Завантаження кешу
+    const cacheLoadStartTime = Date.now();
+    logger.info('Завантаження кешу користувачів');
     await loadUsersToCache();
-    logger.info('Кеш користувачів завантажено', { userCacheLength: userCache.length });
+    logger.info(`Кеш користувачів завантажено за ${Date.now() - cacheLoadStartTime} мс`, { userCacheLength: userCache.length });
+
+    const testCacheLoadStartTime = Date.now();
+    logger.info('Завантаження кешу тестів');
     await loadTestsFromMongoDB();
-    logger.info('Кеш тестів завантажено', { testNames: Object.keys(testNames) });
+    logger.info(`Кеш тестів завантажено за ${Date.now() - testCacheLoadStartTime} мс`, { testNames: Object.keys(testNames) });
 
     await CacheManager.invalidateCache('questions', null);
+    logger.info('Кеш питань інвалідовано');
+
     isInitialized = true;
     initializationError = null;
-    logger.info('Сервер ініціалізовано успішно');
+    logger.info(`Сервер ініціалізовано успішно за ${Date.now() - initStartTime} мс`);
   } catch (error) {
-    logger.error('Помилка ініціалізації', { message: error.message, stack: error.stack });
+    logger.error('Помилка ініціалізації', { message: error.message, stack: error.stack, duration: `${Date.now() - initStartTime} мс` });
     initializationError = error;
+    isInitialized = false;
     throw error;
   }
 };

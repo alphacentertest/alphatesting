@@ -6,10 +6,10 @@
       "use": "@vercel/node"
     }
   ],
-  "routes": [
-    {
-      "src": "/(.*)",
-      "dest": "/app.js"
+  "functions": {
+    "app.js": {
+      "maxDuration": 60,
+      "memory": 1024
     }
-  ]
+  }
 }
