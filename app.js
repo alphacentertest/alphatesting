@@ -6,6 +6,7 @@ const path = require('path');
 const ExcelJS = require('exceljs');
 const { MongoClient, ObjectId } = require('mongodb');
 const bcrypt = require('bcrypt');
+const multer = require('multer');
 const fs = require('fs');
 const nodemailer = require('nodemailer');
 const { body, validationResult } = require('express-validator');
@@ -13,12 +14,6 @@ const jwt = require('jsonwebtoken');
 const winston = require('winston');
 const session = require('express-session');
 const MongoStore = require('connect-mongo');
-
-// Ініціалізація Express-додатку
-const app = express();
-
-// Увімкнення довіри до проксі
-app.set('trust proxy', 1);
 
 // Налаштування логування
 const logger = winston.createLogger({
@@ -29,10 +24,15 @@ const logger = winston.createLogger({
   ),
   transports: [
     new winston.transports.File({ filename: 'error.log', level: 'error' }),
-    new winston.transports.File({ filename: 'combined.log' }),
-    new winston.transports.Console()
+    new winston.transports.File({ filename: 'combined.log' })
   ]
 });
+
+if (process.env.NODE_ENV !== 'production') {
+  logger.add(new winston.transports.Console({
+    format: winston.format.simple()
+  }));
+}
 
 // Налаштування multer для зображень і матеріалів
 const storage = multer.memoryStorage();
@@ -48,6 +48,12 @@ const upload = multer({
     }
   }
 });
+
+// Ініціалізація Express-додатку
+const app = express();
+
+// Увімкнення довіри до проксі
+app.set('trust proxy', 1);
 
 // Налаштування nodemailer
 const transporter = nodemailer.createTransport({
@@ -4749,73 +4755,37 @@ app.get('/admin/add-section', checkAuth, checkAdmin, async (req, res) => {
             <h1>Додати розділ</h1>
             <form id="add-section-form" enctype="multipart/form-data" action="/admin/add-section" method="post">
               <input type="hidden" name="_csrf" value="${res.locals._csrf}">
-              <label for="name">Назва розділу:</label>
-              <input type="text" id="name" name="name" placeholder="Введіть назву розділу" required>
-              <label for="image">Зображення (JPEG, PNG, GIF):</label>
-              <input type="file" id="image" name="image" accept="image/jpeg,image/png,image/gif">
-              <label>Тести (до 6):</label>
-              <div class="tests-container">
-                ${tests.length > 0 ? tests.map(test => `
-                  <label>
-                    <input type="checkbox" class="test-checkbox" name="tests" value="${test.testNumber}">
-                    ${test.name.replace(/"/g, '\\"')}
-                  </label><br>
-                `).join('') : '<p>Немає доступних тестів</p>'}
-              </div>
-              <button type="submit" class="submit-btn">Додати</button>
+              <input type="text" name="name" placeholder="Назва розділу" required>
+              <input type="file" name="image" accept="image/*">
+              <select name="tests" multiple>
+                ${Object.keys(testNames).map(num => `
+                  <option value="${num}">${testNames[num].name}</option>
+                `).join('')}
+              </select>
+              <button type="submit">Створити</button>
             </form>
-            <div id="error-message" class="error"></div>
-            <button class="back-btn" onclick="window.location.href='/admin/sections'">Повернутися до розділів</button>
-          </div>
-          <script>
-            document.getElementById('add-section-form').addEventListener('submit', async (e) => {
-              e.preventDefault();
-              const name = document.getElementById('name').value;
-              const imageInput = document.getElementById('image');
-              const tests = Array.from(document.querySelectorAll('input[name="tests"]:checked')).map(cb => cb.value);
-              const errorMessage = document.getElementById('error-message');
-              const submitBtn = e.target.querySelector('.submit-btn');
-
-              if (name.length < 1 || name.length > 100) {
-                errorMessage.textContent = 'Назва розділу має бути від 1 до 100 символів';
-                return;
-              }
-              if (tests.length > 6) {
-                errorMessage.textContent = 'Максимум 6 тестів на розділ';
-                return;
-              }
-
-              submitBtn.disabled = true;
-              submitBtn.textContent = 'Додавання...';
-
-              const formData = new FormData();
-              formData.append('name', name);
-              if (imageInput.files[0]) {
-                formData.append('image', imageInput.files[0]);
-              }
-              tests.forEach(test => formData.append('tests', test));
-              formData.append('_csrf', document.querySelector('input[name="_csrf"]').value);
-
-              try {
-                const response = await fetch('/admin/add-section', {
-                  method: 'POST',
-                  body: formData
-                });
-                const result = await response.json();
-                if (result.success) {
-                  window.location.href = '/admin/sections';
-                } else {
-                  errorMessage.textContent = result.message || 'Помилка при додаванні розділу';
+            <script>
+              document.getElementById('add-section-form').addEventListener('submit', async (e) => {
+                e.preventDefault();
+                const form = e.target;
+                const formData = new FormData(form);
+                try {
+                  const response = await fetch('/admin/add-section', {
+                    method: 'POST',
+                    body: formData
+                  });
+                  const result = await response.json();
+                  if (result.success) {
+                    window.location.href = '/admin/sections';
+                  } else {
+                    alert('Помилка: ' + result.message);
+                  }
+                } catch (error) {
+                  console.error('Помилка:', error);
+                  alert('Помилка створення розділу');
                 }
-              } catch (error) {
-                console.error('Помилка:', error);
-                errorMessage.textContent = 'Помилка: ' + error.message;
-              } finally {
-                submitBtn.disabled = false;
-                submitBtn.textContent = 'Додати';
-              }
-            });
-          </script>
+              });
+            </script>
         </body>
       </html>
     `;
@@ -4838,7 +4808,7 @@ app.post('/admin/add-section', checkAuth, checkAdmin, upload.single('image'), [
 ], async (req, res) => {
   const startTime = Date.now();
   try {
-    logger.info('Початок обробки запиту /admin/add-section', { body: req.body, file: !!req.file });
+    logger.info('Початок обробки запиту /admin/add-section', { body: req.body, file: req.file ? req.file.originalname : 'no file' });
 
     // Перевірка наявності req.body
     if (!req.body) {
@@ -4847,7 +4817,7 @@ app.post('/admin/add-section', checkAuth, checkAdmin, upload.single('image'), [
     }
 
     // Перевірка CSRF-токена
-    const csrfToken = (req.body && req.body._csrf) || (req.headers && (req.headers['x-csrf-token'] || req.headers['xsrf-token'])) || '';
+    const csrfToken = req.body._csrf || req.headers['x-csrf-token'] || req.headers['xsrf-token'] || '';
     logger.info('Отримано CSRF-токен', { csrfToken, body: req.body, headers: req.headers });
     if (!csrfToken || csrfToken !== res.locals._csrf) {
       logger.error('Невірний або відсутній CSRF-токен', { received: csrfToken, expected: res.locals._csrf });
