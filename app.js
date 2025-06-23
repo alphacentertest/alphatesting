@@ -6,14 +6,20 @@ const path = require('path');
 const ExcelJS = require('exceljs');
 const { MongoClient, ObjectId } = require('mongodb');
 const bcrypt = require('bcrypt');
-const multer = require('multer');
 const fs = require('fs');
+const multer = require('multer');
 const nodemailer = require('nodemailer');
 const { body, validationResult } = require('express-validator');
 const jwt = require('jsonwebtoken');
 const winston = require('winston');
 const session = require('express-session');
 const MongoStore = require('connect-mongo');
+
+// Ініціалізація Express-додатку
+const app = express();
+
+// Увімкнення довіри до проксі
+app.set('trust proxy', 1);
 
 // Налаштування логування
 const logger = winston.createLogger({
@@ -24,36 +30,17 @@ const logger = winston.createLogger({
   ),
   transports: [
     new winston.transports.File({ filename: 'error.log', level: 'error' }),
-    new winston.transports.File({ filename: 'combined.log' })
+    new winston.transports.File({ filename: 'combined.log' }),
+    new winston.transports.Console()
   ]
 });
 
-if (process.env.NODE_ENV !== 'production') {
-  logger.add(new winston.transports.Console({
-    format: winston.format.simple()
-  }));
-}
-
-// Налаштування multer для зображень і матеріалів
+// Налаштування multer
 const storage = multer.memoryStorage();
 const upload = multer({
   storage: storage,
-  limits: { fileSize: 10 * 1024 * 1024 }, // 10 MB
-  fileFilter: (req, file, cb) => {
-    const allowedTypes = ['image/jpeg', 'image/png', 'image/gif', 'application/pdf', 'application/msword', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'];
-    if (allowedTypes.includes(file.mimetype)) {
-      cb(null, true);
-    } else {
-      cb(new Error('Непідтримуваний тип файлу'), false);
-    }
-  }
+  limits: { fileSize: 4 * 1024 * 1024 }
 });
-
-// Ініціалізація Express-додатку
-const app = express();
-
-// Увімкнення довіри до проксі
-app.set('trust proxy', 1);
 
 // Налаштування nodemailer
 const transporter = nodemailer.createTransport({
@@ -64,7 +51,7 @@ const transporter = nodemailer.createTransport({
   }
 });
 
-// Функція для відправки email про підозрілу активність
+// Функція для відправки email
 const sendSuspiciousActivityEmail = async (user, activityDetails) => {
   try {
     const mailOptions = {
@@ -142,6 +129,7 @@ class CacheManager {
 // Кеш
 let userCache = [];
 const questionsCache = {};
+
 let isInitialized = false;
 let initializationError = null;
 let testNames = {};
@@ -270,7 +258,7 @@ app.use((req, res, next) => {
   next();
 });
 
-// Генерація CSRF-токена
+// Генерація CSRF-токена (залишаємо для інших маршрутів)
 app.use((req, res, next) => {
   if (!req.session) {
     logger.error('Сесія відсутня', { url: req.url });
@@ -291,7 +279,7 @@ app.use((req, res, next) => {
   next();
 });
 
-// CSRF-валідація
+// CSRF-валідація (залишаємо для маршрутів, крім імпорту)
 app.use((req, res, next) => {
   if (['POST', 'PUT', 'DELETE'].includes(req.method) && 
       !req.url.startsWith('/admin/import-users') && 
@@ -610,74 +598,60 @@ const updateUserPasswords = async () => {
 
 // Ініціалізація сервера
 const initializeServer = async () => {
-  const initStartTime = Date.now();
   try {
-    logger.info('Початок ініціалізації сервера');
-
-    // Перевірка змінної MONGODB_URI
-    if (!process.env.MONGODB_URI) {
-      logger.error('MONGODB_URI не визначено');
-      throw new Error('MONGODB_URI не визначено');
-    }
-    logger.info('MONGODB_URI знайдено', { uri: process.env.MONGODB_URI.substring(0, 30) + '...' });
-
-    // Підключення до MongoDB
-    logger.info('Спроба підключення до MongoDB');
     await connectToMongoDB();
-    logger.info(`MongoDB підключено за ${Date.now() - initStartTime} мс`);
+    await db.collection('users').createIndex({ username: 1 }, { unique: true });
+    await db.collection('questions').createIndex({ testNumber: 1, variant: 1 });
+    await db.collection('test_results').createIndex({ user: 1, testNumber: 1, endTime: -1 });
+    await db.collection('activity_log').createIndex({ user: 1, timestamp: -1 });
+    await db.collection('test_attempts').createIndex({ user: 1, testNumber: 1, attemptDate: 1 });
+    await db.collection('login_attempts').createIndex({ ipAddress: 1, lastAttempt: 1 });
+    await db.collection('tests').createIndex({ testNumber: 1 }, { unique: true });
+    await db.collection('active_tests').createIndex({ user: 1 }, { unique: true });
+    logger.info('Індекси створено');
 
-    // Створення індексів (паралельно)
-    logger.info('Створення індексів');
-    const indexStartTime = Date.now();
-    await Promise.all([
-      db.collection('users').createIndex({ username: 1 }, { unique: true }).catch(err => logger.error('Помилка створення індексу users', { message: err.message })),
-      db.collection('questions').createIndex({ testNumber: 1, variant: 1 }).catch(err => logger.error('Помилка створення індексу questions', { message: err.message })),
-      db.collection('test_results').createIndex({ user: 1, testNumber: 1, endTime: -1 }).catch(err => logger.error('Помилка створення індексу test_results', { message: err.message })),
-      db.collection('activity_log').createIndex({ user: 1, timestamp: -1 }).catch(err => logger.error('Помилка створення індексу activity_log', { message: err.message })),
-      db.collection('test_attempts').createIndex({ user: 1, testNumber: 1, attemptDate: 1 }).catch(err => logger.error('Помилка створення індексу test_attempts', { message: err.message })),
-      db.collection('login_attempts').createIndex({ ipAddress: 1, lastAttempt: 1 }).catch(err => logger.error('Помилка створення індексу login_attempts', { message: err.message })),
-      db.collection('tests').createIndex({ testNumber: 1 }, { unique: true }).catch(err => logger.error('Помилка створення індексу tests', { message: err.message })),
-      db.collection('active_tests').createIndex({ user: 1 }, { unique: true }).catch(err => logger.error('Помилка створення індексу active_tests', { message: err.message })),
-      db.collection('sessions').createIndex({ expires: 1 }, { expireAfterSeconds: 0 }).catch(err => logger.error('Помилка створення індексу sessions', { message: err.message })),
-      db.collection('sections').createIndex({ name: 1 }, { unique: true }).catch(err => logger.error('Помилка створення індексу sections', { message: err.message }))
-    ]);
-    logger.info(`Індекси створено за ${Date.now() - indexStartTime} мс`);
-
-    // Створення папки для матеріалів
-    const materialsDir = path.join(__dirname, 'public', 'materials');
-    if (!fs.existsSync(materialsDir)) {
-      fs.mkdirSync(materialsDir, { recursive: true });
-      logger.info('Створено папку public/materials');
+    const userCount = await db.collection('users').countDocuments();
+    if (userCount > 0) {
+      await db.collection('users').updateMany(
+        { role: { $exists: false }, username: "admin" },
+        { $set: { role: "admin" } }
+      );
+      await db.collection('users').updateMany(
+        { role: { $exists: false }, username: "Instructor" },
+        { $set: { role: "instructor" } }
+      );
+      await db.collection('users').updateMany(
+        { role: { $exists: false }, username: { $nin: ["admin", "Instructor"] } },
+        { $set: { role: "user" } }
+      );
+      logger.info('Міграція ролей завершена');
     }
 
-    // Завантаження кешу користувачів
-    const cacheLoadStartTime = Date.now();
-    logger.info('Завантаження кешу користувачів');
-    await loadUsersToCache().catch(err => logger.error('Помилка завантаження кешу користувачів', { message: err.message }));
-    logger.info(`Кеш користувачів завантажено за ${Date.now() - cacheLoadStartTime} мс`, { userCacheLength: userCache.length });
+    const testCount = await db.collection('tests').countDocuments();
+    if (!testCount) {
+      const defaultTests = {
+        "1": { name: "Тест 1", timeLimit: 3600, randomQuestions: false, randomAnswers: false, questionLimit: null, attemptLimit: 1 },
+        "2": { name: "Тест 2", timeLimit: 3600, randomQuestions: false, randomAnswers: false, questionLimit: null, attemptLimit: 1 },
+        "3": { name: "Тест 3", timeLimit: 3600, randomQuestions: false, randomAnswers: false, questionLimit: null, attemptLimit: 1 }
+      };
+      for (const [testNumber, testData] of Object.entries(defaultTests)) {
+        await saveTestToMongoDB(testNumber, testData);
+      }
+      logger.info('Міграція тестів завершена', { count: Object.keys(defaultTests).length });
+    }
 
-    // Завантаження кешу тестів
-    const testCacheLoadStartTime = Date.now();
-    logger.info('Завантаження кешу тестів');
-    await loadTestsFromMongoDB().catch(err => logger.error('Помилка завантаження кешу тестів', { message: err.message }));
-    logger.info(`Кеш тестів завантажено за ${Date.now() - testCacheLoadStartTime} мс`, { testNames: Object.keys(testNames) });
-
-    // Інвалідуємо кеш питань
+    await updateUserPasswords();
+    await loadUsersToCache();
+    await loadTestsFromMongoDB();
     await CacheManager.invalidateCache('questions', null);
-    logger.info('Кеш питань інвалідовано');
-
     isInitialized = true;
     initializationError = null;
-    logger.info(`Сервер ініціалізовано успішно за ${Date.now() - initStartTime} мс`);
   } catch (error) {
-    logger.error('Помилка ініціалізації', { message: error.message, stack: error.stack, duration: `${Date.now() - initStartTime} мс` });
+    logger.error('Помилка ініціалізації', { message: error.message, stack: error.stack });
     initializationError = error;
-    isInitialized = false;
     throw error;
   }
 };
-
-// Пояснення: Додано створення папки `public/materials` для зберігання навчальних матеріалів і індекс для колекції `sections`.
 
 // Очищення активності
 const cleanupActivityLog = async () => {
@@ -800,13 +774,7 @@ app.get('/api/test', (req, res) => {
 
 // Favicon
 app.get('/favicon.ico', (req, res) => {
-  try {
-    logger.info('Обробка запиту /favicon.ico');
-    res.status(204).end();
-  } catch (error) {
-    logger.error('Помилка в /favicon.ico', { message: error.message, stack: error.stack });
-    res.status(500).end();
-  }
+  res.status(204).end();
 });
 
 // Головна сторінка з формою авторизації
@@ -924,43 +892,11 @@ app.post('/login', [
 ], async (req, res) => {
   const startTime = Date.now();
   try {
-    logger.info('Початок обробки запиту /login', { body: req.body });
-
-    // Перевірка сесії
-    if (!req.session) {
-      logger.error('Сесія відсутня в /login', { sessionID: req.sessionID || 'unknown' });
-      return res.status(500).json({ success: false, message: 'Помилка сесії' });
-    }
-    logger.info('Сесія перевірена', { sessionID: req.sessionID });
-
-    // Перевірка CSRF-токена
-    const csrfToken = (req.body && req.body._csrf) || (req.headers && (req.headers['x-csrf-token'] || req.headers['xsrf-token'])) || '';
-    logger.info('Отримано CSRF-токен', { csrfToken, body: req.body, headers: req.headers });
-    if (!csrfToken || csrfToken !== res.locals._csrf) {
-      logger.error('Невірний або відсутній CSRF-токен', { received: csrfToken, expected: res.locals._csrf });
-      return res.status(403).json({ success: false, message: 'Недійсний CSRF-токен' });
-    }
-
-    // Очікування ініціалізації
-    const maxWaitTime = 15000; // 15 секунд
-    const waitStartTime = Date.now();
-    while (!isInitialized && Date.now() - waitStartTime < maxWaitTime) {
-      logger.info('Очікування ініціалізації сервера', { isInitialized, elapsed: Date.now() - waitStartTime });
-      await new Promise(resolve => setTimeout(resolve, 500)); // Чекаємо 500 мс
-    }
-    if (!isInitialized) {
-      logger.error('Сервер не ініціалізовано після очікування', { isInitialized, initializationError });
-      return res.status(503).json({ success: false, message: 'Сервер ще ініціалізується' });
-    }
-    logger.info('Сервер ініціалізовано', { isInitialized });
-
     const ipAddress = req.headers['x-forwarded-for'] || req.socket.remoteAddress;
-    logger.info('Перевірка лімітів входу', { ipAddress });
     await checkLoginAttempts(ipAddress);
 
     const errors = validationResult(req);
     if (!errors.isEmpty()) {
-      logger.warn('Помилки валідації в /login', { errors: errors.array() });
       return res.status(400).json({ success: false, message: errors.array()[0].msg });
     }
 
@@ -972,88 +908,67 @@ app.post('/login', [
       return res.status(400).json({ success: false, message: 'Логін або пароль не вказано' });
     }
 
-    logger.info('Завантаження кешу користувачів', { userCacheLength: userCache.length });
     if (userCache.length === 0) {
-      logger.warn('Кеш користувачів порожній, повторне завантаження');
+      logger.warn('Кеш користувачів порожній, повторне завантаження з MongoDB');
       await loadUsersToCache();
       if (userCache.length === 0) {
-        logger.error('Користувачів не знайдено після повторного завантаження');
-        return res.status(500).json({ success: false, message: 'Користувачі недоступні в базі даних' });
+        logger.error('Користувачів не знайдено в MongoDB після повторного завантаження');
+        throw new Error('Не вдалося завантажити користувачів з бази даних');
       }
     }
 
     const foundUser = userCache.find(user => user.username === username);
-    logger.info('Пошук користувача', { username, found: !!foundUser });
+    logger.info('Користувача знайдено в кеші', { username, cachedPassword: foundUser?.password });
+
     if (!foundUser) {
       logger.warn('Користувача не знайдено', { username });
       return res.status(401).json({ success: false, message: 'Невірний логін або пароль' });
     }
 
-    logger.info('Перевірка пароля', { username });
-    if (!foundUser.password || typeof foundUser.password !== 'string') {
-      logger.error('Некоректний пароль у базі', { username, password: foundUser.password });
-      return res.status(500).json({ success: false, message: 'Помилка даних користувача' });
-    }
-
     const passwordMatch = await bcrypt.compare(password, foundUser.password);
-    logger.info('Результат перевірки пароля', { username, match: passwordMatch });
     if (!passwordMatch) {
-      logger.warn('Невірний пароль', { username });
+      logger.warn('Невірний пароль для користувача', { username });
       return res.status(401).json({ success: false, message: 'Невірний логін або пароль' });
     }
 
     await checkLoginAttempts(ipAddress, true);
-    logger.info('Ліміти входу скинуто', { ipAddress });
 
-    const jwtSecret = process.env.JWT_SECRET || 'your-secret-key';
-    logger.info('Генерація JWT-токена', { username, jwtSecret: jwtSecret ? 'defined' : 'undefined' });
-    if (!jwtSecret) {
-      logger.error('JWT_SECRET не визначено');
-      return res.status(500).json({ success: false, message: 'Помилка конфігурації сервера' });
-    }
-
-    const jwtToken = jwt.sign(
+    const token = jwt.sign(
       { username: foundUser.username, role: foundUser.role },
-      jwtSecret,
+      process.env.JWT_SECRET || 'your-secret-key',
       { expiresIn: '24h' }
     );
 
-    res.cookie('token', jwtToken, {
+    // Встановлення httpOnly cookie для серверної авторизації
+    res.cookie('token', token, {
       httpOnly: true,
       secure: process.env.NODE_ENV === 'production',
       sameSite: process.env.NODE_ENV === 'production' ? 'none' : 'lax',
       maxAge: 24 * 60 * 60 * 1000
     });
 
-    res.cookie('auth_token', jwtToken, {
+    // Встановлення не-httpOnly cookie для клієнтського доступу
+    res.cookie('auth_token', token, {
       httpOnly: false,
       secure: process.env.NODE_ENV === 'production',
       sameSite: process.env.NODE_ENV === 'production' ? 'none' : 'lax',
       maxAge: 24 * 60 * 60 * 1000
     });
-    logger.info('Cookies встановлено', { username });
 
     await logActivity(foundUser.username, 'увійшов на сайт', ipAddress);
-    logger.info('Активність залогована', { username });
 
-    res.json({ success: true, redirect: foundUser.role === 'admin' ? '/admin' : '/select-section' });
+    if (foundUser.role === 'admin') {
+      res.json({ success: true, redirect: '/admin' });
+    } else {
+      res.json({ success: true, redirect: '/select-test' });
+    }
   } catch (error) {
-    logger.error('Критична помилка в /login', {
-      message: error.message,
-      stack: error.stack,
-      username: req.body ? req.body.username : 'unknown',
-      sessionID: req.sessionID || 'unknown'
-    });
-    res.status(error.message.includes('Перевищено ліміт') ? 429 : 500).json({
-      success: false,
-      message: error.message || 'Помилка сервера під час авторизації'
-    });
+    logger.error('Помилка в /login', { message: error.message, stack: error.stack });
+    res.status(error.message.includes('Перевищено ліміт') ? 429 : 500).json({ success: false, message: error.message || 'Помилка сервера' });
   } finally {
-    logger.info('Маршрут /login завершився', { duration: `${Date.now() - startTime} мс` });
+    logger.info('Маршрут /login виконано', { duration: `${Date.now() - startTime} мс` });
   }
 });
-
-// Пояснення: Змінено перенаправлення після входу на `/select-section` для всіх ролей, крім адміністратора.
 
 // Middleware для перевірки авторизації через JWT
 const checkAuth = (req, res, next) => {
@@ -1081,178 +996,14 @@ const checkAdmin = (req, res, next) => {
   next();
 };
 
-// Middleware для перевірки ролі адміністратора або інструктора
-const checkAdminOrInstructor = (req, res, next) => {
-  if (req.userRole !== 'admin' && req.userRole !== 'instructor') {
-    return res.status(403).send('Доступно тільки для адміністраторів та інструкторів');
-  }
-  next();
-};
-
-// Сторінка вибору розділу
-app.get('/select-section', ensureInitialized, checkAuth, async (req, res) => {
-  const startTime = Date.now();
-  try {
-    if (req.userRole === 'admin') {
-      return res.redirect('/admin');
-    }
-    const sections = await db.collection('sections').find({}).toArray();
-
-    let html = `
-      <!DOCTYPE html>
-      <html lang="uk">
-        <head>
-          <meta charset="UTF-8">
-          <meta name="viewport" content="width=device-width, initial-scale=1.0">
-          <title>Вибір розділу</title>
-          <style>
-            body {
-              font-family: Arial, sans-serif;
-              padding: 20px;
-              background-color: #f5f5f5;
-              margin: 0;
-            }
-            .container {
-              max-width: 1200px;
-              margin: 0 auto;
-              padding: 20px;
-            }
-            h1 {
-              text-align: center;
-              font-size: 28px;
-              margin-bottom: 30px;
-              color: #333;
-            }
-            .sections-grid {
-              display: grid;
-              grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
-              gap: 20px;
-            }
-            .section-btn {
-              position: relative;
-              width: 100%;
-              height: 200px;
-              border: none;
-              border-radius: 10px;
-              overflow: hidden;
-              cursor: pointer;
-              transition: transform 0.3s ease;
-              box-shadow: 0 4px 8px rgba(0, 0, 0, 0.2);
-              background-size: cover;
-              background-position: center;
-            }
-            .section-btn:hover {
-              transform: scale(1.05); /* Ефект зуму */
-            }
-            .section-label {
-              position: absolute;
-              bottom: 0;
-              left: 0;
-              right: 0;
-              background-color: rgba(0, 0, 0, 0.7);
-              color: white;
-              font-size: 18px;
-              font-weight: bold;
-              text-align: center;
-              padding: 10px;
-              border-bottom-left-radius: 10px;
-              border-bottom-right-radius: 10px;
-            }
-            .logout-btn {
-              display: block;
-              width: 200px;
-              padding: 10px;
-              margin: 30px auto;
-              cursor: pointer;
-              border: none;
-              border-radius: 5px;
-              background-color: #ff4d4d;
-              color: white;
-              font-size: 16px;
-              text-align: center;
-            }
-            .logout-btn:hover {
-              background-color: #d32f2f;
-            }
-            @media (max-width: 600px) {
-              h1 {
-                font-size: 24px;
-              }
-              .section-btn {
-                height: 150px;
-              }
-              .section-label {
-                font-size: 16px;
-              }
-            }
-          </style>
-        </head>
-        <body>
-          <div class="container">
-            <h1>Виберіть розділ</h1>
-            <div class="sections-grid">
-    `;
-    if (!sections.length) {
-      html += `<p style="text-align: center; color: #666;">Немає доступних розділів</p>`;
-    } else {
-      sections.forEach(section => {
-        html += `
-          <button class="section-btn" style="background-image: url('${section.image || '/images/default-section.jpg'}');" onclick="window.location.href='/section/${section._id}'">
-            <span class="section-label">${section.name.replace(/"/g, '\\"')}</span>
-          </button>
-        `;
-      });
-    }
-    html += `
-            </div>
-            <button class="logout-btn" onclick="logout()">Вийти</button>
-          </div>
-          <script>
-            async function logout() {
-              const formData = new URLSearchParams();
-              formData.append('_csrf', '${res.locals._csrf}');
-              try {
-                const response = await fetch('/logout', {
-                  method: 'POST',
-                  headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-                  body: formData
-                });
-                if (!response.ok) {
-                  throw new Error('HTTP-помилка! статус: ' + response.status);
-                }
-                const result = await response.json();
-                if (result.success) {
-                  window.location.href = '/';
-                } else {
-                  alert('Помилка при виході: ' + result.message);
-                }
-              } catch (error) {
-                console.error('Помилка під час виходу:', error);
-                alert('Не вдалося вийти.');
-              }
-            }
-          </script>
-        </body>
-      </html>
-    `;
-    res.send(html);
-  } catch (error) {
-    logger.error('Помилка в /select-section', { message: error.message, stack: error.stack });
-    res.status(500).send('Помилка при завантаженні сторінки вибору розділу');
-  } finally {
-    logger.info('Маршрут /select-section виконано', { duration: `${Date.now() - startTime} мс` });
-  }
-});
-
-// Пояснення: Новий маршрут `/select-section` відображає розділи як прямокутні кнопки з фоновим зображенням, підписами та ефектом зуму (`transform: scale(1.05)`). Використовує CSS Grid для адаптивного розташування.
-
-// Сторінка вибору тесту (залишаємо для сумісності)
+// Сторінка вибору тесту
 app.get('/select-test', checkAuth, async (req, res) => {
   const startTime = Date.now();
   try {
     if (req.userRole === 'admin') {
       return res.redirect('/admin');
     }
+    // Перевірка кешу тестів
     if (Object.keys(testNames).length === 0) {
       logger.warn('testNames порожній, повторне завантаження з MongoDB');
       await loadTestsFromMongoDB();
@@ -1414,386 +1165,6 @@ app.get('/select-test', checkAuth, async (req, res) => {
   }
 });
 
-// Сторінка розділу
-app.get('/section/:sectionId', ensureInitialized, checkAuth, async (req, res) => {
-  const startTime = Date.now();
-  try {
-    if (req.userRole === 'admin') {
-      return res.redirect('/admin');
-    }
-    const sectionId = req.params.sectionId;
-    const section = await db.collection('sections').findOne({ _id: new ObjectId(sectionId) });
-
-    if (!section) {
-      return res.status(404).send('Розділ не знайдено');
-    }
-
-    let html = `
-      <!DOCTYPE html>
-      <html lang="uk">
-        <head>
-          <meta charset="UTF-8">
-          <meta name="viewport" content="width=device-width, initial-scale=1.0">
-          <title>${section.name.replace(/"/g, '\\"')}</title>
-          <style>
-            body {
-              font-family: Arial, sans-serif;
-              padding: 20px;
-              background-color: #f5f5f5;
-              margin: 0;
-            }
-            .container {
-              max-width: 800px;
-              margin: 0 auto;
-              padding: 20px;
-              background-color: white;
-              border-radius: 8px;
-              box-shadow: 0 0 10px rgba(0, 0, 0, 0.1);
-              text-align: center;
-            }
-            h1 {
-              font-size: 28px;
-              margin-bottom: 20px;
-              color: #333;
-            }
-            .section-options {
-              display: flex;
-              flex-direction: column;
-              gap: 20px;
-            }
-            .option-btn {
-              width: 100%;
-              max-width: 400px;
-              padding: 15px;
-              margin: 0 auto;
-              cursor: pointer;
-              border: none;
-              border-radius: 5px;
-              background-color: #007bff;
-              color: white;
-              font-size: 18px;
-              transition: background-color 0.3s;
-            }
-            .option-btn:hover {
-              background-color: #0056b3;
-            }
-            .tests-list {
-              margin-top: 20px;
-              display: ${section.tests.length ? 'flex' : 'none'};
-              flex-direction: column;
-              gap: 10px;
-            }
-            .test-btn {
-              width: 100%;
-              max-width: 300px;
-              padding: 10px;
-              margin: 0 auto;
-              cursor: pointer;
-              border: none;
-              border-radius: 5px;
-              background-color: #28a745;
-              color: white;
-              font-size: 16px;
-            }
-            .test-btn:hover {
-              background-color: #218838;
-            }
-            .back-btn {
-              display: block;
-              width: 200px;
-              padding: 10px;
-              margin: 30px auto;
-              cursor: pointer;
-              border: none;
-              border-radius: 5px;
-              background-color: #6c757d;
-              color: white;
-              font-size: 16px;
-            }
-            .back-btn:hover {
-              background-color: #5a6268;
-            }
-            @media (max-width: 600px) {
-              h1 {
-                font-size: 24px;
-              }
-              .option-btn, .test-btn {
-                font-size: 16px;
-              }
-            }
-          </style>
-        </head>
-        <body>
-          <div class="container">
-            <h1>${section.name.replace(/"/g, '\\"')}</h1>
-            <div class="section-options">
-              <button class="option-btn" onclick="window.location.href='/section/${sectionId}/materials'">Ознайомитись з навчальними матеріалами</button>
-              <button class="option-btn" onclick="document.querySelector('.tests-list').style.display = document.querySelector('.tests-list').style.display === 'none' ? 'flex' : 'none';">Пройти тест</button>
-              <div class="tests-list" style="display: none;">
-                ${section.tests.length ? section.tests.map(testNumber => `
-                  <button class="test-btn" onclick="window.location.href='/test?test=${testNumber}&sectionId=${sectionId}'">${testNames[testNumber]?.name.replace(/"/g, '\\"') || `Тест ${testNumber}`}</button>
-                `).join('') : '<p>Немає тестів у цьому розділі</p>'}
-              </div>
-            </div>
-            <button class="back-btn" onclick="window.location.href='/select-section'">Повернутися до розділів</button>
-          </div>
-        </body>
-      </html>
-    `;
-    res.send(html);
-  } catch (error) {
-    logger.error('Помилка в /section/:sectionId', { message: error.message, stack: error.stack });
-    res.status(500).send('Помилка при завантаженні сторінки розділу');
-  } finally {
-    logger.info('Маршрут /section/:sectionId виконано', { duration: `${Date.now() - startTime} мс` });
-  }
-});
-
-// Пояснення: Новий маршрут `/section/:sectionId` відображає сторінку розділу з двома кнопками: для перегляду матеріалів і вибору тестів (до 6). Тести ховаються/показуються через JavaScript.
-
-// Перегляд навчальних матеріалів
-app.get('/section/:sectionId/materials', ensureInitialized, checkAuth, async (req, res) => {
-  const startTime = Date.now();
-  try {
-    const sectionId = req.params.sectionId;
-    const section = await db.collection('sections').findOne({ _id: new ObjectId(sectionId) });
-
-    if (!section) {
-      return res.status(404).send('Розділ не знайдено');
-    }
-
-    const isAdminOrInstructor = req.userRole === 'admin' || req.userRole === 'instructor';
-
-    let html = `
-      <!DOCTYPE html>
-      <html lang="uk">
-        <head>
-          <meta charset="UTF-8">
-          <meta name="viewport" content="width=device-width, initial-scale=1.0">
-          <title>Навчальні матеріали - ${section.name.replace(/"/g, '\\"')}</title>
-          <style>
-            body {
-              font-family: Arial, sans-serif;
-              padding: 20px;
-              background-color: #f5f5f5;
-              margin: 0;
-            }
-            .container {
-              max-width: 800px;
-              margin: 0 auto;
-              padding: 20px;
-              background-color: white;
-              border-radius: 8px;
-              box-shadow: 0 0 10px rgba(0, 0, 0, 0.1);
-            }
-            h1 {
-              font-size: 28px;
-              text-align: center;
-              margin-bottom: 20px;
-              color: #333;
-            }
-            .materials-list {
-              list-style: none;
-              padding: 0;
-            }
-            .material-item {
-              padding: 10px;
-              border-bottom: 1px solid #ddd;
-              display: flex;
-              justify-content: space-between;
-              align-items: center;
-            }
-            .material-item a {
-              color: #007bff;
-              text-decoration: none;
-              font-size: 16px;
-            }
-            .material-item a:hover {
-              text-decoration: underline;
-            }
-            .material-info {
-              font-size: 14px;
-              color: #666;
-            }
-            .upload-form {
-              margin-top: 20px;
-              padding: 15px;
-              border: 1px solid #ddd;
-              border-radius: 5px;
-            }
-            .upload-form label {
-              display: block;
-              margin-bottom: 10px;
-              font-size: 16px;
-            }
-            .upload-form input[type="file"] {
-              margin-bottom: 10px;
-            }
-            .upload-btn, .back-btn {
-              padding: 10px 20px;
-              margin: 10px 5px;
-              cursor: pointer;
-              border: none;
-              border-radius: 5px;
-              font-size: 16px;
-            }
-            .upload-btn {
-              background-color: #28a745;
-              color: white;
-            }
-            .upload-btn:hover {
-              background-color: #218838;
-            }
-            .back-btn {
-              background-color: #6c757d;
-              color: white;
-            }
-            .back-btn:hover {
-              background-color: #5a6268;
-            }
-            .error {
-              color: red;
-              text-align: center;
-              margin-bottom: 10px;
-            }
-            @media (max-width: 600px) {
-              h1 {
-                font-size: 24px;
-              }
-              .material-item {
-                flex-direction: column;
-                align-items: flex-start;
-                gap: 5px;
-              }
-            }
-          </style>
-        </head>
-        <body>
-          <div class="container">
-            <h1>Навчальні матеріали - ${section.name.replace(/"/g, '\\"')}</h1>
-            <ul class="materials-list">
-              ${section.materials.length ? section.materials.map(material => `
-                <li class="material-item">
-                  <a href="${material.path}" target="_blank">${material.name}</a>
-                  <span class="material-info">Завантажено: ${material.uploadedBy} (${new Date(material.uploadedAt).toLocaleString('uk-UA')})</span>
-                </li>
-              `).join('') : '<p>Немає навчальних матеріалів</p>'}
-            </ul>
-            ${isAdminOrInstructor ? `
-              <div class="upload-form">
-                <h2>Завантажити матеріал</h2>
-                <form id="upload-form" enctype="multipart/form-data">
-                  <label for="file">Виберіть файл:</label>
-                  <input type="file" id="file" name="file" accept=".pdf,.doc,.docx" required>
-                  <button type="submit" class="upload-btn">Завантажити</button>
-                  <div id="error-message" class="error"></div>
-                </form>
-              </div>
-            ` : ''}
-            <button class="back-btn" onclick="window.location.href='/section/${sectionId}'">Повернутися до розділу</button>
-          </div>
-          ${isAdminOrInstructor ? `
-            <script>
-              document.getElementById('upload-form').addEventListener('submit', async (e) => {
-                e.preventDefault();
-                const fileInput = document.getElementById('file');
-                const errorMessage = document.getElementById('error-message');
-                const submitBtn = e.target.querySelector('.upload-btn');
-
-                if (!fileInput.files[0]) {
-                  errorMessage.textContent = 'Файл не вибрано.';
-                  return;
-                }
-
-                submitBtn.disabled = true;
-                submitBtn.textContent = 'Завантаження...';
-
-                const formData = new FormData();
-                formData.append('file', fileInput.files[0]);
-                formData.append('_csrf', '${res.locals._csrf}');
-
-                try {
-                  const response = await fetch('/admin/section/${sectionId}/materials', {
-                    method: 'POST',
-                    headers: { 'Authorization': 'Bearer ' + document.cookie.split('; ').find(row => row.startsWith('auth_token=')).split('=')[1] },
-                    body: formData
-                  });
-
-                  if (!response.ok) {
-                    const result = await response.json();
-                    throw new Error(result.message || 'Помилка: ' + response.status);
-                  }
-
-                  window.location.reload();
-                } catch (error) {
-                  console.error('Помилка:', error);
-                  errorMessage.textContent = 'Помилка: ' + error.message;
-                } finally {
-                  submitBtn.disabled = false;
-                  submitBtn.textContent = 'Завантажити';
-                }
-              });
-            </script>
-          ` : ''}
-        </body>
-      </html>
-    `;
-    res.send(html);
-  } catch (error) {
-    logger.error('Помилка в /section/:sectionId/materials', { message: error.message, stack: error.stack });
-    res.status(500).send('Помилка при завантаженні матеріалів');
-  } finally {
-    logger.info('Маршрут /section/:sectionId/materials виконано', { duration: `${Date.now() - startTime} мс` });
-  }
-});
-
-// Пояснення: Новий маршрут `/section/:sectionId/materials` дозволяє переглядати матеріали (усі користувачі) і завантажувати нові (адмін/інструктор). Використовує `multer` для завантаження файлів.
-
-// Завантаження навчальних матеріалів
-app.post('/admin/section/:sectionId/materials', ensureInitialized, checkAuth, checkAdminOrInstructor, upload.single('file'), async (req, res) => {
-  const startTime = Date.now();
-  try {
-    const sectionId = req.params.sectionId;
-    const section = await db.collection('sections').findOne({ _id: new ObjectId(sectionId) });
-
-    if (!section) {
-      return res.status(404).json({ success: false, message: 'Розділ не знайдено' });
-    }
-
-    if (!req.file) {
-      return res.status(400).json({ success: false, message: 'Файл не надано' });
-    }
-
-    const fileName = `${Date.now()}-${req.file.originalname}`;
-    const filePath = `/materials/${fileName}`;
-    fs.writeFileSync(path.join(__dirname, 'public', 'materials', fileName), req.file.buffer);
-
-    await db.collection('sections').updateOne(
-      { _id: new ObjectId(sectionId) },
-      {
-        $push: {
-          materials: {
-            name: req.file.originalname,
-            path: filePath,
-            uploadedBy: req.user,
-            uploadedAt: new Date()
-          }
-        }
-      }
-    );
-
-    logger.info('Навчальний матеріал завантажено', { sectionId, fileName, user: req.user });
-    res.json({ success: true });
-  } catch (error) {
-    logger.error('Помилка завантаження матеріалу', { message: error.message, stack: error.stack });
-    res.status    (500).json({ success: false, message: 'Помилка при завантаженні матеріалу' });
-  } finally {
-    logger.info('Маршрут /admin/section/:sectionId/materials (POST) виконано', { duration: `${Date.now() - startTime} мс` });
-  }
-});
-
-// Пояснення: Завершено маршрут для завантаження матеріалів. Файли зберігаються в `public/materials`, а їхні метадані додаються до колекції `sections`.
-
 // Обробка виходу користувача
 app.post('/logout', checkAuth, (req, res) => {
   const startTime = Date.now();
@@ -1802,7 +1173,6 @@ app.post('/logout', checkAuth, (req, res) => {
     const ipAddress = req.headers['x-forwarded-for'] || req.socket.remoteAddress;
     logActivity(req.user, 'покинув сайт', ipAddress);
     res.clearCookie('token');
-    res.clearCookie('auth_token');
     req.session.destroy(err => {
       if (err) {
         logger.error('Помилка знищення сесії', { message: err.message, stack: err.stack });
@@ -1845,7 +1215,7 @@ const saveResult = async (user, testNumber, score, totalPoints, startTime, endTi
         variant: `Variant ${variant}`,
         testSessionId
       };
-      logger.info('Збереження результату в MongoDB із відповідями', {});
+      logger.info('Збереження результату в MongoDB із відповідями', { answers: result.answers });
       if (!db) {
         throw new Error('Підключення до MongoDB не встановлено');
       }
@@ -1858,7 +1228,7 @@ const saveResult = async (user, testNumber, score, totalPoints, startTime, endTi
   } finally {
     await session.endSession();
     const endTimeLog = Date.now();
-    logger.info('saveResult виконано', { duration: `${endTimeLog - startTimeLog}` });
+    logger.info('saveResult виконано', { duration: `${endTimeLog - startTimeLog} мс` });
   }
 };
 
@@ -1880,7 +1250,7 @@ const checkTestAttempts = async (user, testNumber) => {
       }
     });
 
-    logger.info(`Користувач ${user} має ${attemptLimit - attempts} спроб для тесту ${testNumber}`);
+    logger.info(`Користувач ${user} має ${attemptLimit - attempts} спроб для тесту ${testNumber} сьогодні`);
 
     if (attempts >= attemptLimit) {
       return false;
@@ -1898,7 +1268,6 @@ const checkTestAttempts = async (user, testNumber) => {
   }
 };
 
-// Форма зворотного зв’язку
 app.get('/feedback', checkAuth, (req, res) => {
   const startTime = Date.now();
   try {
@@ -2001,7 +1370,7 @@ app.get('/feedback', checkAuth, (req, res) => {
               <button type="submit" id="submit-btn">Надіслати</button>
             </form>
             <div id="error-message" class="error"></div>
-            <button class="back-btn" onclick="window.location.href='/select-section'">Назад до вибору розділу</button>
+            <button class="back-btn" onclick="window.location.href='/select-test'">Назад до вибору тесту</button>
           </div>
           <script>
             document.getElementById('feedback-form').addEventListener('submit', async (e) => {
@@ -2054,8 +1423,6 @@ app.get('/feedback', checkAuth, (req, res) => {
   }
 });
 
-// Пояснення: Оновлено маршрут `/feedback`, змінивши кнопку "Назад" для повернення на `/select-section` замість `/select-test`.
-
 app.post('/feedback', checkAuth, [
   body('message')
     .isLength({ min: 5, max: 1000 }).withMessage('Повідомлення має бути від 5 до 1000 символів')
@@ -2072,6 +1439,7 @@ app.post('/feedback', checkAuth, [
     const ipAddress = req.headers['x-forwarded-for'] || req.socket.remoteAddress;
     const timestamp = new Date().toISOString();
 
+    // Збереження повідомлення в MongoDB
     await db.collection('feedback').insertOne({
       user,
       message,
@@ -2082,6 +1450,7 @@ app.post('/feedback', checkAuth, [
 
     logger.info('Зворотний зв’язок збережено', { user, message });
 
+    // Надсилання email адміністратору
     try {
       const mailOptions = {
         from: process.env.EMAIL_USER || 'alphacentertest@gmail.com',
@@ -2170,6 +1539,7 @@ app.get('/admin/feedback', checkAuth, checkAdmin, async (req, res) => {
     const totalFeedback = await db.collection('feedback').countDocuments();
     const totalPages = Math.ceil(totalFeedback / limit);
 
+    // Позначити всі повідомлення як прочитані
     await db.collection('feedback').updateMany({ read: false }, { $set: { read: true } });
 
     const html = `
@@ -2293,7 +1663,7 @@ app.get('/admin/feedback', checkAuth, checkAdmin, async (req, res) => {
               ${feedback.length > 0 ? feedback.map(f => `
                 <tr>
                   <td>${f.user}</td>
-                  <td class="message">${f.message.replace(/</g, '<').replace(/>/g, '>')}</td>
+                  <td class="message">${f.message.replace(/</g, '&lt;').replace(/>/g, '&gt;')}</td>
                   <td>${new Date(f.timestamp).toLocaleString('uk-UA')}</td>
                   <td>${f.ipAddress}</td>
                   <td>
@@ -2366,7 +1736,118 @@ app.get('/admin/feedback', checkAuth, checkAdmin, async (req, res) => {
   }
 });
 
-// Інструкція до тестів
+// Початок тесту
+app.get('/test', checkAuth, async (req, res) => {
+  const startTime = Date.now();
+  try {
+    if (req.userRole === 'admin') return res.redirect('/admin');
+    const testNumber = req.query.test;
+    if (!testNumber || !testNames[testNumber]) {
+      return res.status(400).send('Номер тесту не вказано або тест не знайдено');
+    }
+
+    const canAttemptTest = await checkTestAttempts(req.user, testNumber);
+    if (!canAttemptTest) {
+      return res.send(`
+        <!DOCTYPE html>
+        <html lang="uk">
+          <head>
+            <meta charset="UTF-8">
+            <meta name="viewport" content="width=device-width, initial-scale=1.0">
+            <title>Помилка</title>
+            <style>
+              body { font-family: Arial, sans-serif; text-align: center; padding: 50px; background-color: #f5f5f5; margin: 0; }
+              #modal { position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%); background: white; padding: 20px; border: 2px solid black; z-index: 1000; box-shadow: 0 0 10px rgba(0,0,0,0.3); border-radius: 10px; }
+              button { padding: 10px 20px; margin: 5px; cursor: pointer; border: none; border-radius: 5px; background-color: #4CAF50; color: white; transition: background-color 0.3s; }
+              button:hover { background-color: #45a049; }
+              .overlay { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.5); z-index: 999; }
+              h2 { margin-bottom: 20px; font-size: 24px; color: #333; }
+            </style>
+          </head>
+          <body>
+            <div class="overlay"></div>
+            <div id="modal">
+              <h2>Ви вже проходили сьогодні цей тест</h2>
+              <button onclick="window.location.href='/select-test'">Повернутися до вибору тесту</button>
+            </div>
+          </body>
+        </html>
+      `);
+    }
+
+    let questions = await loadQuestions(testNumber);
+    const userVariant = Math.floor(Math.random() * 3) + 1;
+    logger.info(`Призначено варіант користувачу ${req.user} для тесту ${testNumber}: Variant ${userVariant}`);
+
+    questions = questions.filter(q => !q.variant || q.variant === '' || q.variant === `Variant ${userVariant}`);
+    logger.info(`Відфільтровано питання для тесту ${testNumber}, варіант ${userVariant}: знайдено ${questions.length} питань`);
+
+    if (questions.length === 0) {
+      return res.status(400).send(`Немає питань для варіанту ${userVariant} у тесті ${testNumber}`);
+    }
+
+    const questionLimit = testNames[testNumber].questionLimit;
+    if (questionLimit && questions.length > questionLimit) {
+      questions = shuffleArray([...questions]).slice(0, questionLimit);
+    }
+
+    if (testNames[testNumber].randomQuestions) {
+      questions = shuffleArray([...questions]);
+    }
+
+    if (testNames[testNumber].randomAnswers) {
+      questions = questions.map(q => {
+        if (q.options && q.options.length > 0 && q.type !== 'ordering' && q.type !== 'matching') {
+          const shuffledOptions = shuffleArray([...q.options]);
+          return { ...q, options: shuffledOptions };
+        } else if (q.type === 'matching' && q.pairs) {
+          const shuffledPairs = shuffleArray([...q.pairs]);
+          return { ...q, pairs: shuffledPairs };
+        }
+        return q;
+      });
+    }
+
+    const testStartTime = Date.now();
+    const testSessionId = `${req.user}_${testNumber}_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+
+    // Збереження стану тесту в MongoDB
+    const testData = {
+      user: req.user,
+      testNumber,
+      questions,
+      answers: {},
+      currentQuestion: 0,
+      startTime: testStartTime,
+      timeLimit: testNames[testNumber].timeLimit * 1000,
+      variant: userVariant,
+      isQuickTest: testNames[testNumber].isQuickTest,
+      timePerQuestion: testNames[testNumber].timePerQuestion,
+      testSessionId: testSessionId,
+      isSavingResult: false,
+      answerTimestamps: {},
+      questionStartTime: {},
+      suspiciousActivity: { timeAway: 0, switchCount: 0, responseTimes: [], activityCounts: [] }
+    };
+
+    await db.collection('active_tests').updateOne(
+      { user: req.user },
+      { $set: testData },
+      { upsert: true }
+    );
+
+    const ipAddress = req.headers['x-forwarded-for'] || req.socket.remoteAddress;
+    await logActivity(req.user, `розпочав тест ${testNames[testNumber].name.replace(/"/g, '\\"')}`, ipAddress);
+    res.redirect(`/test/question?index=0`);
+  } catch (error) {
+    logger.error('Помилка в /test', { message: error.message, stack: error.stack });
+    res.status(500).send('Помилка при завантаженні тесту: ' + error.message);
+  } finally {
+    const endTime = Date.now();
+    logger.info('Маршрут /test виконано', { duration: `${endTime - startTime} мс` });
+  }
+});
+
 app.get('/instructions', checkAuth, (req, res) => {
   const startTime = Date.now();
   try {
@@ -2472,7 +1953,7 @@ app.get('/instructions', checkAuth, (req, res) => {
 
             <h2>2. Початок тесту</h2>
             <ul>
-              <li><strong>Оберіть тест:</strong> На сторінці вибору розділу виберіть розділ, а потім тест із доступного списку.</li>
+              <li><strong>Оберіть тест:</strong> На сторінці вибору тесту виберіть тест із доступного списку.</li>
               <li><strong>Не залишайте сторінку без потреби:</strong> Якщо Ви плануєте перерву, завершіть тест перед тим, як закривати вкладку, щоб уникнути втрати прогресу.</li>
             </ul>
 
@@ -2503,7 +1984,7 @@ app.get('/instructions', checkAuth, (req, res) => {
             <p>Якщо у вас виникли труднощі або питання, зверніться до адміністратора через відповідний канал підтримки (наприклад, форму зворотного зв’язку).</p>
 
             <p style="text-align: center; font-size: 18px; margin-top: 20px;">Бажаємо успіхів у проходженні тестів! 😊</p>
-            <a href="/select-section" class="nav-btn">Назад до вибору розділу</a>
+            <a href="/select-test" class="nav-btn">Назад до вибору тесту</a>
           </div>
         </body>
       </html>
@@ -2518,122 +1999,6 @@ app.get('/instructions', checkAuth, (req, res) => {
   }
 });
 
-// Пояснення: Оновлено маршрут `/instructions`, змінивши кнопку "Назад" для повернення на `/select-section`.
-
-// Початок тесту
-app.get('/test', checkAuth, async (req, res) => {
-  const startTime = Date.now();
-  try {
-    if (req.userRole === 'admin') return res.redirect('/admin');
-    const testNumber = req.query.test;
-    const sectionId = req.query.sectionId;
-    if (!testNumber || !testNames[testNumber]) {
-      return res.status(400).send('Номер тесту не вказано або тест не знайдено');
-    }
-
-    const canAttemptTest = await checkTestAttempts(req.user, testNumber);
-    if (!canAttemptTest) {
-      return res.send(`
-        <!DOCTYPE html>
-        <html lang="uk">
-          <head>
-            <meta charset="UTF-8">
-            <meta name="viewport" content="width=device-width, initial-scale=1.0">
-            <title>Помилка</title>
-            <style>
-              body { font-family: Arial, sans-serif; text-align: center; padding: 50px; background-color: #f5f5f5; margin: 0; }
-              #modal { position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%); background: white; padding: 20px; border: 2px solid black; z-index: 1000; box-shadow: 0 0 10px rgba(0,0,0,0.3); border-radius: 10px; }
-              button { padding: 10px 20px; margin: 5px; cursor: pointer; border: none; border-radius: 5px; background-color: #4CAF50; color: white; transition: background-color 0.3s; }
-              button:hover { background-color: #45a049; }
-              .overlay { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.5); z-index: 999; }
-              h2 { margin-bottom: 20px; font-size: 24px; color: #333; }
-            </style>
-          </head>
-          <body>
-            <div class="overlay"></div>
-            <div id="modal">
-              <h2>Ви вже проходили сьогодні цей тест</h2>
-              <button onclick="window.location.href='/section/${sectionId}'">Повернутися до розділу</button>
-            </div>
-          </body>
-        </html>
-      `);
-    }
-
-    let questions = await loadQuestions(testNumber);
-    const userVariant = Math.floor(Math.random() * 3) + 1;
-    logger.info(`Призначено варіант користувачу ${req.user} для тесту ${testNumber}: Variant ${userVariant}`);
-
-    questions = questions.filter(q => !q.variant || q.variant === '' || q.variant === `Variant ${userVariant}`);
-    logger.info(`Відфільтровано питання для тесту ${testNumber}, варіант ${userVariant}: знайдено ${questions.length} питань`);
-
-    if (questions.length === 0) {
-      return res.status(400).send(`Немає питань для варіанту ${userVariant} у тесті ${testNumber}`);
-    }
-
-    const questionLimit = testNames[testNumber].questionLimit;
-    if (questionLimit && questions.length > questionLimit) {
-      questions = shuffleArray([...questions]).slice(0, questionLimit);
-    }
-
-    if (testNames[testNumber].randomQuestions) {
-      questions = shuffleArray([...questions]);
-    }
-
-    if (testNames[testNumber].randomAnswers) {
-      questions = questions.map(q => {
-        if (q.options && q.options.length > 0 && q.type !== 'ordering' && q.type !== 'matching') {
-          const shuffledOptions = shuffleArray([...q.options]);
-          return { ...q, options: shuffledOptions };
-        } else if (q.type === 'matching' && q.pairs) {
-          const shuffledPairs = shuffleArray([...q.pairs]);
-          return { ...q, pairs: shuffledPairs };
-        }
-        return q;
-      });
-    }
-
-    const testStartTime = Date.now();
-    const testSessionId = `${req.user}_${testNumber}_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
-
-    const testData = {
-      user: req.user,
-      testNumber,
-      questions,
-      answers: {},
-      currentQuestion: 0,
-      startTime: testStartTime,
-      timeLimit: testNames[testNumber].timeLimit * 1000,
-      variant: userVariant,
-      isQuickTest: testNames[testNumber].isQuickTest,
-      timePerQuestion: testNames[testNumber].timePerQuestion,
-      testSessionId: testSessionId,
-      isSavingResult: false,
-      answerTimestamps: {},
-      questionStartTime: {},
-      suspiciousActivity: { timeAway: 0, switchCount: 0, responseTimes: [], activityCounts: [] }
-    };
-
-    await db.collection('active_tests').updateOne(
-      { user: req.user },
-      { $set: testData },
-      { upsert: true }
-    );
-
-    const ipAddress = req.headers['x-forwarded-for'] || req.socket.remoteAddress;
-    await logActivity(req.user, `розпочав тест ${testNames[testNumber].name.replace(/"/g, '\\"')}`, ipAddress);
-    res.redirect(`/test/question?index=0${sectionId ? `&sectionId=${sectionId}` : ''}`);
-  } catch (error) {
-    logger.error('Помилка в /test', { message: error.message, stack: error.stack });
-    res.status(500).send('Помилка при завантаженні тесту: ' + error.message);
-  } finally {
-    const endTime = Date.now();
-    logger.info('Маршрут /test виконано', { duration: `${endTime - startTime} мс` });
-  }
-});
-
-// Пояснення: Оновлено маршрут `/test`, додавши параметр `sectionId` для повернення до розділу після тесту. Якщо спроби вичерпано, перенаправляє назад до `/section/:sectionId`.
-
 // Відображення питання тесту
 app.get('/test/question', checkAuth, async (req, res) => {
   const startTime = Date.now();
@@ -2646,8 +2011,19 @@ app.get('/test/question', checkAuth, async (req, res) => {
     }
 
     const { questions, testNumber, answers, currentQuestion, startTime: testStartTime, timeLimit, isQuickTest, timePerQuestion, suspiciousActivity, variant, testSessionId } = userTest;
-    const sectionId = req.query.sectionId;
 
+    // Перевірка кешу тестів
+    if (!testNames[testNumber]) {
+      logger.info('Номер тесту не знайдено в кеші, повторне завантаження тестів', { testNumber });
+      const tests = await db.collection('tests').find().toArray();
+      testNames = tests.reduce((acc, test) => {
+        acc[test.testNumber] = test;
+        return acc;
+      }, {});
+      logger.info('Оновлено кеш testNames', { testCount: Object.keys(testNames).length });
+    }
+
+    // Перевірка доступності тесту
     if (!testNames[testNumber]) {
       let score = 0;
       const totalPoints = questions.reduce((sum, q) => sum + q.points, 0);
@@ -2787,7 +2163,7 @@ app.get('/test/question', checkAuth, async (req, res) => {
           </head>
           <body>
             <h2>Цей тест більше недоступний. Ваші відповіді збережено. Оберіть інший тест.</h2>
-            <button onclick="window.location.href='/section/${sectionId}'">Повернутися до розділу</button>
+            <button onclick="window.location.href='/select-test'">Повернутися до вибору тестів</button>
           </body>
         </html>
       `);
@@ -3081,7 +2457,7 @@ app.get('/test/question', checkAuth, async (req, res) => {
           <div id="timer">Залишилось часу: ${minutes} хв ${seconds} с</div>
           <div class="progress-bar">
             ${progress.map((p, j) => `
-              <div class="progress-circle ${p.answered ? 'answered' : 'unanswered'}" onclick="window.location.href='/test/question?index=${j}${sectionId ? `&sectionId=${sectionId}` : ''}'">${p.number}</div>
+              <div class="progress-circle ${p.answered ? 'answered' : 'unanswered'}">${p.number}</div>
               ${j < progress.length - 1 ? '<div class="progress-line ' + (p.answered ? 'answered' : '') + '"></div>' : ''}
             `).join('')}
           </div>
@@ -3208,7 +2584,7 @@ app.get('/test/question', checkAuth, async (req, res) => {
           </div>
           <div class="button-container">
             ${!isQuickTest ? `
-              <button class="back-btn" ${index === 0 ? 'disabled' : ''} onclick="window.location.href='/test/question?index=${index - 1}${sectionId ? `&sectionId=${sectionId}` : ''}'">Назад</button>
+              <button class="back-btn" ${index === 0 ? 'disabled' : ''} onclick="window.location.href='/test/question?index=${index - 1}'">Назад</button>
             ` : ''}
             <button id="submit-answer" class="next-btn" ${index === questions.length - 1 ? 'disabled' : ''} onclick="saveAndNext(${index})">Далі</button>
             <button class="finish-btn" onclick="showConfirm(${index})">Завершити тест</button>
@@ -3234,7 +2610,7 @@ app.get('/test/question', checkAuth, async (req, res) => {
             let lastMouseMoveTime = 0;
             let lastKeydownTime = 0;
             const debounceDelay = 100;
-            const blurDebounceDelay = 200;
+            const blurDebounceDelay = 200; // Затримка для дебаунсингу подій blur
             let blurTimeout = null;
             let selectedOptions = ${selectedOptionsString};
             let matchingPairs = ${JSON.stringify(answers[index] || [])};
@@ -3245,6 +2621,7 @@ app.get('/test/question', checkAuth, async (req, res) => {
             let hasMovedToNext = false;
             let questionStartTime = ${questionStartTime[index]};
 
+            // Функція для автоматичного збереження відповіді
             async function saveCurrentAnswer(index) {
               if (isSaving) return;
               isSaving = true;
@@ -3299,6 +2676,7 @@ app.get('/test/question', checkAuth, async (req, res) => {
               }
             }
 
+            // Функція для збереження відповіді та переходу до наступного питання
             async function saveAndNext(index) {
               if (isSaving) return;
               isSaving = true;
@@ -3351,10 +2729,10 @@ app.get('/test/question', checkAuth, async (req, res) => {
                     body: new URLSearchParams({ '_csrf': '${res.locals._csrf}' })
                   }).then(() => {
                     if (nextIndex < ${questions.length}) {
-                      window.location.href = '/test/question?index=' + nextIndex + '${sectionId ? `&sectionId=${sectionId}` : ''}';
+                      window.location.href = '/test/question?index=' + nextIndex;
                     } else {
                       setTimeout(() => {
-                        window.location.href = '/result${sectionId ? `?sectionId=${sectionId}` : ''}';
+                        window.location.href = '/result';
                       }, 300);
                     }
                   });
@@ -3370,16 +2748,19 @@ app.get('/test/question', checkAuth, async (req, res) => {
               }
             }
 
+            // Показ модального вікна підтвердження завершення тесту
             function showConfirm(index) {
               document.getElementById('confirm-modal').style.display = 'block';
             }
 
+            // Приховування модального вікна
             function hideConfirm() {
               document.getElementById('confirm-modal').style.display = 'none';
             }
 
+            // Завершення тесту
             async function finishTest(index) {
-              if               isSaving) return;
+              if (isSaving) return;
               isSaving = true;
               try {
                 await saveCurrentAnswer(index);
@@ -3424,7 +2805,7 @@ app.get('/test/question', checkAuth, async (req, res) => {
                 const result = await response.json();
                 if (result.success) {
                   setTimeout(() => {
-                    window.location.href = '/result${sectionId ? `?sectionId=${sectionId}` : ''}';
+                    window.location.href = '/result';
                   }, 300);
                 } else {
                   console.error('Помилка завершення тесту:', result.error);
@@ -3438,6 +2819,7 @@ app.get('/test/question', checkAuth, async (req, res) => {
               }
             }
 
+            // Оновлення глобального таймера
             function updateGlobalTimer() {
               const now = Date.now();
               const elapsedTime = Math.floor((now - startTime) / 1000);
@@ -3451,14 +2833,15 @@ app.get('/test/question', checkAuth, async (req, res) => {
                 console.log('Глобальний таймер закінчився, збереження відповіді та перенаправлення через 1.5с');
                 saveCurrentAnswer(currentQuestionIndex).then(() => {
                   setTimeout(() => {
-                    window.location.href = '/result${sectionId ? `?sectionId=${sectionId}` : ''}';
-                  }, 1500);
+                    window.location.href = '/result';
+                  }, 1500); // Затримка 1.5 секунди
                 });
               }
             }
 
             setInterval(updateGlobalTimer, 1000);
 
+            // Таймер для швидкого тесту
             if (isQuickTest) {
               function updateQuestionTimer() {
                 const now = Date.now();
@@ -3487,8 +2870,8 @@ app.get('/test/question', checkAuth, async (req, res) => {
                   clearInterval(questionTimerInterval);
                   saveCurrentAnswer(currentQuestionIndex).then(() => {
                     setTimeout(() => {
-                      window.location.href = '/result${sectionId ? `?sectionId=${sectionId}` : ''}';
-                    }, 1500);
+                      window.location.href = '/result';
+                    }, 1500); // Затримка 1.5 секунди
                   });
                 }
               }, 50);
@@ -3501,12 +2884,13 @@ app.get('/test/question', checkAuth, async (req, res) => {
               });
             }
 
+            // Відстеження втрати фокусу вкладки
             window.addEventListener('blur', () => {
               if (!blurTimeout) {
                 blurTimeout = setTimeout(() => {
                   if (lastBlurTime === 0) {
                     lastBlurTime = performance.now();
-                    switchCount = Math.min(switchCount + 1, 1000);
+                    switchCount = Math.min(switchCount + 1, 1000); // Обмеження switchCount
                     console.log('Вкладка втратила фокус, початок підрахунку часу:', lastBlurTime, 'Кількість переключень:', switchCount);
                   }
                   blurTimeout = null;
@@ -3514,6 +2898,7 @@ app.get('/test/question', checkAuth, async (req, res) => {
               }
             });
 
+            // Відстеження повернення фокусу вкладки
             window.addEventListener('focus', () => {
               if (blurTimeout) {
                 clearTimeout(blurTimeout);
@@ -3521,7 +2906,7 @@ app.get('/test/question', checkAuth, async (req, res) => {
               }
               if (lastBlurTime > 0) {
                 const now = performance.now();
-                const awayDuration = Math.min((now - lastBlurTime) / 1000, 60);
+                const awayDuration = Math.min((now - lastBlurTime) / 1000, 60); // Обмеження до 60 секунд
                 timeAway += awayDuration;
                 console.log('Вкладка отримала фокус, накопичено часу поза вкладкою:', awayDuration, 'Загальний timeAway:', timeAway);
                 lastBlurTime = 0;
@@ -3529,11 +2914,12 @@ app.get('/test/question', checkAuth, async (req, res) => {
               }
             });
 
+            // Скидання questionStartTime після тривалого простою
             document.addEventListener('visibilitychange', () => {
               if (!document.hidden) {
                 const now = Date.now();
                 const timeSinceLastActivity = (now - lastActivityTime) / 1000;
-                if (timeSinceLastActivity > 300) {
+                if (timeSinceLastActivity > 300) { // Якщо простій більше 5 хвилин
                   questionStartTime = now;
                   console.log('Виявлено тривалий простій, скидання questionStartTime:', questionStartTime);
                   fetch('/set-question-start-time?index=' + currentQuestionIndex, {
@@ -3549,6 +2935,7 @@ app.get('/test/question', checkAuth, async (req, res) => {
               }
             });
 
+            // Дебаунсинг для руху миші
             function debounceMouseMove() {
               const now = Date.now();
               if (now - lastMouseMoveTime >= debounceDelay) {
@@ -3558,6 +2945,7 @@ app.get('/test/question', checkAuth, async (req, res) => {
               }
             }
 
+            // Дебаунсинг для натискання клавіш
             function debounceKeydown() {
               const now = Date.now();
               if (now - lastKeydownTime >= debounceDelay) {
@@ -3570,6 +2958,7 @@ app.get('/test/question', checkAuth, async (req, res) => {
             document.addEventListener('mousemove', debounceMouseMove);
             document.addEventListener('keydown', debounceKeydown);
 
+            // Обробка кліків по варіантах відповідей
             document.querySelectorAll('.option-box:not(.draggable)').forEach(box => {
               box.addEventListener('click', () => {
                 const questionType = '${q.type}';
@@ -3591,11 +2980,13 @@ app.get('/test/question', checkAuth, async (req, res) => {
               });
             });
 
+            // Ініціалізація sortable для ordering
             const sortable = document.getElementById('sortable-options');
             if (sortable) {
               new Sortable(sortable, { animation: 150 });
             }
 
+            // Ініціалізація sortable для matching
             const leftColumn = document.getElementById('left-column');
             const rightColumn = document.getElementById('right-column');
             if (leftColumn && rightColumn && '${q.type}' === 'matching') {
@@ -3688,7 +3079,7 @@ app.get('/test/question', checkAuth, async (req, res) => {
   }
 });
 
-// Пояснення: Завершено маршрут `/test/question`, додавши підтримку `sectionId` для перенаправлення назад до розділу після завершення тесту або переходу між питаннями. Додано клікабельність прогрес-кружечків для навігації.
+
 
 // Маршрут для оновлення часу початку питання
 app.post('/set-question-start-time', checkAuth, async (req, res) => {
@@ -3790,7 +3181,6 @@ app.get('/result', checkAuth, async (req, res) => {
   try {
     if (req.user === 'admin') return res.redirect('/admin');
 
-    const sectionId = req.query.sectionId;
     const userTest = await db.collection('active_tests').findOne({ user: req.user });
     let testData;
 
@@ -4052,7 +3442,7 @@ app.get('/result', checkAuth, async (req, res) => {
           </p>
           <div class="buttons">
             <button id="exportPDF">Експортувати в PDF</button>
-            <button id="restart">Повернутися до розділу</button>
+            <button id="restart">Вихід</button>
           </div>
           <script>
             const user = "${req.user.replace(/"/g, '\\"')}";
@@ -4128,8 +3518,8 @@ app.get('/result', checkAuth, async (req, res) => {
             } else {
               console.log('Кнопка повернення знайдена, додаємо обробник події.');
               restartButton.addEventListener('click', () => {
-                console.log('Натискання кнопки повернення, перенаправлення на /section/${sectionId}');
-                window.location.href = '${sectionId ? `/section/${sectionId}` : '/select-section'}';
+                console.log('Натискання кнопки повернення, перенаправлення на /select-test');
+                window.location.href = '/select-test';
               });
             }
           </script>
@@ -4145,8 +3535,6 @@ app.get('/result', checkAuth, async (req, res) => {
     logger.info('Маршрут /result виконано', { duration: `${endTime - startTime} мс` });
   }
 });
-
-// Пояснення: Оновлено маршрут `/result`, додавши підтримку `sectionId` для повернення до розділу після завершення тесту. Кнопка "Повернутися" перенаправляє на `/section/:sectionId` або `/select-section`, якщо `sectionId` відсутній.
 
 // Маршрут для перегляду результатів користувача
 app.get('/results', checkAuth, async (req, res) => {
@@ -4336,7 +3724,7 @@ app.get('/results', checkAuth, async (req, res) => {
         </table>
         <div class="buttons">
           <button id="exportPDF">Експортувати в PDF</button>
-          <button id="restart">Повернутися до розділу</button>
+          <button id="restart">Повернутися на головну</button>
         </div>
         <script src="/pdfmake/pdfmake.min.js"></script>
         <script src="/pdfmake/vfs_fonts.js"></script>
@@ -4382,7 +3770,7 @@ app.get('/results', checkAuth, async (req, res) => {
           });
 
           document.getElementById('restart').addEventListener('click', () => {
-            window.location.href = '/select-section';
+            window.location.href = '/';
           });
         </script>
       `;
@@ -4402,12 +3790,11 @@ app.get('/results', checkAuth, async (req, res) => {
   }
 });
 
-// Пояснення: Оновлено маршрут `/results`, змінивши кнопку "Повернутися" для повернення на `/select-section`.
-
 // Маршрут для адмін-панелі
 app.get('/admin', checkAuth, checkAdmin, async (req, res) => {
   const startTime = Date.now();
   try {
+    // Підрахунок непрочитаних повідомлень зворотного зв’язку
     const unreadFeedbackCount = await db.collection('feedback').countDocuments({ read: false });
 
     const html = `
@@ -4423,10 +3810,10 @@ app.get('/admin', checkAuth, checkAdmin, async (req, res) => {
             button { padding: 15px 30px; margin: 10px; font-size: 24px; cursor: pointer; width: 300px; border: none; border-radius: 5px; background-color: #4CAF50; color: white; position: relative; }
             button:hover { background-color: #45a049; }
             #feedback-btn { 
-              background-color: ${unreadFeedbackCount > 0 ? '#ef5350' : '#4CAF50'};
+              background-color: ${unreadFeedbackCount > 0 ? '#ef5350' : '#4CAF50'}; /* Червоний, якщо є непрочитані */
             }
             #feedback-btn:hover { 
-              background-color: ${unreadFeedbackCount > 0 ? '#d32f2f' : '#45a049'};
+              background-color: ${unreadFeedbackCount > 0 ? '#d32f2f' : '#45a049'}; 
             }
             .notification-badge {
               position: absolute;
@@ -4457,7 +3844,6 @@ app.get('/admin', checkAuth, checkAdmin, async (req, res) => {
           <button onclick="window.location.href='/admin/results'">Перегляд результатів</button><br>
           <button onclick="window.location.href='/admin/edit-tests'">Редагувати назви тестів</button><br>
           <button onclick="window.location.href='/admin/create-test'">Створити новий тест</button><br>
-          <button onclick="window.location.href='/admin/sections'">Керування розділами</button><br>
           <button onclick="window.location.href='/admin/activity-log'">Журнал дій</button><br>
           <button id="feedback-btn" onclick="window.location.href='/admin/feedback'">
             Зворотний зв’язок
@@ -4505,21 +3891,2503 @@ app.get('/admin', checkAuth, checkAdmin, async (req, res) => {
   }
 });
 
-// Пояснення: Оновлено адмін-панель, додавши кнопку "Керування розділами" для доступу до `/admin/sections`.
-
-// Маршрут для керування розділами
-app.get('/admin/sections', checkAuth, checkAdmin, async (req, res) => {
+// Маршрут для керування користувачами
+app.get('/admin/users', checkAuth, checkAdmin, async (req, res) => {
   const startTime = Date.now();
   try {
-    const sections = await db.collection('sections').find({}).toArray();
+    const sortBy = req.query.sortBy || 'asc'; // 'asc' або 'desc'
+    const search = req.query.search || '';
+
+    let users = [];
+    let errorMessage = '';
+
+    try {
+      const query = search ? { username: { $regex: search, $options: 'i' } } : {};
+      users = await db.collection('users')
+        .find(query)
+        .sort({ username: sortBy === 'asc' ? 1 : -1 })
+        .toArray();
+      await CacheManager.invalidateCache('users', null);
+    } catch (error) {
+      logger.error('Помилка отримання користувачів із MongoDB', { message: error.message, stack: error.stack });
+      errorMessage = `Помилка MongoDB: ${error.message}`;
+    }
+
+    let adminHtml = `
+      <!DOCTYPE html>
+      <html lang="uk">
+        <head>
+          <meta charset="UTF-8">
+          <title>Керування користувачами</title>
+          <style>
+            body { font-family: Arial, sans-serif; padding: 20px; }
+            table { border-collapse: collapse; width: 100%; margin-top: 20px; }
+            th, td { border: 1px solid black; padding: 8px; text-align: left; }
+            th { background-color: #f2f2f2; }
+            .error { color: red; }
+            .nav-btn, .action-btn, .sort-btn, .search-btn { padding: 10px 20px; margin: 5px; cursor: pointer; border: none; border-radius: 5px; }
+            .action-btn.edit { background-color: #4CAF50; color: white; }
+            .action-btn.delete { background-color: #ff4d4d; color: white; }
+            .nav-btn { background-color: #007bff; color: white; }
+            .sort-btn { background-color: #6c757d; color: white; }
+            .search-btn { background-color: #28a745; color: white; }
+            input[type="text"] { padding: 8px; margin: 5px; width: 200px; }
+          </style>
+        </head>
+        <body>
+          <h1>Керування користувачами</h1>
+          <div>
+            <button class="nav-btn" onclick="window.location.href='/admin'">Повернутися до адмін-панелі</button>
+            <button class="nav-btn" onclick="window.location.href='/admin/add-user'">Додати користувача</button>
+            <button class="sort-btn" onclick="window.location.href='/admin/users?sortBy=${sortBy === 'asc' ? 'desc' : 'asc'}&search=${encodeURIComponent(search)}'">Сортувати за алфавітом (${sortBy === 'asc' ? 'А-Я' : 'Я-А'})</button>
+          </div>
+          <div>
+            <form id="search-form">
+              <input type="text" id="search" name="search" placeholder="Пошук за логіном" value="${search}">
+              <button type="submit" class="search-btn">Пошук</button>
+            </form>
+          </div>
+    `;
+    if (errorMessage) {
+      adminHtml += `<p class="error">${errorMessage}</p>`;
+    }
+    adminHtml += `
+          <table>
+            <tr>
+              <th>Ім'я користувача</th>
+              <th>Дії</th>
+            </tr>
+    `;
+    if (!users || users.length === 0) {
+      adminHtml += '<tr><td colspan="2">Немає користувачів</td></tr>';
+    } else {
+      users.forEach(user => {
+        adminHtml += `
+          <tr>
+            <td>${user.username}</td>
+            <td>
+              <button class="action-btn edit" onclick="window.location.href='/admin/edit-user?username=${user.username}'">Редагувати</button>
+              <button class="action-btn delete" onclick="deleteUser('${user.username}')">Видалити</button>
+            </td>
+          </tr>
+        `;
+      });
+    }
+    adminHtml += `
+          </table>
+          <script>
+            async function deleteUser(username) {
+              if (confirm('Ви впевнені, що хочете видалити користувача ' + username + '?')) {
+                try {
+                  const formData = new URLSearchParams();
+                  formData.append('username', username);
+                  formData.append('_csrf', '${res.locals._csrf}');
+                  const response = await fetch('/admin/delete-user', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                    body: formData
+                  });
+                  if (!response.ok) {
+                    throw new Error('HTTP-помилка! статус: ' + response.status);
+                  }
+                  const result = await response.json();
+                  if (result.success) {
+                    window.location.reload();
+                  } else {
+                    alert('Помилка при видаленні користувача: ' + result.message);
+                  }
+                } catch (error) {
+                  console.error('Помилка видалення користувача:', error);
+                  alert('Не вдалося видалити користувача. Перевірте ваше з’єднання з Інтернетом.');
+                }
+              }
+            }
+
+            document.getElementById('search-form').addEventListener('submit', (e) => {
+              e.preventDefault();
+              const search = document.getElementById('search').value;
+              window.location.href = '/admin/users?sortBy=${sortBy}&search=' + encodeURIComponent(search);
+            });
+          </script>
+        </body>
+      </html>
+    `;
+    res.send(adminHtml);
+  } finally {
+    logger.info('Маршрут /admin/users виконано', { duration: `${Date.now() - startTime} мс` });
+  }
+});
+
+// Маршрут для додавання нового користувача
+app.get('/admin/add-user', checkAuth, checkAdmin, (req, res) => {
+  const startTime = Date.now();
+  try {
+    const html = `
+      <!DOCTYPE html>
+      <html lang="uk">
+        <head>
+          <meta charset="UTF-8">
+          <title>Додати користувача</title>
+          <style>
+            body { font-family: Arial, sans-serif; padding: 20px; }
+            label { display: block; margin: 10px 0 5px; }
+            input { padding: 5px; width: 300px; margin-bottom: 10px; }
+            button { padding: 10px 20px; margin: 5px; cursor: pointer; border: none; border-radius: 5px; }
+            .nav-btn { background-color: #007bff; color: white; }
+            .submit-btn { background-color: #4CAF50; color: white; }
+            .error { color: red; }
+          </style>
+        </head>
+        <body>
+          <h1>Додати користувача</h1>
+          <form method="POST" action="/admin/add-user" onsubmit="return validateForm()">
+            <input type="hidden" name="_csrf" value="${res.locals._csrf}">
+            <label for="username">Користувач:</label>
+            <input type="text" id="username" name="username" required>
+            <label for="password">Пароль:</label>
+            <input type="text" id="password" name="password" required>
+            <button type="submit" class="submit-btn">Додати</button>
+          </form>
+          <div id="error-message" class="error"></div>
+          <button class="nav-btn" onclick="window.location.href='/admin/users'">Повернутися до списку користувачів</button>
+          <script>
+            function validateForm() {
+              const username = document.getElementById('username').value;
+              const password = document.getElementById('password').value;
+              const errorMessage = document.getElementById('error-message');
+              if (username.length < 3 || username.length > 50) {
+                errorMessage.textContent = 'Ім’я користувача має бути від 3 до 50 символів';
+                return false;
+              }
+              if (!/^[a-zA-Z0-9а-яА-Я]+$/.test(username)) {
+                errorMessage.textContent = 'Ім’я користувача може містити лише літери та цифри';
+                return false;
+              }
+              if (password.length < 6 || password.length > 100) {
+                errorMessage.textContent = 'Пароль має бути від 6 до 100 символів';
+                return false;
+              }
+              return true;
+            }
+          </script>
+        </body>
+      </html>
+    `;
+    res.send(html);
+  } finally {
+    const endTime = Date.now();
+    logger.info('Маршрут /admin/add-user виконано', { duration: `${endTime - startTime} мс` });
+  }
+});
+
+// Маршрут для обробки додавання користувача
+app.post('/admin/add-user', checkAuth, checkAdmin, [
+  body('username')
+    .isLength({ min: 3, max: 50 }).withMessage('Ім’я користувача має бути від 3 до 50 символів')
+    .matches(/^[a-zA-Z0-9а-яА-Я]+$/).withMessage('Ім’я користувача може містити лише літери та цифри'),
+  body('password')
+    .isLength({ min: 6, max: 100 }).withMessage('Пароль має бути від 6 до 100 символів')
+], async (req, res) => {
+  const startTime = Date.now();
+  try {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).send(errors.array()[0].msg);
+    }
+
+    const { username, password } = req.body;
+    const existingUser = await db.collection('users').findOne({ username });
+    if (existingUser) {
+      return res.status(400).send('Користувач із таким ім’ям уже існує');
+    }
+    const saltRounds = 10;
+    const hashedPassword = await bcrypt.hash(password, saltRounds);
+    const newUser = { username, password: hashedPassword, role: username === 'Instructor' ? 'instructor' : 'user' };
+    await db.collection('users').insertOne(newUser);
+    await CacheManager.invalidateCache('users', null);
+    await loadUsersToCache();
+    logger.info('Кеш користувачів оновлено після додавання нового користувача');
+    res.send(`
+      <!DOCTYPE html>
+      <html lang="uk">
+        <head>
+          <meta charset="UTF-8">
+          <title>Користувача додано</title>
+        </head>
+        <body>
+          <h1>Користувача ${username} успішно додано</h1>
+          <button onclick="window.location.href='/admin/users'">Повернутися до списку користувачів</button>
+        </body>
+      </html>
+    `);
+  } catch (error) {
+    logger.error('Помилка додавання користувача', { message: error.message, stack: error.stack });
+    res.status(500).send('Помилка при додаванні користувача');
+  } finally {
+    const endTime = Date.now();
+    logger.info('Маршрут /admin/add-user (POST) виконано', { duration: `${endTime - startTime} мс` });
+  }
+});
+
+// Маршрут для редагування користувача
+app.get('/admin/edit-user', checkAuth, checkAdmin, async (req, res) => {
+  const startTime = Date.now();
+  try {
+    const { username } = req.query;
+    const user = await db.collection('users').findOne({ username });
+    if (!user) {
+      return res.status(404).send('Користувача не знайдено');
+    }
+    const html = `
+      <!DOCTYPE html>
+      <html lang="uk">
+        <head>
+          <meta charset="UTF-8">
+          <title>Редагувати користувача</title>
+          <style>
+            body { font-family: Arial, sans-serif; padding: 20px; }
+            label { display: block; margin: 10px 0 5px; }
+            input { padding: 5px; width: 300px; margin-bottom: 10px; }
+            button { padding: 10px 20px; margin: 5px; cursor: pointer; border: none; border-radius: 5px; }
+            .nav-btn { background-color: #007bff; color: white; }
+            .submit-btn { background-color: #4CAF50; color: white; }
+            .error { color: red; }
+          </style>
+        </head>
+        <body>
+          <h1>Редагувати користувача: ${username}</h1>
+          <form method="POST" action="/admin/edit-user" onsubmit="return validateForm()">
+            <input type="hidden" name="_csrf" value="${res.locals._csrf}">
+            <input type="hidden" name="oldUsername" value="${username}">
+            <label for="username">Нове ім'я користувача:</label>
+            <input type="text" id="username" name="username" value="${username}" required>
+            <label for="password">Новий пароль (залиште порожнім, щоб не змінювати):</label>
+            <input type="text" id="password" name="password" placeholder="Введіть новий пароль">
+            <button type="submit" class="submit-btn">Зберегти</button>
+          </form>
+          <div id="error-message" class="error"></div>
+          <button class="nav-btn" onclick="window.location.href='/admin/users'">Повернутися до списку користувачів</button>
+          <script>
+            function validateForm() {
+              const username = document.getElementById('username').value;
+              const password = document.getElementById('password').value;
+              const errorMessage = document.getElementById('error-message');
+              if (username.length < 3 || username.length > 50) {
+                errorMessage.textContent = 'Ім’я користувача має бути від 3 до 50 символів';
+                return false;
+              }
+              if (!/^[a-zA-Z0-9а-яА-Я]+$/.test(username)) {
+                errorMessage.textContent = 'Ім’я користувача може містити лише літери та цифри';
+                return false;
+              }
+              if (password && (password.length < 6 || password.length > 100)) {
+                errorMessage.textContent = 'Пароль має бути від 6 до 100 символів';
+                return false;
+              }
+              return true;
+            }
+          </script>
+        </body>
+      </html>
+    `;
+    res.send(html);
+  } finally {
+    const endTime = Date.now();
+    logger.info('Маршрут /admin/edit-user виконано', { duration: `${endTime - startTime} мс` });
+  }
+});
+
+// Маршрут для обробки редагування користувача
+app.post('/admin/edit-user', checkAuth, checkAdmin, [
+  body('username')
+    .isLength({ min: 3, max: 50 }).withMessage('Ім’я користувача має бути від 3 до 50 символів')
+    .matches(/^[a-zA-Z0-9а-яА-Я]+$/).withMessage('Ім’я користувача може містити лише літери та цифри'),
+  body('password')
+    .optional({ checkFalsy: true })
+    .isLength({ min: 6, max: 100 }).withMessage('Пароль має бути від 6 до 100 символів')
+], async (req, res) => {
+  const startTime = Date.now();
+  try {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      logger.warn('Помилки валідації в /admin/edit-user', { errors: errors.array() });
+      return res.status(400).send(errors.array()[0].msg);
+    }
+
+    const { oldUsername, username, password } = req.body;
+    logger.info('Отримано дані для оновлення користувача', { oldUsername, username, passwordProvided: !!password });
+
+    const existingUser = await db.collection('users').findOne({ username });
+    if (existingUser && username !== oldUsername) {
+      logger.warn('Ім’я користувача вже існує', { username });
+      return res.status(400).send('Користувач із таким ім’ям уже існує');
+    }
+
+    const updateData = { username };
+    if (password) {
+      const saltRounds = 10;
+      const hashedPassword = await bcrypt.hash(password, saltRounds);
+      updateData.password = hashedPassword;
+      logger.info('Пароль оновлено для користувача', { username });
+    } else {
+      logger.info('Пароль не надано, пропускаємо оновлення пароля', { username });
+    }
+
+    if (username === 'Instructor') {
+      updateData.role = 'instructor';
+    } else if (username === 'admin') {
+      updateData.role = 'admin';
+    } else {
+      updateData.role = 'user';
+    }
+
+    const updateResult = await db.collection('users').updateOne(
+      { username: oldUsername },
+      { $set: updateData }
+    );
+    logger.info('Результат оновлення', { matchedCount: updateResult.matchedCount, modifiedCount: updateResult.modifiedCount });
+
+    if (updateResult.matchedCount === 0) {
+      logger.error('Не знайдено користувача для оновлення', { oldUsername });
+      return res.status(404).send('Користувача не знайдено');
+    }
+
+    await CacheManager.invalidateCache('users', null);
+    await loadUsersToCache();
+    logger.info('Кеш користувачів оновлено після редагування');
+
+    res.send(`
+      <!DOCTYPE html>
+      <html lang="uk">
+        <head>
+          <meta charset="UTF-8">
+          <title>Користувача оновлено</title>
+        </head>
+        <body>
+          <h1>Користувача ${username} успішно оновлено</h1>
+          <button onclick="window.location.href='/admin/users'">Повернутися до списку користувачів</button>
+        </body>
+      </html>
+    `);
+  } catch (error) {
+    logger.error('Помилка редагування користувача', { message: error.message, stack: error.stack });
+    res.status(500).send('Помилка при редагуванні користувача');
+  } finally {
+    const endTime = Date.now();
+    logger.info('Маршрут /admin/edit-user (POST) виконано', { duration: `${endTime - startTime} мс` });
+  }
+});
+
+// Маршрут для видалення користувача
+app.post('/admin/delete-user', checkAuth, checkAdmin, async (req, res) => {
+  const startTime = Date.now();
+  try {
+    const { username } = req.body;
+    await db.collection('users').deleteOne({ username });
+    await CacheManager.invalidateCache('users', null);
+    await loadUsersToCache();
+    logger.info('Кеш користувачів оновлено після видалення');
+    res.json({ success: true });
+  } catch (error) {
+    logger.error('Помилка видалення користувача', { message: error.message, stack: error.stack });
+    res.status(500).json({ success: false, message: 'Помилка при видаленні користувача' });
+  } finally {
+    const endTime = Date.now();
+    logger.info('Маршрут /admin/delete-user виконано', { duration: `${endTime - startTime} мс` });
+  }
+});
+
+// Маршрут для керування питаннями
+app.get('/admin/questions', checkAuth, checkAdmin, async (req, res) => {
+  const startTime = Date.now();
+  try {
+    const page = parseInt(req.query.page) || 1;
+    const sortBy = req.query.sortBy || 'order';
+    const testNumber = req.query.testNumber || '';
+    const limit = 50;
+    const skip = (page - 1) * limit;
+
+    let questions = [];
+    let errorMessage = '';
+    let totalQuestions = 0;
+    let totalPages = 0;
+
+    try {
+      const query = testNumber ? { testNumber } : {};
+      totalQuestions = await db.collection('questions').countDocuments(query);
+      totalPages = Math.ceil(totalQuestions / limit);
+
+      if (sortBy === 'testName') {
+        questions = await db.collection('questions')
+          .find(query)
+          .skip(skip)
+          .limit(limit)
+          .toArray();
+
+        questions.sort((a, b) => {
+          const testNameA = testNames[a.testNumber]?.name || '';
+          const testNameB = testNames[b.testNumber]?.name || '';
+          return testNameA.localeCompare(testNameB, 'uk');
+        });
+      } else {
+        questions = await db.collection('questions')
+          .find(query)
+          .sort({ order: 1 })
+          .skip(skip)
+          .limit(limit)
+          .toArray();
+      }
+
+      await CacheManager.invalidateCache('questions', null);
+    } catch (error) {
+      logger.error('Помилка отримання питань із MongoDB', { message: error.message, stack: error.stack });
+      errorMessage = `Помилка MongoDB: ${error.message}`;
+    }
+
+    let adminHtml = `
+      <!DOCTYPE html>
+      <html lang="uk">
+        <head>
+          <meta charset="UTF-8">
+          <title>Керування питаннями</title>
+          <style>
+            body { font-family: Arial, sans-serif; padding: 20px; }
+            table { border-collapse: collapse; width: 100%; margin-top: 20px; }
+            th, td { border: 1px solid black; padding: 8px; text-align: left; }
+            th { background-color: #f2f2f2; }
+            .error { color: red; }
+            .nav-btn, .action-btn, .sort-btn { padding: 10px 20px; margin: 5px; cursor: pointer; border: none; border-radius: 5px; }
+            .action-btn.edit { background-color: #4CAF50; color: white; }
+            .action-btn.delete { background-color: #ff4d4d; color: white; }
+            .nav-btn { background-color: #007bff; color: white; }
+            .sort-btn { background-color: #6c757d; color: white; }
+            select { padding: 8px; margin: 5px; }
+            .pagination { margin-top: 20px; }
+            .pagination a { margin: 0 5px; padding: 5px 10px; background-color: #007bff; color: white; text-decoration: none; border-radius: 5px; }
+            .pagination a:hover { background-color: #0056b3; }
+          </style>
+        </head>
+        <body>
+          <h1>Керування питаннями</h1>
+          <button class="nav-btn" onclick="window.location.href='/admin'">Повернутися до адмін-панелі</button>
+          <button class="nav-btn" onclick="window.location.href='/admin/add-question'">Додати питання</button>
+          <div>
+            <form id="filter-form">
+              <label for="testNumber">Фільтр за тестом:</label>
+              <select id="testNumber" name="testNumber" onchange="this.form.submit()">
+                <option value="">Усі тести</option>
+                ${Object.keys(testNames).map(num => `<option value="${num}" ${num === testNumber ? 'selected' : ''}>${testNames[num].name.replace(/"/g, '\\"')}</option>`).join('')}
+              </select>
+            </form>
+            <button class="sort-btn" onclick="window.location.href='/admin/questions?page=${page}&sortBy=order&testNumber=${encodeURIComponent(testNumber)}'">Сортувати за порядком</button>
+            <button class="sort-btn" onclick="window.location.href='/admin/questions?page=${page}&sortBy=testName&testNumber=${encodeURIComponent(testNumber)}'">Сортувати за назвою тесту</button>
+          </div>
+    `;
+    if (errorMessage) {
+      adminHtml += `<p class="error">${errorMessage}</p>`;
+    }
+    adminHtml += `
+          <table>
+            <tr>
+              <th>Тест</th>
+              <th>Текст питання</th>
+              <th>Тип</th>
+              <th>Варіант</th>
+              <th>Дії</th>
+            </tr>
+    `;
+    if (!questions || questions.length === 0) {
+      adminHtml += '<tr><td colspan="5">Немає питань</td></tr>';
+    } else {
+      questions.forEach(question => {
+        adminHtml += `
+          <tr>
+            <td>${testNames[question.testNumber]?.name.replace(/"/g, '\\"') || 'Невідомий тест'}</td>
+            <td>${question.text}</td>
+            <td>${question.type}</td>
+            <td>${question.variant || 'Немає'}</td>
+            <td>
+              <button class="action-btn edit" onclick="window.location.href='/admin/edit-question?id=${question._id}'">Редагувати</button>
+              <button class="action-btn delete" onclick="deleteQuestion('${question._id}')">Видалити</button>
+            </td>
+          </tr>
+        `;
+      });
+    }
+    adminHtml += `
+          </table>
+          <div class="pagination">
+            ${page > 1 ? `<a href="/admin/questions?page=${page - 1}&sortBy=${sortBy}&testNumber=${encodeURIComponent(testNumber)}">Попередня</a>` : ''}
+            <span>Сторінка ${page} з ${totalPages}</span>
+            ${page < totalPages ? `<a href="/admin/questions?page=${page + 1}&sortBy=${sortBy}&testNumber=${encodeURIComponent(testNumber)}">Наступна</a>` : ''}
+          </div>
+          <script>
+            async function deleteQuestion(id) {
+              if (confirm('Ви впевнені, що хочете видалити це питання?')) {
+                try {
+                  const formData = new URLSearchParams();
+                  formData.append('id', id);
+                  formData.append('_csrf', '${res.locals._csrf}');
+                  const response = await fetch('/admin/delete-question', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                    body: formData
+                  });
+                  if (!response.ok) {
+                    throw new Error('HTTP-помилка! статус: ' + response.status);
+                  }
+                  const result = await response.json();
+                  if (result.success) {
+                    window.location.reload();
+                  } else {
+                    alert('Помилка при видаленні питання: ' + result.message);
+                  }
+                } catch (error) {
+                  console.error('Помилка видалення питання:', error);
+                  alert('Не вдалося видалити питання. Перевірте ваше з’єднання з Інтернетом.');
+                }
+              }
+            }
+          </script>
+        </body>
+      </html>
+    `;
+    res.send(adminHtml);
+  } finally {
+    logger.info('Маршрут /admin/questions виконано', { duration: `${Date.now() - startTime} мс` });
+  }
+});
+
+// Маршрут для додавання нового питання
+app.get('/admin/add-question', checkAuth, checkAdmin, (req, res) => {
+  const startTime = Date.now();
+  try {
+    if (!testNames || !Object.keys(testNames).length) {
+      throw new Error('Список тестів недоступний');
+    }
+
+    const html = `
+      <!DOCTYPE html>
+      <html lang="uk">
+        <head>
+          <meta charset="UTF-8">
+          <meta name="viewport" content="width=device-width, initial-scale=1.0">
+          <title>Додати питання</title>
+          <style>
+            body { font-family: Arial, sans-serif; padding: 20px; }
+            label { display: block; margin: 10px 0 5px; }
+            input, select, textarea { padding: 5px; width: 300px; margin-bottom: 10px; }
+            textarea { width: 500px; height: 100px; }
+            button { padding: 10px 20px; margin: 5px; cursor: pointer; border: none; border-radius: 5px; }
+            .nav-btn { background-color: #007bff; color: white; }
+            .submit-btn { background-color: #4CAF50; color: white; }
+            .error { color: red; }
+            .note { color: blue; font-style: italic; }
+          </style>
+        </head>
+        <body>
+          <h1>Додати питання</h1>
+          <form method="POST" action="/admin/add-question" onsubmit="return validateForm()">
+            <input type="hidden" name="_csrf" value="${res.locals._csrf || ''}">
+            <label for="testNumber">Номер тесту:</label>
+            <select id="testNumber" name="testNumber" required>
+              ${Object.keys(testNames).map(num => `<option value="${num}">${testNames[num].name.replace(/"/g, '\\"')}</option>`).join('')}
+            </select>
+            <label for="picture">Назва файлу зображення (опціонально, наприклад, Picture1.png):</label>
+            <p class="note">Файл зображення має бути у папці public/images.</p>
+            <input type="text" id="picture" name="picture" placeholder="Picture1.png">
+            <label for="text">Текст питання:</label>
+            <p class="note">Для типу Fillblank використовуйте ___ для позначення пропусків.</p>
+            <textarea id="text" name="text" required placeholder="Введіть текст питання"></textarea>
+            <label for="type">Тип питання:</label>
+            <select id="type" name="type" required onchange="updateFormFields()">
+              <option value="multiple">Multiple Choice</option>
+              <option value="singlechoice">Single Choice</option>
+              <option value="truefalse">True/False</option>
+              <option value="input">Input</option>
+              <option value="ordering">Ordering</option>
+              <option value="matching">Matching</option>
+              <option value="fillblank">Fill in the Blank</option>
+            </select>
+            <div id="options-container">
+              <label for="options">Варіанти відповідей (через крапку з комою):</label>
+              <textarea id="options" name="options" placeholder="Введіть варіанти через крапку з комою"></textarea>
+            </div>
+            <label for="correctAnswers">Правильні відповіді (через крапку з комою):</label>
+            <p id="correctAnswersNote" class="note">Для типів Input і Fillblank можна вказати діапазон у форматі "число1-число2", наприклад, "12-14".</p>
+            <textarea id="correctAnswers" name="correctAnswers" required placeholder="Введіть правильні відповіді через крапку з комою"></textarea>
+            <label for="points">Бали за питання:</label>
+            <input type="number" id="points" name="points" value="1" min="1" required>
+            <label for="variant">Варіант (опціонально):</label>
+            <input type="text" id="variant" name="variant" placeholder="Наприклад, Variant 1">
+            <button type="submit" class="submit-btn">Додати</button>
+          </form>
+          <div id="error-message" class="error"></div>
+          <button class="nav-btn" onclick="window.location.href='/admin/questions'">Повернутися до списку питань</button>
+          <script>
+            function updateFormFields() {
+              const type = document.getElementById('type').value;
+              const optionsContainer = document.getElementById('options-container');
+              const correctAnswersNote = document.getElementById('correctAnswersNote');
+              if (type === 'truefalse') {
+                optionsContainer.style.display = 'none';
+                document.getElementById('options').value = 'Правда; Неправда';
+              } else if (type === 'input' || type === 'fillblank') {
+                optionsContainer.style.display = 'none';
+                correctAnswersNote.style.display = 'block';
+              } else {
+                optionsContainer.style.display = 'block';
+                if (type !== 'input' && type !== 'fillblank') {
+                  correctAnswersNote.style.display = 'none';
+                }
+              }
+            }
+
+            function validateForm() {
+              const text = document.getElementById('text').value;
+              const points = document.getElementById('points').value;
+              const variant = document.getElementById('variant').value;
+              const picture = document.getElementById('picture').value;
+              const type = document.getElementById('type').value;
+              const correctAnswers = document.getElementById('correctAnswers').value;
+              const errorMessage = document.getElementById('error-message');
+
+              if (text.length < 5 || text.length > 1000) {
+                errorMessage.textContent = 'Текст питання має бути від 5 до 1000 символів';
+                return false;
+              }
+              if (points < 1 || points > 100) {
+                errorMessage.textContent = 'Бали мають бути числом від 1 до 100';
+                return false;
+              }
+              if (variant && (variant.length < 1 || variant.length > 50)) {
+                errorMessage.textContent = 'Варіант має бути від 1 до 50 символів';
+                return false;
+              }
+              if (picture && !/\.(jpeg|jpg|png|gif)$/i.test(picture)) {
+                errorMessage.textContent = 'Назва файлу зображення має закінчуватися на .jpeg, .jpg, .png або .gif';
+                return false;
+              }
+              if (type === 'input' || type === 'fillblank') {
+                const answersArray = correctAnswers.split(';').map(ans => ans.trim());
+                if (type === 'input' && answersArray.length !== 1) {
+                  errorMessage.textContent = 'Для типу Input потрібна лише одна правильна відповідь';
+                  return false;
+                }
+                if (type === 'fillblank') {
+                  const blankCount = (text.match(/___/g) || []).length;
+                  if (blankCount === 0 || blankCount !== answersArray.length) {
+                    errorMessage.textContent = 'Кількість пропусків у тексті питання не відповідає кількості правильних відповідей';
+                    return false;
+                  }
+                }
+                for (let i = 0; i < answersArray.length; i++) {
+                  const answer = answersArray[i];
+                  if (answer.includes('-')) {
+                    const [min, max] = answer.split('-').map(val => parseFloat(val.trim()));
+                    if (isNaN(min) || isNaN(max) || min > max) {
+                      errorMessage.textContent = \`Правильна відповідь \${i + 1} має невірний формат діапазону. Використовуйте "число1-число2", де число1 <= число2.\`;
+                      return false;
+                    }
+                  } else {
+                    const value = parseFloat(answer);
+                    if (isNaN(value)) {
+                      errorMessage.textContent = \`Правильна відповідь \${i + 1} для типу \${type} має бути числом або діапазоном у форматі "число1-число2".\`;
+                      return false;
+                    }
+                  }
+                }
+              }
+              if (type === 'singlechoice') {
+                const correctAnswersArray = correctAnswers.split(';').map(ans => ans.trim());
+                if (correctAnswersArray.length !== 1) {
+                  errorMessage.textContent = 'Для типу Single Choice потрібна одна правильна відповідь';
+                  return false;
+                }
+                const options = document.getElementById('options').value.split(';').map(opt => opt.trim()).filter(Boolean);
+                if (options.length < 2) {
+                  errorMessage.textContent = 'Для типу Single Choice потрібно мінімум 2 варіанти відповідей';
+                  return false;
+                }
+              }
+              if (type === 'matching') {
+                const options = document.getElementById('options').value.split(';').map(opt => opt.trim()).filter(Boolean);
+                const correctAnswersArray = correctAnswers.split(';').map(ans => ans.trim()).filter(Boolean);
+                if (options.length === 0 || options.length !== correctAnswersArray.length) {
+                  errorMessage.textContent = 'Для типу Matching кількість варіантів має відповідати кількості правильних відповідей';
+                  return false;
+                }
+              }
+              return true;
+            }
+
+            updateFormFields();
+          </script>
+        </body>
+      </html>
+    `.trim();
+    res.send(html);
+  } catch (error) {
+    logger.error('Помилка в /admin/add-question', { message: error.message, stack: error.stack });
+    res.status(500).send('Помилка при додаванні питання');
+  } finally {
+    const endTime = Date.now();
+    logger.info('Маршрут /admin/add-question виконано', { duration: `${endTime - startTime} мс` });
+  }
+});
+
+// Маршрут для обробки додавання питання
+app.post('/admin/add-question', checkAuth, checkAdmin, [
+  body('testNumber').notEmpty().withMessage('Номер тесту обов’язковий'),
+  body('text')
+    .isLength({ min: 5, max: 1000 }).withMessage('Текст питання має бути від 5 до 1000 символів'),
+  body('type')
+    .isIn(['multiple', 'singlechoice', 'truefalse', 'input', 'ordering', 'matching', 'fillblank']).withMessage('Невірний тип питання'),
+  body('correctAnswers').notEmpty().withMessage('Правильні відповіді обов’язкові'),
+  body('points')
+    .isInt({ min: 1, max: 100 }).withMessage('Бали мають бути числом від 1 до 100'),
+  body('variant')
+    .optional({ checkFalsy: true })
+    .isLength({ min: 1, max: 50 }).withMessage('Варіант має бути від 1 до 50 символів'),
+  body('picture')
+    .optional({ checkFalsy: true })
+    .matches(/\.(jpeg|jpg|png|gif)$/i).withMessage('Назва файлу зображення має закінчуватися на .jpeg, .jpg, .png або .gif')
+], async (req, res) => {
+  const startTime = Date.now();
+  try {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      logger.warn('Помилки валідації в /admin/add-question', { errors: errors.array() });
+      return res.status(400).send(errors.array()[0].msg);
+    }
+
+    const { testNumber, text, type, options, correctAnswers, points, variant, picture } = req.body;
+
+    const normalizedPicture = picture
+      ? picture.replace(/\.png$/i, '').replace(/^picture/i, 'Picture').replace(/\s+/g, '')
+      : null;
+
+    let questionData = {
+      testNumber,
+      picture: picture ? `/images/${normalizedPicture}` : null,
+      originalPicture: normalizedPicture,
+      text,
+      type: type.toLowerCase(),
+      options: options ? options.split(';').map(opt => opt.trim()).filter(Boolean) : [],
+      correctAnswers: correctAnswers.split(';').map(ans => ans.trim()).filter(Boolean),
+      points: Number(points),
+      variant: variant || '',
+      order: await db.collection('questions').countDocuments({ testNumber })
+    };
+
+    if (questionData.picture) {
+      const imagePath = path.join(__dirname, 'public', questionData.picture);
+      if (!fs.existsSync(imagePath)) {
+        logger.warn(`Зображення не знайдено за шляхом: ${imagePath}`);
+        questionData.picture = null;
+      } else {
+        logger.info(`Зображення знайдено: ${questionData.picture}`);
+      }
+    }
+
+    if (type === 'truefalse') {
+      questionData.options = ["Правда", "Неправда"];
+    }
+
+    if (type === 'matching') {
+      questionData.pairs = questionData.options.map((opt, idx) => ({
+        left: opt || '',
+        right: questionData.correctAnswers[idx] || ''
+      })).filter(pair => pair.left && pair.right);
+      if (questionData.pairs.length === 0) {
+        logger.warn('Для типу Matching потрібні пари', { testNumber, text });
+        return res.status(400).send('Для типу Matching потрібні пари відповідей');
+      }
+      questionData.correctPairs = questionData.pairs.map(pair => [pair.left, pair.right]);
+    }
+
+    if (type === 'fillblank') {
+      questionData.text = questionData.text.replace(/\s*___\s*/g, '___');
+      const blankCount = (questionData.text.match(/___/g) || []).length;
+      if (blankCount === 0 || blankCount !== questionData.correctAnswers.length) {
+        logger.warn('Невідповідність між пропусками та правильними відповідями для fillblank', { blankCount, correctAnswersLength: questionData.correctAnswers.length });
+        return res.status(400).send('Кількість пропусків у тексті питання не відповідає кількості правильних відповідей');
+      }
+      questionData.blankCount = blankCount;
+
+      questionData.correctAnswers.forEach((correctAnswer, idx) => {
+        if (correctAnswer.includes('-')) {
+          const [min, max] = correctAnswer.split('-').map(val => parseFloat(val.trim()));
+          if (isNaN(min) || isNaN(max) || min > max) {
+            return res.status(400).send(`Невірний формат діапазону для правильної відповіді ${idx + 1}. Використовуйте формат "число1-число2", наприклад, "12-14", де число1 <= число2.`);
+          }
+        } else {
+          const value = parseFloat(correctAnswer);
+          if (isNaN(value)) {
+            return res.status(400).send(`Правильна відповідь ${idx + 1} для типу Fillblank має бути числом або діапазоном у форматі "число1-число2".`);
+          }
+        }
+      });
+    }
+
+    if (type === 'singlechoice') {
+      if (questionData.correctAnswers.length !== 1 || questionData.options.length < 2) {
+        logger.warn('Для типу Single Choice потрібна одна правильна відповідь та щонайменше 2 варіанти', {
+          correctAnswersLength: questionData.correctAnswers.length,
+          optionsLength: questionData.options.length
+        });
+        return res.status(400).send('Для типу Single Choice потрібна одна правильна відповідь і мінімум 2 варіанти');
+      }
+      questionData.correctAnswer = questionData.correctAnswers[0];
+    }
+
+    if (type === 'input') {
+      if (questionData.correctAnswers.length !== 1) {
+        return res.status(400).send('Для типу Input потрібна одна правильна відповідь');
+      }
+      const correctAnswer = questionData.correctAnswers[0];
+      if (correctAnswer.includes('-')) {
+        const [min, max] = correctAnswer.split('-').map(val => parseFloat(val.trim()));
+        if (isNaN(min) || isNaN(max) || min > max) {
+          return res.status(400).send('Невірний формат діапазону для правильної відповіді. Використовуйте формат "число1-число2", наприклад, "12-14", де число1 <= число2.');
+        }
+      } else {
+        const value = parseFloat(correctAnswer);
+        if (isNaN(value)) {
+          return res.status(400).send('Правильна відповідь для типу Input має бути числом або діапазоном у форматі "число1-число2".');
+        }
+      }
+    }
+
+    await db.collection('questions').insertOne(questionData);
+    logger.info('Питання додано до MongoDB', { testNumber, text, type });
+
+    await CacheManager.invalidateCache('questions', testNumber);
+    await CacheManager.invalidateCache('allQuestions', 'all');
+    logger.info('Кеш очищено після додавання питання', { testNumber });
+
+    res.send(`
+      <!DOCTYPE html>
+      <html lang="uk">
+        <head>
+          <meta charset="UTF-8">
+          <title>Питання додано</title>
+          <style>
+            body { font-family: Arial, sans-serif; padding: 20px; text-align: center; }
+            button { padding: 10px 20px; margin: 5px; cursor: pointer; border: none; border-radius: 5px; background-color: #4CAF50; color: white; }
+            button:hover { background-color: #45a049; }
+          </style>
+        </head>
+        <body>
+          <h1>Питання успішно додано</h1>
+          <button onclick="window.location.href='/admin/questions'">Повернутися до списку питань</button>
+        </body>
+      </html>
+    `);
+  } catch (error) {
+    logger.error('Помилка додавання питання в /admin/add-question', { message: error.message, stack: error.stack });
+    res.status(500).send('Помилка при додаванні питання: ' + error.message);
+  } finally {
+    const endTime = Date.now();
+    logger.info('Маршрут /admin/add-question (POST) виконано', { duration: `${endTime - startTime} мс` });
+  }
+});
+
+// Маршрут для редагування питання
+app.get('/admin/edit-question', checkAuth, checkAdmin, async (req, res) => {
+  const startTime = Date.now();
+  try {
+    const { id } = req.query;
+    if (!id || !ObjectId.isValid(id)) {
+      return res.status(400).send('Невірний ідентифікатор питання');
+    }
+
+    const question = await db.collection('questions').findOne({ _id: new ObjectId(id) });
+    if (!question) {
+      return res.status(404).send('Питання не знайдено');
+    }
+
+    const pictureName = question.picture ? question.picture.replace('/images/', '') : '';
+    const normalizedOriginalPicture = question.originalPicture
+      ? question.originalPicture.replace(/\.png$/i, '').replace(/^picture/i, 'Picture').replace(/\s+/g, '')
+      : '';
+    const warningMessage = question.picture === null && question.originalPicture && question.originalPicture.trim() !== ''
+      ? `Попередження: зображення "${normalizedOriginalPicture}" не було знайдено під час імпорту. Перевірте, чи файл зображення є в папці public/images.`
+      : '';
+
+    const html = `
+      <!DOCTYPE html>
+      <html lang="uk">
+        <head>
+          <meta charset="UTF-8">
+          <meta name="viewport" content="width=device-width, initial-scale=1.0">
+          <title>Редагувати питання</title>
+          <style>
+            body { font-family: Arial, sans-serif; padding: 20px; }
+            label { display: block; margin: 10px 0 5px; }
+            input, select, textarea { padding: 5px; width: 300px; margin-bottom: 10px; }
+            textarea { width: 500px; height: 100px; }
+            button { padding: 10px 20px; margin: 5px; cursor: pointer; border: none; border-radius: 5px; }
+            .nav-btn { background-color: #007bff; color: white; }
+            .submit-btn { background-color: #4CAF50; color: white; }
+            .error { color: red; }
+            .warning { color: orange; margin-bottom: 10px; }
+            .note { color: blue; font-style: italic; }
+            img#image-preview { max-width: 200px; margin-top: 10px; }
+          </style>
+        </head>
+        <body>
+          <h1>Редагувати питання</h1>
+          <form method="POST" action="/admin/edit-question" onsubmit="return validateForm()">
+            <input type="hidden" name="_csrf" value="${res.locals._csrf || ''}">
+            <input type="hidden" name="id" value="${id}">
+            <label for="testNumber">Номер тесту:</label>
+            <select id="testNumber" name="testNumber" required>
+              ${Object.keys(testNames).map(num => `<option value="${num}" ${num === question.testNumber ? 'selected' : ''}>${testNames[num].name.replace(/"/g, '\\"')}</option>`).join('')}
+            </select>
+            <label for="picture">Назва файлу зображення (опціонально, наприклад, Picture1.png):</label>
+            <p class="note">Файл зображення має бути у папці public/images.</p>
+            <input type="text" id="picture" name="picture" value="${pictureName}" placeholder="Picture1.png">
+            ${warningMessage ? `<p class="warning">${warningMessage}</p>` : ''}
+            ${pictureName ? `<img id="image-preview" src="/images/${pictureName}" alt="Зображення питання" onerror="this.onerror=null;this.src='';this.alt='Зображення недоступне';">` : ''}
+            <label for="text">Текст питання:</label>
+            <p class="note">Для типу Fillblank використовуйте ___ для позначення пропусків.</p>
+            <textarea id="text" name="text" required placeholder="Введіть текст питання">${question.text}</textarea>
+            <label for="type">Тип питання:</label>
+            <select id="type" name="type" required onchange="updateFormFields()">
+              <option value="multiple" ${question.type === 'multiple' ? 'selected' : ''}>Multiple Choice</option>
+              <option value="singlechoice" ${question.type === 'singlechoice' ? 'selected' : ''}>Single Choice</option>
+              <option value="truefalse" ${question.type === 'truefalse' ? 'selected' : ''}>True/False</option>
+              <option value="input" ${question.type === 'input' ? 'selected' : ''}>Input</option>
+              <option value="ordering" ${question.type === 'ordering' ? 'selected' : ''}>Ordering</option>
+              <option value="matching" ${question.type === 'matching' ? 'selected' : ''}>Matching</option>
+              <option value="fillblank" ${question.type === 'fillblank' ? 'selected' : ''}>Fill in the Blank</option>
+            </select>
+            <div id="options-container">
+              <label for="options">Варіанти відповідей (через крапку з комою):</label>
+              <textarea id="options" name="options" placeholder="Введіть варіанти через крапку з комою">${question.options.join('; ')}</textarea>
+            </div>
+            <label for="correctAnswers">Правильні відповіді (через крапку з комою):</label>
+            <p id="correctAnswersNote" class="note">Для типів Input і Fillblank можна вказати діапазон у форматі "число1-число2", наприклад, "12-14".</p>
+            <textarea id="correctAnswers" name="correctAnswers" required placeholder="Введіть правильні відповіді через крапку з комою">${question.correctAnswers.join('; ')}</textarea>
+            <label for="points">Бали за питання:</label>
+            <input type="number" id="points" name="points" value="${question.points}" min="1" required>
+            <label for="variant">Варіант:</label>
+            <input type="text" id="variant" name="variant" value="${question.variant}" placeholder="Наприклад, Variant 1">
+            <button type="submit" class="submit-btn">Зберегти</button>
+          </form>
+          <div id="error-message" class="error"></div>
+          <button class="nav-btn" onclick="window.location.href='/admin/questions'">Повернутися до списку питань</button>
+          <script>
+            function updateFormFields() {
+              const type = document.getElementById('type').value;
+              const optionsContainer = document.getElementById('options-container');
+              const correctAnswersNote = document.getElementById('correctAnswersNote');
+              if (type === 'truefalse') {
+                optionsContainer.style.display = 'none';
+                document.getElementById('options').value = 'Правда; Неправда';
+              } else if (type === 'input' || type === 'fillblank') {
+                optionsContainer.style.display = 'none';
+                correctAnswersNote.style.display = 'block';
+              } else {
+                optionsContainer.style.display = 'block';
+                if (type !== 'input' && type !== 'fillblank') {
+                  correctAnswersNote.style.display = 'none';
+                }
+              }
+            }
+
+            function validateForm() {
+              const text = document.getElementById('text').value;
+              const points = document.getElementById('points').value;
+              const variant = document.getElementById('variant').value;
+              const picture = document.getElementById('picture').value;
+              const type = document.getElementById('type').value;
+              const correctAnswers = document.getElementById('correctAnswers').value;
+              const errorMessage = document.getElementById('error-message');
+
+              if (text.length < 5 || text.length > 1000) {
+                errorMessage.textContent = 'Текст питання має бути від 5 до 1000 символів';
+                return false;
+              }
+              if (points < 1 || points > 100) {
+                errorMessage.textContent = 'Бали мають бути числом від 1 до 100';
+                return false;
+              }
+              if (variant && (variant.length < 1 || variant.length > 50)) {
+                errorMessage.textContent = 'Варіант має бути від 1 до 50 символів';
+                return false;
+              }
+              if (picture && !/\.(jpeg|jpg|png|gif)$/i.test(picture)) {
+                errorMessage.textContent = 'Назва файлу зображення має закінчуватися на .jpeg, .jpg, .png або .gif';
+                return false;
+              }
+              if (type === 'input' || type === 'fillblank') {
+                const answersArray = correctAnswers.split(';').map(ans => ans.trim());
+                if (type === 'input' && answersArray.length !== 1) {
+                  errorMessage.textContent = 'Для типу Input потрібна лише одна правильна відповідь';
+                  return false;
+                }
+                if (type === 'fillblank') {
+                  const blankCount = (text.match(/___/g) || []).length;
+                  if (blankCount === 0 || blankCount !== answersArray.length) {
+                    errorMessage.textContent = 'Кількість пропусків у тексті питання не відповідає кількості правильних відповідей';
+                    return false;
+                  }
+                }
+                for (let i = 0; i < answersArray.length; i++) {
+                  const answer = answersArray[i];
+                  if (answer.includes('-')) {
+                    const [min, max] = answer.split('-').map(val => parseFloat(val.trim()));
+                    if (isNaN(min) || isNaN(max) || min > max) {
+                      errorMessage.textContent = \`Правильна відповідь \${i + 1} має невірний формат діапазону. Використовуйте "число1-число2", де число1 <= число2.\`;
+                      return false;
+                    }
+                  } else {
+                    const value = parseFloat(answer);
+                    if (isNaN(value)) {
+                      errorMessage.textContent = \`Правильна відповідь \${i + 1} для типу \${type} має бути числом або діапазоном у форматі "число1-число2".\`;
+                      return false;
+                    }
+                  }
+                }
+              }
+              if (type === 'singlechoice') {
+                const correctAnswersArray = correctAnswers.split(';').map(ans => ans.trim());
+                if (correctAnswersArray.length !== 1) {
+                  errorMessage.textContent = 'Для типу Single Choice потрібна одна правильна відповідь';
+                  return false;
+                }
+                const options = document.getElementById('options').value.split(';').map(opt => opt.trim()).filter(Boolean);
+                if (options.length < 2) {
+                  errorMessage.textContent = 'Для типу Single Choice потрібно мінімум 2 варіанти відповідей';
+                  return false;
+                }
+              }
+              if (type === 'matching') {
+                const options = document.getElementById('options').value.split(';').map(opt => opt.trim()).filter(Boolean);
+                const correctAnswersArray = correctAnswers.split(';').map(ans => ans.trim()).filter(Boolean);
+                if (options.length === 0 || options.length !== correctAnswersArray.length) {
+                  errorMessage.textContent = 'Для типу Matching кількість варіантів має відповідати кількості правильних відповідей';
+                  return false;
+                }
+              }
+              return true;
+            }
+
+            document.getElementById('picture').addEventListener('input', (e) => {
+              const pictureName = e.target.value;
+              const preview = document.getElementById('image-preview');
+              if (pictureName) {
+                preview.src = '/images/' + pictureName;
+                preview.onerror = () => {
+                  preview.src = '';
+                  preview.alt = 'Зображення недоступне';
+                };
+              } else {
+                preview.src = '';
+                preview.alt = '';
+              }
+            });
+
+            updateFormFields();
+          </script>
+        </body>
+      </html>
+    `.trim();
+    res.send(html);
+  } catch (error) {
+    logger.error('Помилка в /admin/edit-question', { message: error.message, stack: error.stack });
+    res.status(500).send('Помилка при редагуванні питання');
+  } finally {
+    const endTime = Date.now();
+    logger.info('Маршрут /admin/edit-question виконано', { duration: `${endTime - startTime} мс` });
+  }
+});
+
+// Маршрут для обробки редагування питання
+app.post('/admin/edit-question', checkAuth, checkAdmin, [
+  body('testNumber').notEmpty().withMessage('Номер тесту обов’язковий'),
+  body('text')
+    .isLength({ min: 5, max: 1000 }).withMessage('Текст питання має бути від 5 до 1000 символів'),
+  body('type')
+    .isIn(['multiple', 'singlechoice', 'truefalse', 'input', 'ordering', 'matching', 'fillblank']).withMessage('Невірний тип питання'),
+  body('correctAnswers').notEmpty().withMessage('Правильні відповіді обов’язкові'),
+  body('points')
+    .isInt({ min: 1, max: 100 }).withMessage('Бали мають бути числом від 1 до 100'),
+  body('variant')
+    .optional({ checkFalsy: true })
+    .isLength({ min: 1, max: 50 }).withMessage('Варіант має бути від 1 до 50 символів'),
+  body('picture')
+    .optional({ checkFalsy: true })
+    .matches(/\.(jpeg|jpg|png|gif)$/i).withMessage('Назва файлу зображення має закінчуватися на .jpeg, .jpg, .png або .gif')
+], async (req, res) => {
+  const startTime = Date.now();
+  try {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).send(errors.array()[0].msg);
+    }
+
+    const { id, testNumber, text, type, options, correctAnswers, points, variant, picture } = req.body;
+
+    const oldQuestion = await db.collection('questions').findOne({ _id: new ObjectId(id) });
+    if (!oldQuestion) {
+      return res.status(404).send('Питання не знайдено');
+    }
+
+    const normalizedPicture = picture
+      ? picture.replace(/\.png$/i, '').replace(/^picture/i, 'Picture').replace(/\s+/g, '')
+      : null;
+
+    let questionData = {
+      testNumber,
+      picture: oldQuestion.picture,
+      originalPicture: normalizedPicture || oldQuestion.originalPicture,
+      text,
+      type: type.toLowerCase(),
+      options: options ? options.split(';').map(opt => opt.trim()).filter(Boolean) : [],
+      correctAnswers: correctAnswers.split(';').map(ans => ans.trim()).filter(Boolean),
+      points: Number(points),
+      variant: variant || '',
+      order: oldQuestion.order
+    };
+
+    if (picture && picture !== oldQuestion.picture?.replace('/images/', '')) {
+      const imageDir = path.join(__dirname, 'public', 'images');
+      const extensions = ['.png', '.jpg', '.jpeg', '.gif'];
+      let found = false;
+
+      logger.info(`Перевірка зображення для ${normalizedPicture} у ${imageDir}`);
+
+      for (const ext of extensions) {
+        const expectedFileName = `${normalizedPicture}${ext}`;
+        const imagePath = path.join(imageDir, expectedFileName);
+        if (fs.existsSync(imagePath)) {
+          questionData.picture = `/images/${normalizedPicture}${ext.toLowerCase()}`;
+          logger.info(`Зображення знайдено: ${questionData.picture}`);
+          found = true;
+          break;
+        }
+      }
+
+      if (!found) {
+        const filesInDir = fs.existsSync(imageDir) ? fs.readdirSync(imageDir) : [];
+        logger.warn(`Зображення ${normalizedPicture} не знайдено в public/images під час редагування. Доступні файли: ${filesInDir.join(', ')}`);
+        questionData.picture = null;
+      }
+    } else {
+      logger.info(`Поле зображення не змінено, зберігаємо існуюче зображення: ${questionData.picture}`);
+    }
+
+    if (type === 'truefalse') {
+      questionData.options = ["Правда", "Неправда"];
+    }
+
+    if (type === 'matching') {
+      questionData.pairs = questionData.options.map((opt, idx) => ({
+        left: opt || '',
+        right: questionData.correctAnswers[idx] || ''
+      })).filter(pair => pair.left && pair.right);
+      if (questionData.pairs.length === 0) {
+        logger.warn('Для типу Matching потрібні пари', { testNumber, text });
+        return res.status(400).send('Для типу Matching потрібні пари відповідей');
+      }
+      questionData.correctPairs = questionData.pairs.map(pair => [pair.left, pair.right]);
+    }
+
+    if (type === 'fillblank') {
+      questionData.text = questionData.text.replace(/\s*___\s*/g, '___');
+      const blankCount = (questionData.text.match(/___/g) || []).length;
+      if (blankCount === 0 || blankCount !== questionData.correctAnswers.length) {
+        logger.warn('Невідповідність між пропусками та правильними відповідями для fillblank', { blankCount, correctAnswersLength: questionData.correctAnswers.length });
+        return res.status(400).send('Кількість пропусків у тексті питання не відповідає кількості правильних відповідей');
+      }
+      questionData.blankCount = blankCount;
+
+      questionData.correctAnswers.forEach((correctAnswer, idx) => {
+        if (correctAnswer.includes('-')) {
+          const [min, max] = correctAnswer.split('-').map(val => parseFloat(val.trim()));
+          if (isNaN(min) || isNaN(max) || min > max) {
+            return res.status(400).send(`Невірний формат діапазону для правильної відповіді ${idx + 1}. Використовуйте формат "число1-число2", наприклад, "12-14", де число1 <= число2.`);
+          }
+        } else {
+          const value = parseFloat(correctAnswer);
+          if (isNaN(value)) {
+            return res.status(400).send(`Правильна відповідь ${idx + 1} для типу Fillblank має бути числом або діапазоном у форматі "число1-число2".`);
+          }
+        }
+      });
+    }
+
+    if (type === 'singlechoice') {
+      if (questionData.correctAnswers.length !== 1 || questionData.options.length < 2) {
+        logger.warn('Для типу Single Choice потрібна одна правильна відповідь та щонайменше 2 варіанти', {
+          correctAnswersLength: questionData.correctAnswers.length,
+          optionsLength: questionData.options.length
+        });
+        return res.status(400).send('Для типу Single Choice потрібна одна правильна відповідь і мінімум 2 варіанти');
+      }
+      questionData.correctAnswer = questionData.correctAnswers[0];
+    }
+
+    if (type === 'input') {
+      if (questionData.correctAnswers.length !== 1) {
+        return res.status(400).send('Для типу Input потрібна одна правильна відповідь');
+      }
+      const correctAnswer = questionData.correctAnswers[0];
+      if (correctAnswer.includes('-')) {
+        const [min, max] = correctAnswer.split('-').map(val => parseFloat(val.trim()));
+        if (isNaN(min) || isNaN(max) || min > max) {
+          return res.status(400).send('Невірний формат діапазону для правильної відповіді. Використовуйте формат "число1-число2", наприклад, "12-14", де число1 <= число2.');
+        }
+      } else {
+        const value = parseFloat(correctAnswer);
+        if (isNaN(value)) {
+          return res.status(400).send('Правильна відповідь для типу Input має бути числом або діапазоном у форматі "число1-число2".');
+        }
+      }
+    }
+
+    await db.collection('questions').updateOne(
+      { _id: new ObjectId(id) },
+      { $set: questionData }
+    );
+    logger.info('Питання оновлено в MongoDB', { id, testNumber, text, type });
+
+    await CacheManager.invalidateCache('questions', testNumber);
+    await CacheManager.invalidateCache('allQuestions', 'all');
+    logger.info('Кеш очищено після оновлення питання', { testNumber });
+
+    res.send(`
+      <!DOCTYPE html>
+      <html lang="uk">
+        <head>
+          <meta charset="UTF-8">
+          <title>Питання оновлено</title>
+          <style>
+            body { font-family: Arial, sans-serif; padding: 20px; text-align: center; }
+            button { padding: 10px 20px; margin: 5px; cursor: pointer; border: none; border-radius: 5px; background-color: #4CAF50; color: white; }
+            button:hover { background-color: #45a049; }
+          </style>
+        </head>
+        <body>
+          <h1>Питання успішно оновлено</h1>
+          <button onclick="window.location.href='/admin/questions'">Повернутися до списку питань</button>
+        </body>
+      </html>
+    `);
+  } catch (error) {
+    logger.error('Помилка оновлення питання в /admin/edit-question', { message: error.message, stack: error.stack });
+    res.status(500).send('Помилка при редагуванні питання: ' + error.message);
+  } finally {
+    const endTime = Date.now();
+    logger.info('Маршрут /admin/edit-question (POST) виконано', { duration: `${endTime - startTime} мс` });
+  }
+});
+
+// Маршрут для видалення питання
+app.post('/admin/delete-question', checkAuth, checkAdmin, async (req, res) => {
+  const startTime = Date.now();
+  try {
+    const { id } = req.body;
+    const question = await db.collection('questions').findOne({ _id: new ObjectId(id) });
+    if (!question) {
+      return res.status(404).json({ success: false, message: 'Питання не знайдено' });
+    }
+    await db.collection('questions').deleteOne({ _id: new ObjectId(id) });
+    await CacheManager.invalidateCache('questions', question.testNumber);
+    await CacheManager.invalidateCache('allQuestions', 'all');
+    res.json({ success: true });
+  } catch (error) {
+    logger.error('Помилка видалення питання', { message: error.message, stack: error.stack });
+    res.status(500).json({ success: false, message: 'Помилка при видаленні питання' });
+  } finally {
+    const endTime = Date.now();
+    logger.info('Маршрут /admin/delete-question виконано', { duration: `${endTime - startTime} мс` });
+  }
+});
+
+// Маршрут для імпорту користувачів
+app.get('/admin/import-users', ensureInitialized, checkAuth, checkAdmin, (req, res) => {
+  const startTime = Date.now();
+  try {
+    if (!res.locals) {
+      res.locals = {};
+      logger.info('Ініціалізовано res.locals для /admin/import-users', { url: req.url });
+    }
+    const html = `
+      <!DOCTYPE html>
+      <html lang="uk">
+        <head>
+          <meta charset="UTF-8">
+          <title>Імпорт користувачів</title>
+          <style>
+            body { font-family: Arial, sans-serif; padding: 20px; }
+            label { display: block; margin: 10px 0 5px; }
+            input { padding: 5px; margin-bottom: 10px; }
+            button { padding: 10px 20px; margin: 5px; cursor: pointer; border: none; border-radius: 5px; }
+            .nav-btn { background-color: #007bff; color: white; }
+            .submit-btn { background-color: #4CAF50; color: white; }
+            .submit-btn:disabled { background-color: #cccccc; cursor: not-allowed; }
+            .error { color: red; }
+          </style>
+        </head>
+        <body>
+          <h1>Імпорт користувачів із Excel</h1>
+          <form id="import-form" enctype="multipart/form-data">
+            <label for="file">Виберіть файл users.xlsx:</label>
+            <input type="file" id="file" name="file" accept=".xlsx" required>
+            <button type="submit" class="submit-btn" id="submit-btn">Завантажити</button>
+          </form>
+          <div id="error-message" class="error"></div>
+          <button class="nav-btn" onclick="window.location.href='/admin'">Повернутися до адмін-панелі</button>
+          <script>
+            document.getElementById('import-form').addEventListener('submit', async (e) => {
+              e.preventDefault();
+              const fileInput = document.getElementById('file');
+              const errorMessage = document.getElementById('error-message');
+              const submitBtn = document.getElementById('submit-btn');
+              
+              if (!fileInput.files[0]) {
+                errorMessage.textContent = 'Файл не вибрано.';
+                console.error('Помилка: Файл не вибрано.');
+                return;
+              }
+
+              submitBtn.disabled = true;
+              submitBtn.textContent = 'Завантаження...';
+
+              const formData = new FormData();
+              formData.append('file', fileInput.files[0]);
+
+              // Отримання JWT із cookies
+              const authToken = document.cookie.split('; ').find(row => row.startsWith('auth_token='))?.split('=')[1];
+              console.log('auth_token:', authToken ? 'Присутній' : 'Відсутній');
+              if (!authToken) {
+                errorMessage.textContent = 'Токен авторизації відсутній. Увійдіть знову.';
+                console.error('Помилка: auth_token відсутній у cookies:', document.cookie);
+                submitBtn.disabled = false;
+                submitBtn.textContent = 'Завантажити';
+                return;
+              }
+
+              try {
+                const response = await fetch('/admin/import-users', {
+                  method: 'POST',
+                  body: formData,
+                  headers: {
+                    'Authorization': 'Bearer ' + authToken
+                  }
+                });
+
+                if (!response.ok) {
+                  const result = await response.json();
+                  throw new Error(result.message || 'Помилка: ' + response.status);
+                }
+
+                const result = await response.text();
+                document.body.innerHTML = result;
+              } catch (error) {
+                console.error('Помилка імпорту:', error);
+                errorMessage.textContent = 'Помилка: ' + error.message;
+              } finally {
+                submitBtn.disabled = false;
+                submitBtn.textContent = 'Завантажити';
+              }
+            });
+          </script>
+        </body>
+      </html>
+    `;
+    res.send(html);
+    logger.info('Відображено форму імпорту користувачів', { url: req.url });
+  } catch (error) {
+    logger.error('Помилка в /admin/import-users (GET)', { message: error.message, stack: error.stack });
+    res.status(500).send(`
+      <!DOCTYPE html>
+      <html lang="uk">
+        <head>
+          <meta charset="UTF-8">
+          <title>Помилка</title>
+          <style>
+            body { font-family: Arial, sans-serif; padding: 20px; text-align: center; }
+            .error { color: red; }
+          </style>
+        </head>
+        <body>
+          <h1>Помилка завантаження форми</h1>
+          <p class="error">${error.message}</p>
+          <button onclick="window.location.href='/admin'">Повернутися до адмін-панелі</button>
+        </body>
+      </html>
+    `);
+  } finally {
+    logger.info('Маршрут /admin/import-users (GET) виконано', { duration: `${Date.now() - startTime} мс` });
+  }
+});
+
+// Обробка імпорту користувачів
+app.post('/admin/import-users', ensureInitialized, checkAuth, checkAdmin, upload.single('file'), async (req, res) => {
+  const startTime = Date.now();
+  try {
+    const token = req.headers['authorization']?.split(' ')[1] || req.cookies.token;
+    logger.info('Отримано JWT для /admin/import-users', { token: token ? '[присутній]' : '[відсутній]' });
+
+    if (!req.file) {
+      logger.error('Файл не надано', { url: req.url });
+      return res.status(400).send('Файл не надано');
+    }
+
+    const count = await importUsersToMongoDB(req.file.buffer);
+    logger.info(`Імпортовано ${count} користувачів`);
+
+    res.send(`
+      <!DOCTYPE html>
+      <html lang="uk">
+        <head>
+          <meta charset="UTF-8">
+          <title>Користувачів імпортовано</title>
+          <style>
+            body { font-family: Arial, sans-serif; padding: 20px; text-align: center; }
+            button { padding: 10px 20px; cursor: pointer; border: none; border-radius: 5px; background-color: #4CAF50; color: white; }
+            button:hover { background-color: #45a049; }
+          </style>
+        </head>
+        <body>
+          <h1>Успішно імпортовано ${count} користувачів</h1>
+          <button onclick="window.location.href='/admin/users'">Повернутися до списку користувачів</button>
+        </body>
+      </html>
+    `);
+  } catch (error) {
+    logger.error('Помилка імпорту користувачів (POST)', { message: error.message, stack: error.stack });
+    res.status(500).send(`
+      <!DOCTYPE html>
+      <html lang="uk">
+        <head>
+          <meta charset="UTF-8">
+          <title>Помилка імпорту</title>
+          <style>
+            body { font-family: Arial, sans-serif; padding: 20px; text-align: center; }
+            .error { color: red; }
+            button { padding: 10px 20px; cursor: pointer; border: none; border-radius: 5px; background-color: #007bff; color: white; }
+          </style>
+        </head>
+        <body>
+          <h1>Помилка імпорту користувачів</h1>
+          <p class="error">${error.message}</p>
+          <button onclick="window.location.href='/admin/import-users'">Спробувати знову</button>
+        </body>
+      </html>
+    `);
+  } finally {
+    logger.info('Маршрут /admin/import-users (POST) виконано', { duration: `${Date.now() - startTime} мс` });
+  }
+});
+
+// Маршрут для імпорту питань
+app.get('/admin/import-questions', ensureInitialized, checkAuth, checkAdmin, async (req, res) => {
+  const startTime = Date.now();
+  try {
+    if (!res.locals) {
+      res.locals = {};
+      logger.info('Ініціалізовано res.locals для /admin/import-questions', { url: req.url });
+    }
+    if (!testNames || !Object.keys(testNames).length) {
+      logger.warn('Список тестів порожній, перезавантаження', { url: req.url });
+      await loadTestsFromMongoDB();
+      if (!Object.keys(testNames).length) {
+        throw new Error('Не вдалося завантажити список тестів');
+      }
+    }
+    const html = `
+      <!DOCTYPE html>
+      <html lang="uk">
+        <head>
+          <meta charset="UTF-8">
+          <title>Імпорт питань</title>
+          <style>
+            body { font-family: Arial, sans-serif; padding: 20px; }
+            label { display: block; margin: 10px 0 5px; }
+            input, select { padding: 5px; margin-bottom: 10px; }
+            button { padding: 10px 20px; margin: 5px; cursor: pointer; border: none; border-radius: 5px; }
+            .nav-btn { background-color: #007bff; color: white; }
+            .submit-btn { background-color: #4CAF50; color: white; }
+            .submit-btn:disabled { background-color: #cccccc; cursor: not-allowed; }
+            .error { color: red; }
+          </style>
+        </head>
+        <body>
+          <h1>Імпорт питань із Excel</h1>
+          <form id="import-form" enctype="multipart/form-data">
+            <label for="testNumber">Номер тесту:</label>
+            <select id="testNumber" name="testNumber" required>
+              ${Object.keys(testNames).map(num => `<option value="${num}">${testNames[num].name.replace(/"/g, '\\"')}</option>`).join('')}
+            </select>
+            <label for="file">Виберіть файл questions.xlsx:</label>
+            <input type="file" id="file" name="file" accept=".xlsx" required>
+            <button type="submit" class="submit-btn" id="submit-btn">Завантажити</button>
+          </form>
+          <div id="error-message" class="error"></div>
+          <button class="nav-btn" onclick="window.location.href='/admin'">Повернутися до адмін-панелі</button>
+          <script>
+            document.getElementById('import-form').addEventListener('submit', async (e) => {
+              e.preventDefault();
+              const testNumber = document.getElementById('testNumber').value;
+              const fileInput = document.getElementById('file');
+              const errorMessage = document.getElementById('error-message');
+              const submitBtn = document.getElementById('submit-btn');
+
+              if (!fileInput.files[0]) {
+                errorMessage.textContent = 'Файл не вибрано.';
+                console.error('Помилка: Файл не вибрано.');
+                return;
+              }
+
+              submitBtn.disabled = true;
+              submitBtn.textContent = 'Завантаження...';
+
+              const formData = new FormData();
+              formData.append('testNumber', testNumber);
+              formData.append('file', fileInput.files[0]);
+
+              // Отримання JWT із cookies
+              const authToken = document.cookie.split('; ').find(row => row.startsWith('auth_token='))?.split('=')[1];
+              console.log('auth_token:', authToken ? 'Присутній' : 'Відсутній');
+              if (!authToken) {
+                errorMessage.textContent = 'Токен авторизації відсутній. Увійдіть знову.';
+                console.error('Помилка: auth_token відсутній у cookies:', document.cookie);
+                submitBtn.disabled = false;
+                submitBtn.textContent = 'Завантажити';
+                return;
+              }
+
+              try {
+                const response = await fetch('/admin/import-questions', {
+                  method: 'POST',
+                  body: formData,
+                  headers: {
+                    'Authorization': 'Bearer ' + authToken
+                  }
+                });
+
+                if (!response.ok) {
+                  const result = await response.json();
+                  throw new Error(result.message || 'Помилка: ' + response.status);
+                }
+
+                const result = await response.text();
+                document.body.innerHTML = result;
+              } catch (error) {
+                console.error('Помилка імпорту:', error);
+                errorMessage.textContent = 'Помилка: ' + error.message;
+              } finally {
+                submitBtn.disabled = false;
+                submitBtn.textContent = 'Завантажити';
+              }
+            });
+          </script>
+        </body>
+      </html>
+    `;
+    res.send(html);
+    logger.info('Відображено форму імпорту питань', { url: req.url });
+  } catch (error) {
+    logger.error('Помилка в /admin/import-questions (GET)', { message: error.message, stack: error.stack });
+    res.status(500).send(`
+      <!DOCTYPE html>
+      <html lang="uk">
+        <head>
+          <meta charset="UTF-8">
+          <title>Помилка</title>
+          <style>
+            body { font-family: Arial, sans-serif; padding: 20px; text-align: center; }
+            .error { color: red; }
+          </style>
+        </head>
+        <body>
+          <h1>Помилка завантаження форми</h1>
+          <p class="error">${error.message}</p>
+          <button onclick="window.location.href='/admin'">Повернутися до адмін-панелі</button>
+        </body>
+      </html>
+    `);
+  } finally {
+    logger.info('Маршрут /admin/import-questions (GET) виконано', { duration: `${Date.now() - startTime} мс` });
+  }
+});
+
+// Обробка імпорту питань
+app.post('/admin/import-questions', ensureInitialized, checkAuth, checkAdmin, upload.single('file'), async (req, res) => {
+  const startTime = Date.now();
+  try {
+    const token = req.headers['authorization']?.split(' ')[1] || req.cookies.token;
+    logger.info('Отримано JWT для /admin/import-questions', { token: token ? '[присутній]' : '[відсутній]' });
+
+    if (!req.file) {
+      logger.error('Файл не надано', { url: req.url });
+      return res.status(400).send('Файл не надано');
+    }
+    const testNumber = req.body.testNumber;
+    if (!testNumber || !testNames[testNumber]) {
+      logger.error('Невірний номер тесту', { testNumber, url: req.url });
+      return res.status(400).send('Невірний номер тесту');
+    }
+
+    const count = await importQuestionsToMongoDB(req.file.buffer, testNumber);
+    logger.info(`Імпортовано ${count} питань для тесту ${testNumber}`);
+
+    res.send(`
+      <!DOCTYPE html>
+      <html lang="uk">
+        <head>
+          <meta charset="UTF-8">
+          <title>Питання імпортовано</title>
+          <style>
+            body { font-family: Arial, sans-serif; padding: 20px; text-align: center; }
+            button { padding: 10px 20px; cursor: pointer; border: none; border-radius: 5px; background-color: #4CAF50; color: white; }
+            button:hover { background-color: #45a049; }
+          </style>
+        </head>
+        <body>
+          <h1>Успішно імпортовано ${count} питань для тесту ${testNames[testNumber].name.replace(/"/g, '\\"')}</h1>
+          <button onclick="window.location.href='/admin/questions'">Повернутися до списку питань</button>
+        </body>
+      </html>
+    `);
+  } catch (error) {
+    logger.error('Помилка імпорту питань (POST)', { message: error.message, stack: error.stack });
+    res.status(500).send(`
+      <!DOCTYPE html>
+      <html lang="uk">
+        <head>
+          <meta charset="UTF-8">
+          <title>Помилка імпорту</title>
+          <style>
+            body { font-family: Arial, sans-serif; padding: 20px; text-align: center; }
+            .error { color: red; }
+            button { padding: 10px 20px; cursor: pointer; border: none; border-radius: 5px; background-color: #007bff; color: white; }
+          </style>
+        </head>
+        <body>
+          <h1>Помилка імпорту питань</h1>
+          <p class="error">${error.message}</p>
+          <button onclick="window.location.href='/admin/import-questions'">Спробувати знову</button>
+        </body>
+      </html>
+    `);
+  } finally {
+    logger.info('Маршрут /admin/import-questions (POST) виконано', { duration: `${Date.now() - startTime} мс` });
+  }
+});
+
+// Маршрут для перегляду результатів тестів
+app.get('/admin/results', checkAuth, async (req, res) => {
+  const startTime = Date.now();
+  try {
+    if (req.userRole !== 'admin' && req.userRole !== 'instructor') {
+      return res.status(403).send('Доступно тільки для адміністраторів та інструкторів');
+    }
+
+    const search = req.query.search || '';
+
+    const query = search ? { user: { $regex: search, $options: 'i' } } : {};
+    const results = await db.collection('test_results')
+      .find(query)
+      .sort({ endTime: -1 })
+      .toArray();
 
     let html = `
       <!DOCTYPE html>
       <html lang="uk">
         <head>
           <meta charset="UTF-8">
+          <title>Результати тестів</title>
+          <style>
+            body { font-family: Arial, sans-serif; padding: 20px; }
+            table { border-collapse: collapse; width: 100%; margin-top: 20px; }
+            th, td { border: 1px solid black; padding: 8px; text-align: left; }
+            th { background-color: #f2f2f2; }
+            .error { color: red; }
+            .nav-btn, .action-btn, .search-btn { padding: 10px 20px; margin: 5px; cursor: pointer; border: none; border-radius: 5px; }
+            .action-btn.view { background-color: #4CAF50; color: white; }
+            .action-btn.delete { background-color: #ff4d4d; color: white; }
+            .nav-btn { background-color: #007bff; color: white; }
+            .search-btn { background-color: #28a745; color: white; }
+            input[type="text"] { padding: 8px; margin: 5px; width: 200px; }
+            .suspicious { color: red; }
+            .details { white-space: pre-wrap; max-width: 300px; overflow-wrap: break-word; }
+          </style>
+        </head>
+        <body>
+          <h1>Результати тестів</h1>
+          <button class="nav-btn" onclick="window.location.href='/select-test'">Повернутися до вибору тесту</button>
+          <div>
+            <form id="search-form">
+              <input type="text" id="search" name="search" placeholder="Пошук за логіном" value="${search}">
+              <button type="submit" class="search-btn">Пошук</button>
+            </form>
+          </div>
+          <table>
+            <tr>
+              <th>Користувач</th>
+              <th>Тест</th>
+              <th>Варіант</th>
+              <th>Очки/%</th>
+              <th>Максимум</th>
+              <th>Початок</th>
+              <th>Кінець</th>
+              <th>Тривалість (хв:сек)</th>
+              <th>Підозріла активність (%)</th>
+              <th>Деталі активності</th>
+              <th>Дія</th>
+            </tr>
+    `;
+    if (!results || results.length === 0) {
+      html += '<tr><td colspan="11">Немає результатів</td></tr>';
+    } else {
+      results.forEach(result => {
+        const startTime = new Date(result.startTime).toLocaleTimeString('uk-UA', { hour12: false }) + ' ' + new Date(result.startTime).toLocaleDateString('uk-UA');
+        const endTime = new Date(result.endTime).toLocaleTimeString('uk-UA', { hour12: false }) + ' ' + new Date(result.endTime).toLocaleDateString('uk-UA');
+        const durationSec = result.duration || Math.round((new Date(result.endTime) - new Date(result.startTime)) / 1000);
+        const minutes = Math.floor(durationSec / 60).toString().padStart(2, '0');
+        const seconds = (durationSec % 60).toString().padStart(2, '0');
+        const timeAwayPercent = result.suspiciousActivity?.timeAway
+          ? Math.round((result.suspiciousActivity.timeAway / result.duration) * 100)
+          : 0;
+        const switchCount = result.suspiciousActivity?.switchCount || 0;
+        const avgResponseTime = result.suspiciousActivity?.responseTimes
+          ? (result.suspiciousActivity.responseTimes.reduce((sum, time) => sum + (time || 0), 0) / result.suspiciousActivity.responseTimes.length).toFixed(2)
+          : 0;
+
+        const isSuspicious = timeAwayPercent > config.suspiciousActivity.timeAwayThreshold ||
+                            switchCount > config.suspiciousActivity.switchCountThreshold;
+
+        const activityDetails = `Час поза вкладкою: ${timeAwayPercent}%\n` +
+                               `Переключення вкладок: ${switchCount}\n` +
+                               `Середній час відповіді (сек): ${avgResponseTime}`;
+
+        html += `
+          <tr class="${isSuspicious ? 'suspicious' : ''}">
+            <td>${result.user}</td>
+            <td>${testNames[result.testNumber]?.name.replace(/"/g, '\\"') || 'Невідомий тест'}</td>
+            <td>${result.variant || 'Немає'}</td>
+            <td>${result.score} / ${Math.round(result.percentage)}%</td>
+            <td>${result.totalPoints}</td>
+            <td>${startTime}</td>
+            <td>${endTime}</td>
+            <td>${minutes} хв ${seconds} сек</td>
+            <td>${timeAwayPercent}%</td>
+            <td class="details">${activityDetails}</td>
+            <td>
+              <button class="action-btn view" onclick="viewResult('${result._id}')">Перегляд</button>
+              ${req.userRole === 'admin' ? '<button class="action-btn delete" onclick="deleteResult(\'' + result._id + '\')">🗑️ Видалити</button>' : ''}
+            </td>
+          </tr>
+        `;
+      });
+    }
+    html += `
+          </table>
+          <script>
+            async function viewResult(id) {
+              window.location.href = '/admin/view-result?id=' + id;
+            }
+
+            async function deleteResult(id) {
+              if (confirm('Ви впевнені, що хочете видалити цей результат?')) {
+                try {
+                  const formData = new URLSearchParams();
+                  formData.append('id', id);
+                  formData.append('_csrf', '${res.locals._csrf}');
+                  const response = await fetch('/admin/delete-result', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                    body: formData
+                  });
+                  if (!response.ok) {
+                    throw new Error('HTTP-помилка! статус: ' + response.status);
+                  }
+                  const result = await response.json();
+                  if (result.success) {
+                    window.location.reload();
+                  } else {
+                    alert('Помилка при видаленні результату: ' + result.message);
+                  }
+                } catch (error) {
+                  console.error('Помилка видалення результату:', error);
+                  alert('Не вдалося видалити результат. Перевірте ваше з’єднання з Інтернетом.');
+                }
+              }
+            }
+
+            document.getElementById('search-form').addEventListener('submit', (e) => {
+              e.preventDefault();
+              const search = document.getElementById('search').value;
+              window.location.href = '/admin/results?search=' + encodeURIComponent(search);
+            });
+          </script>
+        </body>
+      </html>
+    `;
+    res.send(html);
+  } catch (error) {
+    logger.error('Помилка в /admin/results', { message: error.message, stack: error.stack });
+    res.status(500).send('Помилка при завантаженні результатів');
+  } finally {
+    logger.info('Маршрут /admin/results виконано', { duration: `${Date.now() - startTime} мс` });
+  }
+});
+
+// Маршрут для перегляду детального результату
+app.get('/admin/view-result', checkAuth, async (req, res) => {
+  const startTime = Date.now();
+  try {
+    if (req.userRole !== 'admin' && req.userRole !== 'instructor') {
+      return res.status(403).send('Доступно тільки для адміністраторів та інструкторів');
+    }
+
+    const { id } = req.query;
+    if (!id || !ObjectId.isValid(id)) {
+      return res.status(400).send('Невірний ідентифікатор результату');
+    }
+
+    const result = await db.collection('test_results').findOne({ _id: new ObjectId(id) });
+    if (!result) {
+      return res.status(404).send('Результат не знайдено');
+    }
+
+    const questions = await db.collection('questions')
+      .find({ testNumber: result.testNumber })
+      .sort({ order: 1 })
+      .toArray();
+
+    let html = `
+      <!DOCTYPE html>
+      <html lang="uk">
+        <head>
+          <meta charset="UTF-8">
+          <title>Деталі результату</title>
+          <style>
+            body { font-family: Arial, sans-serif; padding: 20px; }
+            table { border-collapse: collapse; width: 100%; margin-top: 20px; }
+            th, td { border: 1px solid black; padding: 8px; text-align: left; }
+            th { background-color: #f2f2f2; }
+            .error { color: red; }
+            .nav-btn { padding: 10px 20px; margin: 5px; cursor: pointer; border: none; border-radius: 5px; background-color: #007bff; color: white; }
+            .answers { white-space: pre-wrap; max-width: 300px; overflow-wrap: break-word; line-height: 1.8; }
+          </style>
+        </head>
+        <body>
+          <h1>Деталі результату для користувача ${result.user}</h1>
+          <p>
+            Тест: ${testNames[result.testNumber]?.name.replace(/"/g, '\\"') || 'Невідомий тест'}<br>
+            Результат: ${Math.round(result.percentage)}%<br>
+            Кількість питань: ${result.totalQuestions}<br>
+            Правильних відповідей: ${result.correctClicks}<br>
+            Набрано балів: ${result.score}<br>
+            Максимально можлива кількість балів: ${result.totalPoints}<br>
+            Час поза вкладкою: ${result.suspiciousActivity?.timeAway ? Math.round((result.suspiciousActivity.timeAway / result.duration) * 100) : 0}%<br>
+            Переключення вкладок: ${result.suspiciousActivity?.switchCount || 0}<br>
+            Середній час відповіді: ${result.suspiciousActivity?.responseTimes
+              ? (result.suspiciousActivity.responseTimes.reduce((sum, time) => sum + (time || 0), 0) / result.suspiciousActivity.responseTimes.length).toFixed(2)
+              : 0} с<br>
+            Загальна активність: ${result.suspiciousActivity?.activityCounts
+              ? result.suspiciousActivity.activityCounts.reduce((sum, count) => sum + (count || 0), 0)
+              : 0}<br>
+            Дата завершення: ${new Date(result.endTime).toLocaleString('uk-UA')}<br>
+            Варіант: ${result.variant || 'Немає'}
+          </p>
+          <table>
+            <tr>
+              <th>Питання</th>
+              <th>Ваша відповідь</th>
+              <th>Бали</th>
+            </tr>
+    `;
+
+    // Перебираємо питання в порядку order і зіставляємо з відповідями за індексом
+    questions.forEach((question, index) => {
+      const userAnswer = result.answers[index] !== undefined ? result.answers[index] : 'Не відповіли';
+      const questionScore = result.scoresPerQuestion[index] || 0;
+      let userAnswerDisplay;
+      if (question.type === 'matching' && Array.isArray(userAnswer)) {
+        userAnswerDisplay = userAnswer.map(pair => `${pair[0]} -> ${pair[1]}`).join(', ');
+      } else if (question.type === 'fillblank' && Array.isArray(userAnswer)) {
+        userAnswerDisplay = userAnswer.join(', ');
+      } else if (Array.isArray(userAnswer)) {
+        userAnswerDisplay = userAnswer.join(', ');
+      } else {
+        userAnswerDisplay = userAnswer;
+      }
+      html += `
+        <tr>
+          <td>${question.text}</td>
+          <td class="answers">${userAnswerDisplay}</td>
+          <td>${questionScore} з ${question.points}</td>
+        </tr>
+      `;
+    });
+
+    html += `
+          </table>
+          <button class="nav-btn" onclick="window.location.href='/select-test'">Повернутися до вибору тесту</button>
+        </body>
+      </html>
+    `;
+    res.send(html);
+  } catch (error) {
+    logger.error('Помилка в /admin/view-result', { message: error.message, stack: error.stack });
+    res.status(500).send('Помилка при перегляді результату');
+  } finally {
+    const endTime = Date.now();
+    logger.info('Маршрут /admin/view-result виконано', { duration: `${endTime - startTime} мс` });
+  }
+});
+
+// Маршрут для видалення результату
+app.post('/admin/delete-result', checkAuth, checkAdmin, async (req, res) => {
+  const startTime = Date.now();
+  try {
+    const { id } = req.body;
+    if (!id || !ObjectId.isValid(id)) {
+      return res.status(400).json({ success: false, message: 'Невірний ідентифікатор результату' });
+    }
+    await db.collection('test_results').deleteOne({ _id: new ObjectId(id) });
+    res.json({ success: true });
+  } catch (error) {
+    logger.error('Помилка видалення результату', { message: error.message, stack: error.stack });
+    res.status(500).json({ success: false, message: 'Помилка при видаленні результату' });
+  } finally {
+    const endTime = Date.now();
+    logger.info('Маршрут /admin/delete-result виконано', { duration: `${endTime - startTime} мс` });
+  }
+});
+
+// Маршрут для редагування тестів
+app.get('/admin/edit-tests', checkAuth, checkAdmin, async (req, res) => {
+  const startTime = Date.now();
+  try {
+    let html = `
+      <!DOCTYPE html>
+      <html lang="uk">
+        <head>
+          <meta charset="UTF-8">
+          <title>Редагувати тести</title>
+          <style>
+            body { font-family: Arial, sans-serif; padding: 20px; }
+            table { border-collapse: collapse; width: 100%; margin-top: 20px; }
+            th, td { border: 1px solid black; padding: 8px; text-align: left; }
+            th { background-color: #f2f2f2; }
+            .error { color: red; }
+            .nav-btn, .action-btn { padding: 10px 20px; margin: 5px; cursor: pointer; border: none; border-radius: 5px; }
+            .action-btn.edit { background-color: #4CAF50; color: white; }
+            .action-btn.delete { background-color: #ff4d4d; color: white; }
+            .nav-btn { background-color: #007bff; color: white; }
+          </style>
+        </head>
+        <body>
+          <h1>Редагувати тести</h1>
+          <button class="nav-btn" onclick="window.location.href='/admin'">Повернутися до адмін-панелі</button>
+          <table>
+            <tr>
+              <th>Номер тесту</th>
+              <th>Назва</th>
+              <th>Ліміт часу (хв)</th>
+              <th>Випадкові питання</th>
+              <th>Випадкові відповіді</th>
+              <th>Ліміт питань</th>
+              <th>Ліміт спроб</th>
+              <th>Швидкий тест</th>
+              <th>Час на питання (с)</th>
+              <th>Дії</th>
+            </tr>
+    `;
+    if (!testNames || Object.keys(testNames).length === 0) {
+      html += '<tr><td colspan="10">Немає тестів</td></tr>';
+    } else {
+      Object.entries(testNames).forEach(([num, data]) => {
+        html += `
+          <tr>
+            <td>${num}</td>
+            <td>${data.name.replace(/"/g, '\\"')}</td>
+            <td>${data.timeLimit / 60}</td>
+            <td>${data.randomQuestions ? 'Так' : 'Ні'}</td>
+            <td>${data.randomAnswers ? 'Так' : 'Ні'}</td>
+            <td>${data.questionLimit || 'Немає'}</td>
+            <td>${data.attemptLimit || 1}</td>
+            <td>${data.isQuickTest ? 'Так' : 'Ні'}</td>
+            <td>${data.timePerQuestion || 'Немає'}</td>
+            <td>
+              <button class="action-btn edit" onclick="window.location.href='/admin/edit-test?testNumber=${num}'">Редагувати</button>
+              <button class="action-btn delete" onclick="deleteTest('${num}')">Видалити</button>
+            </td>
+          </tr>
+        `;
+      });
+    }
+    html += `
+          </table>
+          <script>
+            async function deleteTest(testNumber) {
+              if (confirm('Ви впевнені, що хочете видалити тест ' + testNumber + '?')) {
+                try {
+                  const formData = new URLSearchParams();
+                  formData.append('testNumber', testNumber);
+                  formData.append('_csrf', '${res.locals._csrf}');
+                  const response = await fetch('/admin/delete-test', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                    body: formData
+                  });
+                  if (!response.ok) {
+                    throw new Error('HTTP-помилка! статус: ' + response.status);
+                  }
+                  const result = await response.json();
+                  if (result.success) {
+                    window.location.reload();
+                  } else {
+                    alert('Помилка при видаленні тесту: ' + result.message);
+                  }
+                } catch (error) {
+                  console.error('Помилка видалення тесту:', error);
+                  alert('Не вдалося видалити тест. Перевірте ваше з’єднання з Інтернетом.');
+                }
+              }
+            }
+          </script>
+        </body>
+      </html>
+    `;
+    res.send(html);
+  } catch (error) {
+    logger.error('Помилка в /admin/edit-tests', { message: error.message, stack: error.stack });
+    res.status(500).send('Помилка при завантаженні тестів');
+  } finally {
+    const endTime = Date.now();
+    logger.info('Маршрут /admin/edit-tests виконано', { duration: `${endTime - startTime} мс` });
+  }
+});
+
+// Маршрут для редагування тесту
+app.get('/admin/edit-test', checkAuth, checkAdmin, async (req, res) => {
+  const startTime = Date.now();
+  try {
+    const { testNumber } = req.query;
+    if (!testNumber || !testNames[testNumber]) {
+      return res.status(400).send('Невірний номер тесту');
+    }
+    const test = testNames[testNumber];
+    const html = `
+      <!DOCTYPE html>
+      <html lang="uk">
+        <head>
+          <meta charset="UTF-8">
+          <title>Редагувати тест</title>
+          <style>
+            body { font-family: Arial, sans-serif; padding: 20px; }
+            label { display: block; margin: 10px 0 5px; }
+            input, select { padding: 5px; width: 300px; margin-bottom: 10px; }
+            button { padding: 10px 20px; margin: 5px; cursor: pointer; border: none; border-radius: 5px; }
+            .nav-btn { background-color: #007bff; color: white; }
+            .submit-btn { background-color: #4CAF50; color: white; }
+            .error { color: red; }
+          </style>
+        </head>
+        <body>
+          <h1>Редагувати тест ${testNumber}</h1>
+          <form method="POST" action="/admin/edit-test" onsubmit="return validateForm()">
+            <input type="hidden" name="_csrf" value="${res.locals._csrf}">
+            <input type="hidden" name="testNumber" value="${testNumber}">
+            <label for="name">Назва тесту:</label>
+            <input type="text" id="name" name="name" value="${test.name.replace(/"/g, '\\"')}" required>
+            <label for="timeLimit">Ліміт часу (хвилини):</label>
+            <input type="number" id="timeLimit" name="timeLimit" value="${test.timeLimit / 60}" min="1" required>
+            <label for="randomQuestions">Випадкові питання:</label>
+            <select id="randomQuestions" name="randomQuestions">
+              <option value="true" ${test.randomQuestions ? 'selected' : ''}>Так</option>
+              <option value="false" ${!test.randomQuestions ? 'selected' : ''}>Ні</option>
+            </select>
+            <label for="randomAnswers">Випадкові відповіді:</label>
+            <select id="randomAnswers" name="randomAnswers">
+              <option value="true" ${test.randomAnswers ? 'selected' : ''}>Так</option>
+              <option value="false" ${!test.randomAnswers ? 'selected' : ''}>Ні</option>
+            </select>
+            <label for="questionLimit">Ліміт питань (опціонально):</label>
+            <input type="number" id="questionLimit" name="questionLimit" value="${test.questionLimit || ''}" min="1">
+            <label for="attemptLimit">Ліміт спроб:</label>
+            <input type="number" id="attemptLimit" name="attemptLimit" value="${test.attemptLimit || 1}" min="1" required>
+            <label for="isQuickTest">Швидкий тест:</label>
+            <select id="isQuickTest" name="isQuickTest">
+              <option value="true" ${test.isQuickTest ? 'selected' : ''}>Так</option>
+              <option value="false" ${!test.isQuickTest ? 'selected' : ''}>Ні</option>
+            </select>
+            <label for="timePerQuestion">Час на питання (секунди, для швидкого тесту):</label>
+            <input type="number" id="timePerQuestion" name="timePerQuestion" value="${test.timePerQuestion || ''}" min="1">
+            <button type="submit" class="submit-btn">Зберегти</button>
+          </form>
+          <div id="error-message" class="error"></div>
+          <button class="nav-btn" onclick="window.location.href='/admin/edit-tests'">Повернутися до списку тестів</button>
+          <script>
+            function validateForm() {
+              const name = document.getElementById('name').value;
+              const timeLimit = document.getElementById('timeLimit').value;
+              const questionLimit = document.getElementById('questionLimit').value;
+              const attemptLimit = document.getElementById('attemptLimit').value;
+              const timePerQuestion = document.getElementById('timePerQuestion').value;
+              const isQuickTest = document.getElementById('isQuickTest').value;
+              const errorMessage = document.getElementById('error-message');
+
+              if (name.length < 1 || name.length > 100) {
+                errorMessage.textContent = 'Назва тесту має бути від 1 до 100 символів';
+                return false;
+              }
+              if (timeLimit < 1) {
+                errorMessage.textContent = 'Ліміт часу має бути принаймні 1 хвилина';
+                return false;
+              }
+              if (questionLimit && questionLimit < 1) {
+                errorMessage.textContent = 'Ліміт питань має бути принаймні 1';
+                return false;
+              }
+              if (attemptLimit < 1) {
+                errorMessage.textContent = 'Ліміт спроб має бути принаймні 1';
+                return false;
+              }
+              if (isQuickTest === 'true' && (!timePerQuestion || timePerQuestion < 1)) {
+                errorMessage.textContent = 'Час на питання має бути принаймні 1 секунда для швидкого тесту';
+                return false;
+              }
+              return true;
+            }
+          </script>
+        </body>
+      </html>
+    `;
+    res.send(html);
+  } catch (error) {
+    logger.error('Помилка в /admin/edit-test', { message: error.message, stack: error.stack });
+    res.status(500).send('Помилка при редагуванні тесту');
+  } finally {
+    const endTime = Date.now();
+    logger.info('Маршрут /admin/edit-test виконано', { duration: `${endTime - startTime} мс` });
+  }
+});
+
+// Маршрут для обробки редагування тесту
+app.post('/admin/edit-test', checkAuth, checkAdmin, [
+  body('testNumber').notEmpty().withMessage('Номер тесту обов’язковий'),
+  body('name')
+    .isLength({ min: 1, max: 100 }).withMessage('Назва тесту має бути від 1 до 100 символів'),
+  body('timeLimit')
+    .isInt({ min: 1 }).withMessage('Ліміт часу має бути принаймні 1 хвилина'),
+  body('questionLimit')
+    .optional({ checkFalsy: true })
+    .isInt({ min: 1 }).withMessage('Ліміт питань має бути принаймні 1'),
+  body('attemptLimit')
+    .isInt({ min: 1 }).withMessage('Ліміт спроб має бути принаймні 1'),
+  body('timePerQuestion')
+    .optional({ checkFalsy: true })
+    .isInt({ min: 1 }).withMessage('Час на питання має бути принаймні 1 секунда')
+], async (req, res) => {
+  const startTime = Date.now();
+  try {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).send(errors.array()[0].msg);
+    }
+
+    const { testNumber, name, timeLimit, randomQuestions, randomAnswers, questionLimit, attemptLimit, isQuickTest, timePerQuestion } = req.body;
+
+    if (isQuickTest === 'true' && (!timePerQuestion || parseInt(timePerQuestion) < 1)) {
+      return res.status(400).send('Час на питання має бути принаймні 1 секунда для швидкого тесту');
+    }
+
+    const testData = {
+      name,
+      timeLimit: parseInt(timeLimit) * 60,
+      randomQuestions: randomQuestions === 'true',
+      randomAnswers: randomAnswers === 'true',
+      questionLimit: questionLimit ? parseInt(questionLimit) : null,
+      attemptLimit: parseInt(attemptLimit),
+      isQuickTest: isQuickTest === 'true',
+      timePerQuestion: isQuickTest === 'true' ? parseInt(timePerQuestion) : null
+    };
+
+    await saveTestToMongoDB(testNumber, testData);
+    testNames[testNumber] = testData;
+    logger.info(`Тест ${testNumber} оновлено`, { testData });
+
+    res.send(`
+      <!DOCTYPE html>
+      <html lang="uk">
+        <head>
+          <meta charset="UTF-8">
+          <title>Тест оновлено</title>
+          <style>
+            body { font-family: Arial, sans-serif; padding: 20px; text-align: center; }
+            button { padding: 10px 20px; margin: 5px; cursor: pointer; border: none; border-radius: 5px; background-color: #4CAF50; color: white; }
+            button:hover { background-color: #45a049; }
+          </style>
+        </head>
+        <body>
+          <h1>Тест успішно оновлено</h1>
+          <button onclick="window.location.href='/admin/edit-tests'">Повернутися до списку тестів</button>
+        </body>
+      </html>
+    `);
+  } catch (error) {
+    logger.error('Помилка оновлення тесту', { message: error.message, stack: error.stack });
+    res.status(500).send('Помилка при редагуванні тесту');
+  } finally {
+    const endTime = Date.now();
+    logger.info('Маршрут /admin/edit-test (POST) виконано', { duration: `${endTime - startTime} мс` });
+  }
+});
+
+// Маршрут для видалення тесту
+app.post('/admin/delete-test', checkAuth, checkAdmin, async (req, res) => {
+  const startTime = Date.now();
+  try {
+    const { testNumber } = req.body;
+    if (!testNumber || !testNames[testNumber]) {
+      return res.status(400).json({ success: false, message: 'Невірний номер тесту' });
+    }
+    await deleteTestFromMongoDB(testNumber);
+    delete testNames[testNumber];
+    await db.collection('questions').deleteMany({ testNumber });
+    await db.collection('test_results').deleteMany({ testNumber });
+    await CacheManager.invalidateCache('questions', testNumber);
+    logger.info(`Тест ${testNumber} видалено разом із питаннями та результатами`);
+    res.json({ success: true });
+  } catch (error) {
+    logger.error('Помилка видалення тесту', { message: error.message, stack: error.stack });
+    res.status(500).json({ success: false, message: 'Помилка при видаленні тесту' });
+  } finally {
+    const endTime = Date.now();
+    logger.info('Маршрут /admin/delete-test виконано', { duration: `${endTime - startTime} мс` });
+  }
+});
+
+// Маршрут для створення нового тесту
+app.get('/admin/create-test', checkAuth, checkAdmin, (req, res) => {
+  const startTime = Date.now();
+  try {
+    const html = `
+      <!DOCTYPE html>
+      <html lang="uk">
+        <head>
+          <meta charset="UTF-8">
+          <title>Створити тест</title>
+          <style>
+            body { font-family: Arial, sans-serif; padding: 20px; }
+            label { display: block; margin: 10px 0 5px; }
+            input, select { padding: 5px; width: 300px; margin-bottom: 10px; }
+            button { padding: 10px 20px; margin: 5px; cursor: pointer; border: none; border-radius: 5px; }
+            .nav-btn { background-color: #007bff; color: white; }
+            .submit-btn { background-color: #4CAF50; color: white; }
+            .error { color: red; }
+          </style>
+        </head>
+        <body>
+          <h1>Створити новий тест</h1>
+          <form method="POST" action="/admin/create-test" onsubmit="return validateForm()">
+            <input type="hidden" name="_csrf" value="${res.locals._csrf}">
+            <label for="testNumber">Номер тесту:</label>
+            <input type="text" id="testNumber" name="testNumber" required>
+            <label for="name">Назва тесту:</label>
+            <input type="text" id="name" name="name" required>
+            <label for="timeLimit">Ліміт часу (хвилини):</label>
+            <input type="number" id="timeLimit" name="timeLimit" value="60" min="1" required>
+            <label for="randomQuestions">Випадкові питання:</label>
+            <select id="randomQuestions" name="randomQuestions">
+              <option value="true">Так</option>
+              <option value="false" selected>Ні</option>
+            </select>
+            <label for="randomAnswers">Випадкові відповіді:</label>
+            <select id="randomAnswers" name="randomAnswers">
+              <option value="true">Так</option>
+              <option value="false" selected>Ні</option>
+            </select>
+            <label for="questionLimit">Ліміт питань (опціонально):</label>
+            <input type="number" id="questionLimit" name="questionLimit" min="1">
+            <label for="attemptLimit">Ліміт спроб:</label>
+            <input type="number" id="attemptLimit" name="attemptLimit" value="1" min="1" required>
+            <label for="isQuickTest">Швидкий тест:</label>
+            <select id="isQuickTest" name="isQuickTest">
+              <option value="true">Так</option>
+              <option value="false" selected>Ні</option>
+            </select>
+            <label for="timePerQuestion">Час на питання (секунди, для швидкого тесту):</label>
+            <input type="number" id="timePerQuestion" name="timePerQuestion" min="1">
+            <button type="submit" class="submit-btn">Створити</button>
+          </form>
+          <div id="error-message" class="error"></div>
+          <button class="nav-btn" onclick="window.location.href='/admin/edit-tests'">Повернутися до списку тестів</button>
+          <script>
+            function validateForm() {
+              const testNumber = document.getElementById('testNumber').value;
+              const name = document.getElementById('name').value;
+              const timeLimit = document.getElementById('timeLimit').value;
+              const questionLimit = document.getElementById('questionLimit').value;
+              const attemptLimit = document.getElementById('attemptLimit').value;
+              const timePerQuestion = document.getElementById('timePerQuestion').value;
+              const isQuickTest = document.getElementById('isQuickTest').value;
+              const errorMessage = document.getElementById('error-message');
+
+              if (!/^[0-9]+$/.test(testNumber)) {
+                errorMessage.textContent = 'Номер тесту має бути числом';
+                return false;
+              }
+              if (name.length < 1 || name.length > 100) {
+                errorMessage.textContent = 'Назва тесту має бути від 1 до 100 символів';
+                return false;
+              }
+              if (timeLimit < 1) {
+                errorMessage.textContent = 'Ліміт часу має бути принаймні 1 хвилина';
+                return false;
+              }
+              if (questionLimit && questionLimit < 1) {
+                errorMessage.textContent = 'Ліміт питань має бути принаймні 1';
+                return false;
+              }
+              if (attemptLimit < 1) {
+                errorMessage.textContent = 'Ліміт спроб має бути принаймні 1';
+                return false;
+              }
+              if (isQuickTest === 'true' && (!timePerQuestion || timePerQuestion < 1)) {
+                errorMessage.textContent = 'Час на питання має бути принаймні 1 секунда для швидкого тесту';
+                return false;
+              }
+              return true;
+            }
+          </script>
+        </body>
+      </html>
+    `;
+    res.send(html);
+  } catch (error) {
+    logger.error('Помилка в /admin/create-test', { message: error.message, stack: error.stack });
+    res.status(500).send('Помилка при створенні тесту');
+  } finally {
+    const endTime = Date.now();
+    logger.info('Маршрут /admin/create-test виконано', { duration: `${endTime - startTime} мс` });
+  }
+});
+
+// Маршрут для обробки створення тесту
+app.post('/admin/create-test', checkAuth, checkAdmin, [
+  body('testNumber')
+    .matches(/^[0-9]+$/).withMessage('Номер тесту має бути числом'),
+  body('name')
+    .isLength({ min: 1, max: 100 }).withMessage('Назва тесту має бути від 1 до 100 символів'),
+  body('timeLimit')
+    .isInt({ min: 1 }).withMessage('Ліміт часу має бути принаймні 1 хвилина'),
+  body('questionLimit')
+    .optional({ checkFalsy: true })
+    .isInt({ min: 1 }).withMessage('Ліміт питань має бути принаймні 1'),
+  body('attemptLimit')
+    .isInt({ min: 1 }).withMessage('Ліміт спроб має бути принаймні 1'),
+  body('timePerQuestion')
+    .optional({ checkFalsy: true })
+    .isInt({ min: 1 }).withMessage('Час на питання має бути принаймні 1 секунда')
+], async (req, res) => {
+  const startTime = Date.now();
+  try {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).send(errors.array()[0].msg);
+    }
+
+    const { testNumber, name, timeLimit, randomQuestions, randomAnswers, questionLimit, attemptLimit, isQuickTest, timePerQuestion } = req.body;
+
+    if (testNames[testNumber]) {
+      return res.status(400).send('Тест із таким номером уже існує');
+    }
+
+    if (isQuickTest === 'true' && (!timePerQuestion || parseInt(timePerQuestion) < 1)) {
+      return res.status(400).send('Час на питання має бути принаймні 1 секунда для швидкого тесту');
+    }
+
+    const testData = {
+      name,
+      timeLimit: parseInt(timeLimit) * 60,
+      randomQuestions: randomQuestions === 'true',
+      randomAnswers: randomAnswers === 'true',
+      questionLimit: questionLimit ? parseInt(questionLimit) : null,
+      attemptLimit: parseInt(attemptLimit),
+      isQuickTest: isQuickTest === 'true',
+      timePerQuestion: isQuickTest === 'true' ? parseInt(timePerQuestion) : null
+    };
+
+    await saveTestToMongoDB(testNumber, testData);
+    testNames[testNumber] = testData;
+    logger.info(`Створено новий тест ${testNumber}`, { testData });
+
+    res.send(`
+      <!DOCTYPE html>
+      <html lang="uk">
+        <head>
+          <meta charset="UTF-8">
+          <title>Тест створено</title>
+          <style>
+            body { font-family: Arial, sans-serif; padding: 20px; text-align: center; }
+            button { padding: 10px 20px; margin: 5px; cursor: pointer; border: none; border-radius: 5px; background-color: #4CAF50; color: white; }
+            button:hover { background-color: #45a049; }
+          </style>
+        </head>
+        <body>
+          <h1>Тест успішно створено</h1>
+          <button onclick="window.location.href='/admin/edit-tests'">Повернутися до списку тестів</button>
+        </body>
+      </html>
+    `);
+  } catch (error) {
+    logger.error('Помилка створення тесту', { message: error.message, stack: error.stack });
+    res.status(500).send('Помилка при створенні тесту');
+  } finally {
+    const endTime = Date.now();
+    logger.info('Маршрут /admin/create-test (POST) виконано', { duration: `${endTime - startTime} мс` });
+  }
+});
+
+// Маршрут для очищення журналу активності
+app.post('/admin/clear-activity-log', checkAuth, checkAdmin, async (req, res) => {
+  const startTime = Date.now();
+  try {
+    const ipAddress = req.headers['x-forwarded-for'] || req.socket.remoteAddress;
+    const result = await db.collection('activity_log').deleteMany({});
+    logger.info('Журнал дій очищено', { deletedCount: result.deletedCount, user: req.user, ipAddress });
+    await logActivity(req.user, 'очистив журнал дій', ipAddress, { deletedCount: result.deletedCount });
+    res.json({ success: true });
+  } catch (error) {
+    logger.error('Помилка очищення журналу дій', { message: error.message, stack: error.stack });
+    res.status(500).json({ success: false, message: 'Помилка при очищенні журналу' });
+  } finally {
+    logger.info('Маршрут /admin/clear-activity-log виконано', { duration: `${Date.now() - startTime} мс` });
+  }
+});
+
+// Маршрут для перегляду журналу активності
+app.get('/admin/activity-log', checkAuth, checkAdmin, async (req, res) => {
+  const startTime = Date.now();
+  try {
+    const search = req.query.search || '';
+
+    const query = search ? { user: { $regex: search, $options: 'i' } } : {};
+    const activities = await db.collection('activity_log')
+      .find(query)
+      .sort({ timestamp: -1 })
+      .toArray();
+
+    const html = `
+      <!DOCTYPE html>
+      <html lang="uk">
+        <head>
+          <meta charset="UTF-8">
           <meta name="viewport" content="width=device-width, initial-scale=1.0">
-          <title>Керування розділами</title>
+          <title>Журнал дій</title>
           <style>
             body {
               font-family: Arial, sans-serif;
@@ -4527,7 +6395,7 @@ app.get('/admin/sections', checkAuth, checkAdmin, async (req, res) => {
               background-color: #f5f5f5;
             }
             .container {
-              max-width: 900px;
+              max-width: 800px;
               margin: 0 auto;
               background-color: white;
               padding: 20px;
@@ -4552,38 +6420,32 @@ app.get('/admin/sections', checkAuth, checkAdmin, async (req, res) => {
             th {
               background-color: #f2f2f2;
             }
-            .nav-btn, .action-btn {
-              padding: 8px 16px;
+            .nav-btn, .search-btn, .clear-btn {
+              padding: 10px 20px;
+              margin: 10px 5px;
               cursor: pointer;
               border: none;
               border-radius: 5px;
-              font-size: 14px;
-              margin: 5px;
             }
             .nav-btn {
               background-color: #007bff;
               color: white;
             }
-            .nav-btn:hover {
-              background-color: #0056b3;
-            }
-            .action-btn.edit {
-              background-color: #4CAF50;
+            .search-btn {
+              background-color: #28a745;
               color: white;
             }
-            .action-btn.edit:hover {
-              background-color: #45a049;
-            }
-            .action-btn.delete {
-              background-color: #ef5350;
+            .clear-btn {
+              background-color: #ff4d4d;
               color: white;
             }
-            .action-btn.delete:hover {
-              background-color: #d32f2f;
-            }
-            .tests-list {
-              max-width: 300px;
-              word-wrap: break-word;
+            .nav-btn:hover { background-color: #0056b3; }
+            .search-btn:hover { background-color: #218838; }
+            .clear-btn:hover { background-color: #d32f2f; }
+            input[type="text"] {
+              padding: 8px;
+              margin: 5px;
+              width: 200px;
             }
             @media (max-width: 600px) {
               h1 {
@@ -4592,1572 +6454,73 @@ app.get('/admin/sections', checkAuth, checkAdmin, async (req, res) => {
               table {
                 font-size: 14px;
               }
-              .tests-list {
-                max-width: 150px;
-              }
-              .nav-btn, .action-btn {
+              .nav-btn, .search-btn, .clear-btn {
                 width: 100%;
-                box-sizing: border-box;
               }
             }
           </style>
         </head>
         <body>
           <div class="container">
-            <h1>Керування розділами</h1>
+            <h1>Журнал дій</h1>
             <button class="nav-btn" onclick="window.location.href='/admin'">Повернутися до адмін-панелі</button>
-            <button class="nav-btn" onclick="window.location.href='/admin/add-section'">Додати розділ</button>
+            <button class="clear-btn" onclick="clearActivityLog()">Очистити журнал дій</button>
+            <div>
+              <form id="search-form">
+                <input type="text" id="search" name="search" placeholder="Пошук за логіном" value="${search}">
+                <button type="submit" class="search-btn">Пошук</button>
+              </form>
+            </div>
             <table>
               <tr>
-                <th>Назва</th>
-                <th>Зображення</th>
-                <th>Тести</th>
-                <th>Дії</th>
+                <th>Користувач</th>
+                <th>Дія</th>
+                <th>IP-адреса</th>
+                <th>Час</th>
               </tr>
-              ${sections.length > 0 ? sections.map(section => `
+              ${activities.length > 0 ? activities.map(a => `
                 <tr>
-                  <td>${section.name.replace(/"/g, '\\"')}</td>
-                  <td>${section.image ? `<img src="${section.image}" alt="${section.name.replace(/"/g, '\\"')}" style="max-width: 100px;">` : 'Немає'}</td>
-                  <td class="tests-list">${section.tests.map(t => testNames[t]?.name.replace(/"/g, '\\"') || `Тест ${t}`).join(', ')}</td>
-                  <td>
-                    <button class="action-btn edit" onclick="window.location.href='/admin/edit-section/${section._id}'">Редагувати</button>
-                    <button class="action-btn delete" onclick="deleteSection('${section._id}')">Видалити</button>
-                  </td>
+                  <td>${a.user}</td>
+                  <td>${a.action}</td>
+                  <td>${a.ipAddress}</td>
+                  <td>${new Date(a.timestamp).toLocaleString('uk-UA')}</td>
                 </tr>
-              `).join('') : '<tr><td colspan="4">Немає розділів</td></tr>'}
+              `).join('') : '<tr><td colspan="4">Немає записів</td></tr>'}
             </table>
           </div>
           <script>
-            async function deleteSection(id) {
-              if (!confirm('Ви впевнені, що хочете видалити цей розділ?')) return;
-              const formData = new URLSearchParams();
-              formData.append('_csrf', '${res.locals._csrf}');
-              try {
-                const response = await fetch('/admin/delete-section/' + id, {
-                  method: 'POST',
-                  headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-                  body: formData
-                });
-                const result = await response.json();
-                if (result.success) {
-                  window.location.reload();
-                } else {
-                  alert('Помилка видалення: ' + result.message);
-                }
-              } catch (error) {
-                console.error('Помилка видалення:', error);
-                alert('Не вдалося видалити розділ.');
-              }
-            }
-          </script>
-        </body>
-      </html>
-    `;
-    res.send(html);
-  } catch (error) {
-    logger.error('Помилка в /admin/sections', { message: error.message, stack: error.stack });
-    res.status(500).send('Помилка при завантаженні сторінки керування розділами');
-  } finally {
-    const endTime = Date.now();
-    logger.info('Маршрут /admin/sections виконано', { duration: `${endTime - startTime} мс` });
-  }
-});
+            document.getElementById('search-form').addEventListener('submit', (e) => {
+              e.preventDefault();
+              const search = document.getElementById('search').value;
+              window.location.href = '/admin/activity-log?search=' + encodeURIComponent(search);
+            });
 
-// Пояснення: Новий маршрут `/admin/sections` відображає список розділів із назвою, зображенням, тестами та діями (редагувати/видалити). Додано кнопки для повернення до адмін-панелі та створення нового розділу.
-
-// Маршрут для додавання нового розділу
-app.get('/admin/add-section', checkAuth, checkAdmin, async (req, res) => {
-  const startTime = Date.now();
-  try {
-    const tests = await db.collection('tests').find({}).toArray();
-    const html = `
-      <!DOCTYPE html>
-      <html lang="uk">
-        <head>
-          <meta charset="UTF-8">
-          <meta name="viewport" content="width=device-width, initial-scale=1.0">
-          <title>Додати розділ</title>
-          <style>
-            body {
-              font-family: Arial, sans-serif;
-              padding: 20px;
-              background-color: #f5f5f5;
-            }
-            .container {
-              max-width: 600px;
-              margin: 0 auto;
-              background-color: white;
-              padding: 20px;
-              border-radius: 8px;
-              box-shadow: 0 0 10px rgba(0, 0, 0, 0.1);
-            }
-            h1 {
-              font-size: 24px;
-              text-align: center;
-              margin-bottom: 20px;
-            }
-            label {
-              display: block;
-              font-size: 16px;
-              margin-bottom: 5px;
-            }
-            input, select {
-              width: 100%;
-              padding: 10px;
-              font-size: 16px;
-              border: 1px solid #ccc;
-              border-radius: 5px;
-              margin-bottom: 10px;
-              box-sizing: border-box;
-            }
-            .tests-container {
-              margin-bottom: 20px;
-            }
-            .test-checkbox {
-              margin-right: 10px;
-            }
-            button {
-              padding: 10px 20px;
-              font-size: 16px;
-              cursor: pointer;
-              border: none;
-              border-radius: 5px;
-            }
-            .submit-btn {
-              background-color: #4CAF50;
-              color: white;
-            }
-            .submit-btn:hover {
-              background-color: #45a049;
-            }
-            .back-btn {
-              background-color: #007bff;
-              color: white;
-            }
-            .back-btn:hover {
-              background-color: #0056b3;
-            }
-            .error {
-              color: red;
-              margin-top: 10px;
-              font-size: 14px;
-              text-align: center;
-            }
-            @media (max-width: 600px) {
-              h1 {
-                font-size: 20px;
-              }
-              input, select {
-                font-size: 14px;
-              }
-              button {
-                width: 100%;
-                font-size: 14px;
-              }
-            }
-          </style>
-        </head>
-        <body>
-          <div class="container">
-            <h1>Додати розділ</h1>
-            <form id="add-section-form" enctype="multipart/form-data" action="/admin/add-section" method="post">
-              <input type="hidden" name="_csrf" value="${res.locals._csrf}">
-              <input type="text" name="name" placeholder="Назва розділу" required>
-              <input type="file" name="image" accept="image/*">
-              <select name="tests" multiple>
-                ${Object.keys(testNames).map(num => `
-                  <option value="${num}">${testNames[num].name}</option>
-                `).join('')}
-              </select>
-              <button type="submit">Створити</button>
-            </form>
-            <script>
-              document.getElementById('add-section-form').addEventListener('submit', async (e) => {
-                e.preventDefault();
-                const form = e.target;
-                const formData = new FormData(form);
+            async function clearActivityLog() {
+              if (confirm('Ви впевнені, що хочете очистити весь журнал дій? Цю дію неможливо скасувати.')) {
                 try {
-                  const response = await fetch('/admin/add-section', {
+                  const formData = new URLSearchParams();
+                  formData.append('_csrf', '${res.locals._csrf}');
+                  const response = await fetch('/admin/clear-activity-log', {
                     method: 'POST',
+                    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
                     body: formData
                   });
+                  if (!response.ok) {
+                    throw new Error('HTTP-помилка! статус: ' + response.status);
+                  }
                   const result = await response.json();
                   if (result.success) {
-                    window.location.href = '/admin/sections';
+                    window.location.reload();
                   } else {
-                    alert('Помилка: ' + result.message);
+                    alert('Помилка при очищенні журналу: ' + result.message);
                   }
                 } catch (error) {
-                  console.error('Помилка:', error);
-                  alert('Помилка створення розділу');
+                  console.error('Помилка очищення журналу:', error);
+                  alert('Не вдалося очистити журнал. Перевірте ваше з’єднання з Інтернетом.');
                 }
-              });
-            </script>
-        </body>
-      </html>
-    `;
-    res.send(html);
-  } catch (error) {
-    logger.error('Помилка в /admin/add-section', { message: error.message, stack: error.stack });
-    res.status(500).send('Помилка при завантаженні форми додавання розділу');
-  } finally {
-    const endTime = Date.now();
-    logger.info('Маршрут /admin/add-section виконано', { duration: `${endTime - startTime} мс` });
-  }
-});
-
-// Пояснення: Новий маршрут `/admin/add-section` дозволяє додати розділ із назвою, зображенням і до 6 тестів. Використовує `multer` для завантаження зображення.
-
-// Обробка додавання розділу
-app.post('/admin/add-section', checkAuth, checkAdmin, upload.single('image'), [
-  body('name')
-    .isLength({ min: 1, max: 100 }).withMessage('Назва розділу має бути від 1 до 100 символів')
-], async (req, res) => {
-  const startTime = Date.now();
-  try {
-    logger.info('Початок обробки запиту /admin/add-section', { body: req.body, file: req.file ? req.file.originalname : 'no file' });
-
-    // Перевірка наявності req.body
-    if (!req.body) {
-      logger.error('req.body відсутній у /admin/add-section', { headers: req.headers });
-      return res.status(400).json({ success: false, message: 'Некоректні дані форми' });
-    }
-
-    // Перевірка CSRF-токена
-    const csrfToken = req.body._csrf || req.headers['x-csrf-token'] || req.headers['xsrf-token'] || '';
-    logger.info('Отримано CSRF-токен', { csrfToken, body: req.body, headers: req.headers });
-    if (!csrfToken || csrfToken !== res.locals._csrf) {
-      logger.error('Невірний або відсутній CSRF-токен', { received: csrfToken, expected: res.locals._csrf });
-      return res.status(403).json({ success: false, message: 'Недійсний CSRF-токен' });
-    }
-
-    const errors = validationResult(req);
-    if (!errors.isEmpty()) {
-      logger.warn('Помилки валідації', { errors: errors.array() });
-      return res.status(400).json({ success: false, message: errors.array()[0].msg });
-    }
-
-    const { name, tests } = req.body;
-    const testsArray = Array.isArray(tests) ? tests : tests ? [tests] : [];
-    logger.info('Отримано дані для нового розділу', { name, tests: testsArray });
-
-    if (testsArray.length > 6) {
-      logger.warn('Занадто багато тестів', { testsCount: testsArray.length });
-      return res.status(400).json({ success: false, message: 'Максимум 6 тестів на розділ' });
-    }
-
-    const existingSection = await db.collection('sections').findOne({ name });
-    if (existingSection) {
-      logger.warn('Розділ із такою назвою вже існує', { name });
-      return res.status(400).json({ success: false, message: 'Розділ із такою назвою вже існує' });
-    }
-
-    let imagePath = '/images/default-section.png';
-    if (req.file) {
-      const fileName = `section_${Date.now()}-${req.file.originalname}`;
-      imagePath = `/images/${fileName}`;
-      fs.writeFileSync(path.join(__dirname, 'public', 'images', fileName), req.file.buffer);
-      logger.info('Зображення збережено', { imagePath });
-    }
-
-    const newSection = {
-      name,
-      tests: testsArray,
-      image: imagePath,
-      materials: []
-    };
-
-    await db.collection('sections').insertOne(newSection);
-    logger.info('Розділ створено', { name, tests: testsArray, user: req.user });
-
-    res.json({ success: true });
-  } catch (error) {
-    logger.error('Помилка створення розділу', { message: error.message, stack: error.stack, body: req.body });
-    res.status(500).json({ success: false, message: 'Помилка при створенні розділу' });
-  } finally {
-    logger.info('Маршрут /admin/add-section виконано', { duration: `${Date.now() - startTime} мс` });
-  }
-});
-
-// Пояснення: Обробляє додавання розділу, перевіряючи унікальність назви та ліміт тестів (6). Зображення зберігається в `public/images`.
-
-// Маршрут для редагування розділу
-app.get('/admin/edit-section/:id', checkAuth, checkAdmin, async (req, res) => {
-  const startTime = Date.now();
-  try {
-    const sectionId = req.params.id;
-    if (!ObjectId.isValid(sectionId)) {
-      return res.status(400).send('Невірний ідентифікатор розділу');
-    }
-
-    const section = await db.collection('sections').findOne({ _id: new ObjectId(sectionId) });
-    if (!section) {
-      return res.status(404).send('Розділ не знайдено');
-    }
-
-    const tests = await db.collection('tests').find({}).toArray();
-    const html = `
-      <!DOCTYPE html>
-      <html lang="uk">
-        <head>
-          <meta charset="UTF-8">
-          <meta name="viewport" content="width=device-width, initial-scale=1.0">
-          <title>Редагувати розділ</title>
-          <style>
-            body {
-              font-family: Arial, sans-serif;
-              padding: 20px;
-              background-color: #f5f5f5;
-            }
-            .container {
-              max-width: 600px;
-              margin: 0 auto;
-              background-color: white;
-              padding: 20px;
-              border-radius: 8px;
-              box-shadow: 0 0 10px rgba(0, 0, 0, 0.1);
-            }
-            h1 {
-              font-size: 24px;
-              text-align: center;
-              margin-bottom: 20px;
-            }
-            label {
-              display: block;
-              font-size: 16px;
-              margin-bottom: 5px;
-            }
-            input, select {
-              width: 100%;
-              padding: 10px;
-              font-size: 16px;
-              border: 1px solid #ccc;
-              border-radius: 5px;
-              margin-bottom: 10px;
-              box-sizing: border-box;
-            }
-            .tests-container {
-              margin-bottom: 20px;
-            }
-            .test-checkbox {
-              margin-right: 10px;
-            }
-            img#image-preview {
-              max-width: 100px;
-              margin-bottom: 10px;
-            }
-            button {
-              padding: 10px 20px;
-              font-size: 16px;
-              cursor: pointer;
-              border: none;
-              border-radius: 5px;
-            }
-            .submit-btn {
-              background-color: #4CAF50;
-              color: white;
-            }
-            .submit-btn:hover {
-              background-color: #45a049;
-            }
-            .back-btn {
-              background-color: #007bff;
-              color: white;
-            }
-            .back-btn:hover {
-              background-color: #0056b3;
-            }
-            .error {
-              color: red;
-              margin-top: 10px;
-              font-size: 14px;
-              text-align: center;
-            }
-            @media (max-width: 600px) {
-              h1 {
-                font-size: 20px;
-              }
-              input, select {
-                font-size: 14px;
-              }
-              button {
-                width: 100%;
-                font-size: 14px;
-              }
-            }
-          </style>
-        </head>
-        <body>
-          <div class="container">
-            <h1>Редагувати розділ</h1>
-            <form id="edit-section-form" enctype="multipart/form-data">
-              <input type="hidden" name="_csrf" value="${res.locals._csrf}">
-              <input type="hidden" name="id" value="${sectionId}">
-              <label for="name">Назва розділу:</label>
-              <input type="text" id="name" name="name" value="${section.name.replace(/"/g, '\\"')}" required>
-              <label for="image">Зображення (JPEG, PNG, GIF):</label>
-              ${section.image ? `<img id="image-preview" src="${section.image}" alt="${section.name.replace(/"/g, '\\"')}">` : ''}
-              <input type="file" id="image" name="image" accept="image/jpeg,image/png,image/gif">
-              <label>Тести (до 6):</label>
-              <div class="tests-container">
-                ${tests.length > 0 ? tests.map(test => `
-                  <label>
-                    <input type="checkbox" class="test-checkbox" name="tests" value="${test.testNumber}" ${section.tests.includes(test.testNumber) ? 'checked' : ''}>
-                    ${test.name.replace(/"/g, '\\"')}
-                  </label><br>
-                `).join('') : '<p>Немає доступних тестів</p>'}
-              </div>
-              <button type="submit" class="submit-btn">Зберегти</button>
-            </form>
-            <div id="error-message" class="error"></div>
-            <button class="back-btn" onclick="window.location.href='/admin/sections'">Повернутися до розділів</button>
-          </div>
-          <script>
-            document.getElementById('edit-section-form').addEventListener('submit', async (e) => {
-              e.preventDefault();
-              const name = document.getElementById('name').value;
-              const imageInput = document.getElementById('image');
-              const tests = Array.from(document.querySelectorAll('input[name="tests"]:checked')).map(cb => cb.value);
-              const errorMessage = document.getElementById('error-message');
-              const submitBtn = e.target.querySelector('.submit-btn');
-
-              if (name.length <               1 || name.length > 100) {
-                errorMessage.textContent = 'Назва розділу має бути від 1 до 100 символів';
-                return;
-              }
-              if (tests.length > 6) {
-                errorMessage.textContent = 'Максимум 6 тестів на розділ';
-                return;
-              }
-
-              submitBtn.disabled = true;
-              submitBtn.textContent = 'Збереження...';
-
-              const formData = new FormData();
-              formData.append('id', '${sectionId}');
-              formData.append('name', name);
-              if (imageInput.files[0]) {
-                formData.append('image', imageInput.files[0]);
-              }
-              tests.forEach(test => formData.append('tests', test));
-              formData.append('_csrf', document.querySelector('input[name="_csrf"]').value);
-
-              try {
-                const response = await fetch('/admin/edit-section/${sectionId}', {
-                  method: 'POST',
-                  body: formData
-                });
-                const result = await response.json();
-                if (result.success) {
-                  window.location.href = '/admin/sections';
-                } else {
-                  errorMessage.textContent = result.message || 'Помилка при редагуванні розділу';
-                }
-              } catch (error) {
-                console.error('Помилка:', error);
-                errorMessage.textContent = 'Помилка: ' + error.message;
-              } finally {
-                submitBtn.disabled = false;
-                submitBtn.textContent = 'Зберегти';
-              }
-            });
-          </script>
-        </body>
-      </html>
-    `;
-    res.send(html);
-  } catch (error) {
-    logger.error('Помилка в /admin/edit-section/:id', { message: error.message, stack: error.stack });
-    res.status(500).send('Помилка при завантаженні форми редагування розділу');
-  } finally {
-    const endTime = Date.now();
-    logger.info('Маршрут /admin/edit-section/:id виконано', { duration: `${endTime - startTime} мс` });
-  }
-});
-
-// Пояснення: Завершено маршрут `/admin/edit-section/:id`, додавши валідацію назви та кількості тестів. Форма дозволяє змінити назву, зображення та тести розділу.
-
-// Обробка редагування розділу
-app.post('/admin/edit-section/:id', checkAuth, checkAdmin, upload.single('image'), [
-  body('name')
-    .isLength({ min: 1, max: 100 }).withMessage('Назва розділу має бути від 1 до 100 символів')
-], async (req, res) => {
-  const startTime = Date.now();
-  try {
-    const errors = validationResult(req);
-    if (!errors.isEmpty()) {
-      return res.status(400).json({ success: false, message: errors.array()[0].msg });
-    }
-
-    const sectionId = req.params.id;
-    if (!ObjectId.isValid(sectionId)) {
-      return res.status(400).json({ success: false, message: 'Невірний ідентифікатор розділу' });
-    }
-
-    const { name, tests } = req.body;
-    const testsArray = Array.isArray(tests) ? tests : tests ? [tests] : [];
-
-    if (testsArray.length > 6) {
-      return res.status(400).json({ success: false, message: 'Максимум 6 тестів на розділ' });
-    }
-
-    const existingSection = await db.collection('sections').findOne({ name, _id: { $ne: new ObjectId(sectionId) } });
-    if (existingSection) {
-      return res.status(400).json({ success: false, message: 'Розділ із такою назвою вже існує' });
-    }
-
-    const section = await db.collection('sections').findOne({ _id: new ObjectId(sectionId) });
-    if (!section) {
-      return res.status(404).json({ success: false, message: 'Розділ не знайдено' });
-    }
-
-    let imagePath = section.image;
-    if (req.file) {
-      // Видаляємо старе зображення, якщо воно існує
-      if (section.image && fs.existsSync(path.join(__dirname, 'public', section.image))) {
-        fs.unlinkSync(path.join(__dirname, 'public', section.image));
-      }
-      const fileName = `section_${Date.now()}-${req.file.originalname}`;
-      imagePath = `/images/${fileName}`;
-      fs.writeFileSync(path.join(__dirname, 'public', 'images', fileName), req.file.buffer);
-    }
-
-    await db.collection('sections').updateOne(
-      { _id: new ObjectId(sectionId) },
-      { $set: { name, tests: testsArray, image: imagePath } }
-    );
-
-    logger.info('Розділ відредаговано', { sectionId, name, tests: testsArray, user: req.user });
-    res.json({ success: true });
-  } catch (error) {
-    logger.error('Помилка редагування розділу', { message: error.message, stack: error.stack });
-    res.status(500).json({ success: false, message: 'Помилка при редагуванні розділу' });
-  } finally {
-    const endTime = Date.now();
-    logger.info('Маршрут /admin/edit-section/:id (POST) виконано', { duration: `${endTime - startTime} мс` });
-  }
-});
-
-// Пояснення: Обробляє редагування розділу, перевіряючи унікальність назви та ліміт тестів. Якщо нове зображення завантажено, старе видаляється.
-
-// Видалення розділу
-app.post('/admin/delete-section/:id', checkAuth, checkAdmin, async (req, res) => {
-  const startTime = Date.now();
-  try {
-    const sectionId = req.params.id;
-    if (!ObjectId.isValid(sectionId)) {
-      return res.status(400).json({ success: false, message: 'Невірний ідентифікатор розділу' });
-    }
-
-    const section = await db.collection('sections').findOne({ _id: new ObjectId(sectionId) });
-    if (!section) {
-      return res.status(404).json({ success: false, message: 'Розділ не знайдено' });
-    }
-
-    // Видаляємо пов’язані матеріали
-    if (section.materials && section.materials.length > 0) {
-      section.materials.forEach(material => {
-        if (material.path && fs.existsSync(path.join(__dirname, 'public', material.path))) {
-          fs.unlinkSync(path.join(__dirname, 'public', material.path));
-        }
-      });
-    }
-
-    // Видаляємо зображення розділу
-    if (section.image && fs.existsSync(path.join(__dirname, 'public', section.image))) {
-      fs.unlinkSync(path.join(__dirname, 'public', section.image));
-    }
-
-    await db.collection('sections').deleteOne({ _id: new ObjectId(sectionId) });
-    logger.info('Розділ видалено', { sectionId, name: section.name, user: req.user });
-    res.json({ success: true });
-  } catch (error) {
-    logger.error('Помилка видалення розділу', { message: error.message, stack: error.stack });
-    res.status(500).json({ success: false, message: 'Помилка при видаленні розділу' });
-  } finally {
-    const endTime = Date.now();
-    logger.info('Маршрут /admin/delete-section/:id виконано', { duration: `${endTime - startTime} мс` });
-  }
-});
-
-// Пояснення: Новий маршрут `/admin/delete-section/:id` видаляє розділ, його зображення та пов’язані матеріали з файлової системи та бази даних.
-
-// Маршрут для керування користувачами
-app.get('/admin/users', checkAuth, checkAdmin, async (req, res) => {
-  const startTime = Date.now();
-  try {
-    const users = await db.collection('users').find({}).toArray();
-    const html = `
-      <!DOCTYPE html>
-      <html lang="uk">
-        <head>
-          <meta charset="UTF-8">
-          <meta name="viewport" content="width=device-width, initial-scale=1.0">
-          <title>Керування користувачами</title>
-          <style>
-            body { font-family: Arial, sans-serif; text-align: center; padding: 50px; }
-            table { border-collapse: collapse; width: 80%; margin: 20px auto; }
-            th, td { border: 1px solid black; padding: 8px; text-align: left; }
-            th { background-color: #f2f2f2; }
-            button { padding: 10px 20px; margin: 5px; cursor: pointer; border: none; border-radius: 5px; font-size: 16px; }
-            .delete-btn { background-color: #ef5350; color: white; }
-            .delete-btn:hover { background-color: #d32f2f; }
-            .back-btn { background-color: #007bff; color: white; }
-            .back-btn:hover { background-color: #0056b3; }
-            @media (max-width: 600px) {
-              table { width: 100%; font-size: 14px; }
-              button { width: 100%; font-size: 14px; }
-            }
-          </style>
-        </head>
-        <body>
-          <h1>Керування користувачами</h1>
-          <table>
-            <tr>
-              <th>Логін</th>
-              <th>Роль</th>
-              <th>Дії</th>
-            </tr>
-            ${users.map(user => `
-              <tr>
-                <td>${user.username}</td>
-                <td>${user.role}</td>
-                <td>
-                  ${user.username !== 'admin' ? `
-                    <button class="delete-btn" onclick="deleteUser('${user._id}')">Видалити</button>
-                  ` : ''}
-                </td>
-              </tr>
-            `).join('')}
-          </table>
-          <button class="back-btn" onclick="window.location.href='/admin'">Повернутися до адмін-панелі</button>
-          <script>
-            async function deleteUser(userId) {
-              if (!confirm('Ви впевнені, що хочете видалити цього користувача?')) return;
-              const formData = new URLSearchParams();
-              formData.append('_csrf', '${res.locals._csrf}');
-              try {
-                const response = await fetch('/admin/users/delete/' + userId, {
-                  method: 'POST',
-                  headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-                  body: formData
-                });
-                const result = await response.json();
-                if (result.success) {
-                  window.location.reload();
-                } else {
-                  alert('Помилка видалення: ' + result.message);
-                }
-              } catch (error) {
-                console.error('Помилка видалення:', error);
-                alert('Не вдалося видалити користувача.');
               }
             }
           </script>
-        </body>
-      </html>
-    `;
-    res.send(html);
-  } catch (error) {
-    logger.error('Помилка в /admin/users', { message: error.message, stack: error.stack });
-    res.status(500).send('Помилка при завантаженні сторінки керування користувачами');
-  } finally {
-    const endTime = Date.now();
-    logger.info('Маршрут /admin/users виконано', { duration: `${endTime - startTime} мс` });
-  }
-});
-
-// Видалення користувача
-app.post('/admin/users/delete/:id', checkAuth, checkAdmin, async (req, res) => {
-  const startTime = Date.now();
-  try {
-    const userId = req.params.id;
-    if (!ObjectId.isValid(userId)) {
-      return res.status(400).json({ success: false, message: 'Невірний ідентифікатор користувача' });
-    }
-
-    const user = await db.collection('users').findOne({ _id: new ObjectId(userId) });
-    if (!user) {
-      return res.status(404).json({ success: false, message: 'Користувача не знайдено' });
-    }
-    if (user.username === 'admin') {
-      return res.status(403).json({ success: false, message: 'Неможливо видалити головного адміністратора' });
-    }
-
-    await db.collection('users').deleteOne({ _id: new ObjectId(userId) });
-    await CacheManager.invalidateCache('users', null);
-    await loadUsersToCache();
-    logger.info('Користувача видалено', { userId, username: user.username });
-    res.json({ success: true });
-  } catch (error) {
-    logger.error('Помилка видалення користувача', { message: error.message, stack: error.stack });
-    res.status(500).json({ success: false, message: 'Помилка при видаленні користувача' });
-  } finally {
-    const endTime = Date.now();
-    logger.info('Маршрут /admin/users/delete/:id виконано', { duration: `${endTime - startTime} мс` });
-  }
-});
-
-// Маршрут для імпорту користувачів
-app.get('/admin/import-users', checkAuth, checkAdmin, (req, res) => {
-  const startTime = Date.now();
-  try {
-    const html = `
-      <!DOCTYPE html>
-      <html lang="uk">
-        <head>
-          <meta charset="UTF-8">
-          <meta name="viewport" content="width=device-width, initial-scale=1.0">
-          <title>Імпорт користувачів</title>
-          <style>
-            body { font-family: Arial, sans-serif; text-align: center; padding: 50px; }
-            input { margin: 10px; padding: 10px; font-size: 16px; }
-            button { padding: 10px 20px; margin: 5px; cursor: pointer; border: none; border-radius: 5px; font-size: 16px; }
-            .submit-btn { background-color: #4CAF50; color: white; }
-            .submit-btn:hover { background-color: #45a049; }
-            .back-btn { background-color: #007bff; color: white; }
-            .back-btn:hover { background-color: #0056b3; }
-            .error { color: red; }
-            @media (max-width: 600px) {
-              input { width: 90%; font-size: 14px; }
-              button { width: 90%; font-size: 14px; }
-            }
-          </style>
-        </head>
-        <body>
-          <h1>Імпорт користувачів</h1>
-          <form id="import-users-form" enctype="multipart/form-data">
-            <input type="hidden" name="_csrf" value="${res.locals._csrf}">
-            <input type="file" name="file" accept=".xlsx" required>
-            <button type="submit" class="submit-btn">Імпортувати</button>
-          </form>
-          <button class="back-btn" onclick="window.location.href='/admin'">Повернутися до адмін-панелі</button>
-          <div id="error-message" class="error"></div>
-          <script>
-            document.getElementById('import-users-form').addEventListener('submit', async (e) => {
-              e.preventDefault();
-              const form = e.target;
-              const formData = new FormData(form);
-              const errorMessage = document.getElementById('error-message');
-              const submitBtn = form.querySelector('.submit-btn');
-              submitBtn.disabled = true;
-              submitBtn.textContent = 'Імпортування...';
-              try {
-                const response = await fetch('/admin/import-users', {
-                  method: 'POST',
-                  body: formData
-                });
-                const result = await response.json();
-                if (result.success) {
-                  alert('Імпортовано ' + result.count + ' користувачів');
-                  window.location.href = '/admin/users';
-                } else {
-                  errorMessage.textContent = result.message || 'Помилка імпорту';
-                }
-              } catch (error) {
-                console.error('Помилка:', error);
-                errorMessage.textContent = 'Помилка: ' + error.message;
-              } finally {
-                submitBtn.disabled = false;
-                submitBtn.textContent = 'Імпортувати';
-              }
-            });
-          </script>
-        </body>
-      </html>
-    `;
-    res.send(html);
-  } catch (error) {
-    logger.error('Помилка в /admin/import-users', { message: error.message, stack: error.stack });
-    res.status(500).send('Помилка при завантаженні форми імпорту');
-  } finally {
-    const endTime = Date.now();
-    logger.info('Маршрут /admin/import-users виконано', { duration: `${endTime - startTime} мс` });
-  }
-});
-
-app.post('/admin/import-users', checkAuth, checkAdmin, upload.single('file'), async (req, res) => {
-  const startTime = Date.now();
-  try {
-    if (!req.file) {
-      return res.status(400).json({ success: false, message: 'Файл не надано' });
-    }
-    const count = await importUsersToMongoDB(req.file.buffer);
-    res.json({ success: true, count });
-  } catch (error) {
-    logger.error('Помилка імпорту користувачів', { message: error.message, stack: error.stack });
-    res.status(400).json({ success: false, message: error.message || 'Помилка імпорту користувачів' });
-  } finally {
-    const endTime = Date.now();
-    logger.info('Маршрут /admin/import-users (POST) виконано', { duration: `${endTime - startTime} мс` });
-  }
-});
-
-// Маршрут для імпорту питань
-app.get('/admin/import-questions', checkAuth, checkAdmin, async (req, res) => {
-  const startTime = Date.now();
-  try {
-    const html = `
-      <!DOCTYPE html>
-      <html lang="uk">
-        <head>
-          <meta charset="UTF-8">
-          <meta name="viewport" content="width=device-width, initial-scale=1.0">
-          <title>Імпорт питань</title>
-          <style>
-            body { font-family: Arial, sans-serif; text-align: center; padding: 50px; }
-            input, select { margin: 10px; padding: 10px; font-size: 16px; }
-            button { padding: 10px 20px; margin: 5px; cursor: pointer; border: none; border-radius: 5px; font-size: 16px; }
-            .submit-btn { background-color: #4CAF50; color: white; }
-            .submit-btn:hover { background-color: #45a049; }
-            .back-btn { background-color: #007bff; color: white; }
-            .back-btn:hover { background-color: #0056b3; }
-            .error { color: red; }
-            @media (max-width: 600px) {
-              input, select { width: 90%; font-size: 14px; }
-              button { width: 90%; font-size: 14px; }
-            }
-          </style>
-        </head>
-        <body>
-          <h1>Імпорт питань</h1>
-          <form id="import-questions-form" enctype="multipart/form-data">
-            <input type="hidden" name="_csrf" value="${res.locals._csrf}">
-            <select name="testNumber" required>
-              ${Object.keys(testNames).map(num => `
-                <option value="${num}">${testNames[num].name.replace(/"/g, '\\"')}</option>
-              `).join('')}
-            </select>
-            <input type="file" name="file" accept=".xlsx" required>
-            <button type="submit" class="submit-btn">Імпортувати</button>
-          </form>
-          <button class="back-btn" onclick="window.location.href='/admin'">Повернутися до адмін-панелі</button>
-          <div id="error-message" class="error"></div>
-          <script>
-            document.getElementById('import-questions-form').addEventListener('submit', async (e) => {
-              e.preventDefault();
-              const form = e.target;
-              const formData = new FormData(form);
-              const errorMessage = document.getElementById('error-message');
-              const submitBtn = form.querySelector('.submit-btn');
-              submitBtn.disabled = true;
-              submitBtn.textContent = 'Імпортування...';
-              try {
-                const response = await fetch('/admin/import-questions', {
-                  method: 'POST',
-                  body: formData
-                });
-                const result = await response.json();
-                if (result.success) {
-                  alert('Імпортовано ' + result.count + ' питань');
-                  window.location.href = '/admin/questions';
-                } else {
-                  errorMessage.textContent = result.message || 'Помилка імпорту';
-                }
-              } catch (error) {
-                console.error('Помилка:', error);
-                errorMessage.textContent = 'Помилка: ' + error.message;
-              } finally {
-                submitBtn.disabled = false;
-                submitBtn.textContent = 'Імпортувати';
-              }
-            });
-          </script>
-        </body>
-      </html>
-    `;
-    res.send(html);
-  } catch (error) {
-    logger.error('Помилка в /admin/import-questions', { message: error.message, stack: error.stack });
-    res.status(500).send('Помилка при завантаженні форми імпорту питань');
-  } finally {
-    const endTime = Date.now();
-    logger.info('Маршрут /admin/import-questions виконано', { duration: `${endTime - startTime} мс` });
-  }
-});
-
-app.post('/admin/import-questions', checkAuth, checkAdmin, upload.single('file'), async (req, res) => {
-  const startTime = Date.now();
-  try {
-    const testNumber = req.body.testNumber;
-    if (!testNumber || !testNames[testNumber]) {
-      return res.status(400).json({ success: false, message: 'Номер тесту не вказано або тест не існує' });
-    }
-    if (!req.file) {
-      return res.status(400).json({ success: false, message: 'Файл не надано' });
-    }
-    const count = await importQuestionsToMongoDB(req.file.buffer, testNumber);
-    await CacheManager.invalidateCache('questions', testNumber);
-    res.json({ success: true, count });
-  } catch (error) {
-    logger.error('Помилка імпорту питань', { message: error.message, stack: error.stack });
-    res.status(400).json({ success: false, message: error.message || 'Помилка імпорту питань' });
-  } finally {
-    const endTime = Date.now();
-    logger.info('Маршрут /admin/import-questions (POST) виконано', { duration: `${endTime - startTime} мс` });
-  }
-});
-
-// Маршрут для керування питаннями
-app.get('/admin/questions', checkAuth, checkAdmin, async (req, res) => {
-  const startTime = Date.now();
-  try {
-    const page = parseInt(req.query.page) || 1;
-    const limit = 20;
-    const skip = (page - 1) * limit;
-    const questions = await CacheManager.getAllQuestions();
-    const paginatedQuestions = questions.slice(skip, skip + limit);
-    const totalPages = Math.ceil(questions.length / limit);
-
-    const html = `
-      <!DOCTYPE html>
-      <html lang="uk">
-        <head>
-          <meta charset="UTF-8">
-          <meta name="viewport" content="width=device-width, initial-scale=1.0">
-          <title>Керування питаннями</title>
-          <style>
-            body { font-family: Arial, sans-serif; text-align: center; padding: 50px; }
-            table { border-collapse: collapse; width: 90%; margin: 20px auto; }
-            th, td { border: 1px solid black; padding: 8px; text-align: left; }
-            th { background-color: #f2f2f2; }
-            img { max-width: 100px; }
-            button { padding: 10px 20px; margin: 5px; cursor: pointer; border: none; border-radius: 5px; font-size: 16px; }
-            .delete-btn { background-color: #ef5350; color: white; }
-            .delete-btn:hover { background-color: #d32f2f; }
-            .back-btn { background-color: #007bff; color: white; }
-            .back-btn:hover { background-color: #0056b3; }
-            .pagination { margin-top: 20px; }
-            .pagination a { margin: 0 5px; padding: 5px 10px; background-color: #007bff; color: white; text-decoration: none; border-radius: 5px; }
-            .pagination a:hover { background-color: #0056b3; }
-            .options { max-width: 200px; overflow-wrap: break-word; }
-            .correct-answers { max-width: 200px; overflow-wrap: break-word; }
-            @media (max-width: 600px) {
-              table { width: 100%; font-size: 14px; }
-              button { width: 100%; font-size: 14px; }
-              img { max-width: 80px; }
-            }
-          </style>
-        </head>
-        <body>
-          <h1>Керування питаннями</h1>
-          <table>
-            <tr>
-              <th>Тест</th>
-              <th>Зображення</th>
-              <th>Питання</th>
-              <th>Тип</th>
-              <th>Варіанти</th>
-              <th>Правильні відповіді</th>
-              <th>Бали</th>
-              <th>Варіант</th>
-              <th>Дії</th>
-            </tr>
-            ${paginatedQuestions.map(q => `
-              <tr>
-                <td>${testNames[q.testNumber]?.name || q.testNumber}</td>
-                <td>${q.picture ? `<img src="${q.picture}" alt="Picture" onerror="this.style.display='none'">` : '-'}</td>
-                <td>${q.text.replace(/</g, '&lt;').replace(/>/g, '&gt;')}</td>
-                <td>${q.type}</td>
-                <td class="options">${q.options ? q.options.join(', ') : q.pairs ? q.pairs.map(p => p.left + ' -> ' + p.right).join(', ') : '-'}</td>
-                <td class="correct-answers">${q.correctAnswers ? q.correctAnswers.join(', ') : q.correctPairs ? q.correctPairs.map(p => p[0] + ' -> ' + p[1]).join(', ') : q.correctAnswer || '-'}</td>
-                <td>${q.points}</td>
-                <td>${q.variant || '-'}</td>
-                <td>
-                  <button class="delete-btn" onclick="deleteQuestion('${q._id}')">Видалити</button>
-                </td>
-              </tr>
-            `).join('')}
-          </table>
-          <div class="pagination">
-            ${page > 1 ? `<a href="/admin/questions?page=${page - 1}">Попередня</a>` : ''}
-            <span>Сторінка ${page} з ${totalPages}</span>
-            ${page < totalPages ? `<a href="/admin/questions?page=${page + 1}">Наступна</a>` : ''}
-          </div>
-          <button class="back-btn" onclick="window.location.href='/admin'">Повернутися до адмін-панелі</button>
-          <script>
-            async function deleteQuestion(questionId) {
-              if (!confirm('Ви впевнені, що хочете видалити це питання?')) return;
-              const formData = new URLSearchParams();
-              formData.append('_csrf', '${res.locals._csrf}');
-              try {
-                const response = await fetch('/admin/questions/delete/' + questionId, {
-                  method: 'POST',
-                  headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-                  body: formData
-                });
-                const result = await response.json();
-                if (result.success) {
-                  window.location.reload();
-                } else {
-                  alert('Помилка видалення: ' + result.message);
-                }
-              } catch (error) {
-                console.error('Помилка видалення:', error);
-                alert('Не вдалося видалити питання.');
-              }
-            }
-          </script>
-        </body>
-      </html>
-    `;
-    res.send(html);
-  } catch (error) {
-    logger.error('Помилка в /admin/questions', { message: error.message, stack: error.stack });
-    res.status(500).send('Помилка при завантаженні сторінки керування питаннями');
-  } finally {
-    const endTime = Date.now();
-    logger.info('Маршрут /admin/questions виконано', { duration: `${endTime - startTime} мс` });
-  }
-});
-
-app.post('/admin/questions/delete/:id', checkAuth, checkAdmin, async (req, res) => {
-  const startTime = Date.now();
-  try {
-    const questionId = req.params.id;
-    if (!ObjectId.isValid(questionId)) {
-      return res.status(400).json({ success: false, message: 'Невірний ідентифікатор питання' });
-    }
-
-    const question = await db.collection('questions').findOne({ _id: new ObjectId(questionId) });
-    if (!question) {
-      return res.status(404).json({ success: false, message: 'Питання не знайдено' });
-    }
-
-    await db.collection('questions').deleteOne({ _id: new ObjectId(questionId) });
-    await CacheManager.invalidateCache('questions', question.testNumber);
-    await CacheManager.invalidateCache('allQuestions', 'all');
-    logger.info('Питання видалено', { questionId, testNumber: question.testNumber });
-    res.json({ success: true });
-  } catch (error) {
-    logger.error('Помилка видалення питання', { message: error.message, stack: error.stack });
-    res.status(500).json({ success: false, message: 'Помилка при видаленні питання' });
-  } finally {
-    const endTime = Date.now();
-    logger.info('Маршрут /admin/questions/delete/:id виконано', { duration: `${endTime - startTime} мс` });
-  }
-});
-
-// Маршрут для перегляду результатів в адмін-панелі
-app.get('/admin/results', checkAuth, checkAdminOrInstructor, async (req, res) => {
-  const startTime = Date.now();
-  try {
-    const page = parseInt(req.query.page) || 1;
-    const limit = 20;
-    const skip = (page - 1) * limit;
-
-    let query = {};
-    if (req.userRole === 'instructor') {
-      query.user = { $ne: 'admin' };
-    }
-
-    const results = await db.collection('test_results')
-      .find(query)
-      .sort({ endTime: -1 })
-      .skip(skip)
-      .limit(limit)
-      .toArray();
-
-    const totalResults = await db.collection('test_results').countDocuments(query);
-    const totalPages = Math.ceil(totalResults / limit);
-
-    const html = `
-      <!DOCTYPE html>
-      <html lang="uk">
-        <head>
-          <meta charset="UTF-8">
-          <meta name="viewport" content="width=device-width, initial-scale=1.0">
-          <title>Результати тестів</title>
-          <style>
-            body { font-family: Arial, sans-serif; text-align: center; padding: 50px; }
-            table { border-collapse: collapse; width: 90%; margin: 20px auto; }
-            th, td { border: 1px solid black; padding: 8px; text-align: left; }
-            th { background-color: #f2f2f2; }
-            button { padding: 10px 20px; margin: 5px; cursor: pointer; border: none; border-radius: 5px; font-size: 16px; }
-            .back-btn { background-color: #007bff; color: white; }
-            .back-btn:hover { background-color: #0056b3; }
-            .pagination { margin-top: 20px; }
-            .pagination a { margin: 0 5px; padding: 5px 10px; background-color: #007bff; color: white; text-decoration: none; border-radius: 5px; }
-            .pagination a:hover { background-color: #0056b3; }
-            .answers { max-width: 300px; overflow-wrap: break-word; }
-            @media (max-width: 600px) {
-              table { width: 100%; font-size: 14px; }
-              button { width: 100%; font-size: 14px; }
-            }
-          </style>
-        </head>
-        <body>
-          <h1>Результати тестів</h1>
-          <table>
-            <tr>
-              <th>Користувач</th>
-              <th>Тест</th>
-              <th>Результат</th>
-              <th>Бали</th>
-              <th>Час завершення</th>
-              <th>Відповіді</th>
-            </tr>
-            ${results.map(r => `
-              <tr>
-                <td>${r.user}</td>
-                <td>${testNames[r.testNumber]?.name || r.testNumber}</td>
-                <td>${Math.round(r.percentage)}%</td>
-                <td>${r.score}/${r.totalPoints}</td>
-                <td>${new Date(r.endTime).toLocaleString('uk-UA')}</td>
-                <td class="answers">${Object.entries(r.answers).map(([q, a]) => `Питання ${parseInt(q) + 1}: ${Array.isArray(a) ? a.join(', ') : a}`).join('<br>')}</td>
-              </tr>
-            `).join('')}
-          </table>
-          <div class="pagination">
-            ${page > 1 ? `<a href="/admin/results?page=${page - 1}">Попередня</a>` : ''}
-            <span>Сторінка ${page} з ${totalPages}</span>
-            ${page < totalPages ? `<a href="/admin/results?page=${page + 1}">Наступна</a>` : ''}
-          </div>
-          <button class="back-btn" onclick="window.location.href='/admin'">Повернутися до адмін-панелі</button>
-        </body>
-      </html>
-    `;
-    res.send(html);
-  } catch (error) {
-    logger.error('Помилка в /admin/results', { message: error.message, stack: error.stack });
-    res.status(500).send('Помилка при завантаженні результатів');
-  } finally {
-    const endTime = Date.now();
-    logger.info('Маршрут /admin/results виконано', { duration: `${endTime - startTime} мс` });
-  }
-});
-
-// Маршрут для редагування назв тестів
-app.get('/admin/edit-tests', checkAuth, checkAdmin, async (req, res) => {
-  const startTime = Date.now();
-  try {
-    const tests = await db.collection('tests').find({}).toArray();
-    const html = `
-      <!DOCTYPE html>
-      <html lang="uk">
-        <head>
-          <meta charset="UTF-8">
-          <meta name="viewport" content="width=device-width, initial-scale=1.0">
-          <title>Редагувати тести</title>
-          <style>
-            body { font-family: Arial, sans-serif; text-align: center; padding: 50px; }
-            table { border-collapse: collapse; width: 80%; margin: 20px auto; }
-            th, td { border: 1px solid black; padding: 8px; text-align: left; }
-            th { background-color: #f2f2f2; }
-            input { padding: 5px; font-size: 16px; width: 100%; }
-            button { padding: 10px 20px; margin: 5px; cursor: pointer; border: none; border-radius: 5px; font-size: 16px; }
-            .save-btn { background-color: #4CAF50; color: white; }
-            .save-btn:hover { background-color: #45a049; }
-            .delete-btn { background-color: #ef5350; color: white; }
-            .delete-btn:hover { background-color: #d32f2f; }
-            .back-btn { background-color: #007bff; color: white; }
-            .back-btn:hover { background-color: #0056b3; }
-            .error { color: red; }
-            @media (max-width: 600px) {
-              table { width: 100%; font-size: 14px; }
-              input { font-size: 14px; }
-              button { width: 100%; font-size: 14px; }
-            }
-          </style>
-        </head>
-        <body>
-          <h1>Редагувати тести</h1>
-          <table>
-            <tr>
-              <th>Номер тесту</th>
-              <th>Назва</th>
-              <th>Ліміт часу (сек)</th>
-              <th>Випадкові питання</th>
-              <th>Випадкові відповіді</th>
-              <th>Ліміт питань</th>
-              <th>Ліміт спроб</th>
-              <th>Швидкий тест</th>
-              <th>Час на питання (сек)</th>
-              <th>Дії</th>
-            </tr>
-            ${tests.map(test => `
-              <tr>
-                <td>${test.testNumber}</td>
-                <td><input type="text" id="name_${test.testNumber}" value="${test.name.replace(/"/g, '\\"')}" data-test-number="${test.testNumber}"></td>
-                <td><input type="number" id="timeLimit_${test.testNumber}" value="${test.timeLimit}" data-test-number="${test.testNumber}"></td>
-                <td><input type="checkbox" id="randomQuestions_${test.testNumber}" ${test.randomQuestions ? 'checked' : ''} data-test-number="${test.testNumber}"></td>
-                <td><input type="checkbox" id="randomAnswers_${test.testNumber}" ${test.randomAnswers ? 'checked' : ''} data-test-number="${test.testNumber}"></td>
-                <td><input type="number" id="questionLimit_${test.testNumber}" value="${test.questionLimit || ''}" data-test-number="${test.testNumber}"></td>
-                <td><input type="number" id="attemptLimit_${test.testNumber}" value="${test.attemptLimit}" data-test-number="${test.testNumber}"></td>
-                <td><input type="checkbox" id="isQuickTest_${test.testNumber}" ${test.isQuickTest ? 'checked' : ''} data-test-number="${test.testNumber}"></td>
-                <td><input type="number" id="timePerQuestion_${test.testNumber}" value="${test.timePerQuestion || ''}" data-test-number="${test.testNumber}"></td>
-                <td>
-                  <button class="save-btn" onclick="saveTest('${test.testNumber}')">Зберегти</button>
-                  <button class="delete-btn" onclick="deleteTest('${test.testNumber}')">Видалити</button>
-                </td>
-              </tr>
-            `).join('')}
-          </table>
-          <button class="back-btn" onclick="window.location.href='/admin'">Повернутися до адмін-панелі</button>
-          <div id="error-message" class="error"></div>
-          <script>
-            async function saveTest(testNumber) {
-              const name = document.getElementById('name_' + testNumber).value;
-              const timeLimit = parseInt(document.getElementById('timeLimit_' + testNumber).value);
-              const randomQuestions = document.getElementById('randomQuestions_' + testNumber).checked;
-              const randomAnswers = document.getElementById('randomAnswers_' + testNumber).checked;
-              const questionLimit = parseInt(document.getElementById('questionLimit_' + testNumber).value) || null;
-              const attemptLimit = parseInt(document.getElementById('attemptLimit_' + testNumber).value);
-              const isQuickTest = document.getElementById('isQuickTest_' + testNumber).checked;
-              const timePerQuestion = parseInt(document.getElementById('timePerQuestion_' + testNumber).value) || null;
-              const errorMessage = document.getElementById('error-message');
-
-              if (!name || name.length > 100) {
-                errorMessage.textContent = 'Назва тесту має бути від 1 до 100 символів';
-                return;
-              }
-              if (timeLimit < 60 || isNaN(timeLimit)) {
-                errorMessage.textContent = 'Ліміт часу має бути не менше 60 секунд';
-                return;
-              }
-              if (attemptLimit < 1 || isNaN(attemptLimit)) {
-                errorMessage.textContent = 'Ліміт спроб має бути не менше 1';
-                return;
-              }
-              if (isQuickTest && (!timePerQuestion || timePerQuestion < 5)) {
-                errorMessage.textContent = 'Час на питання має бути не менше 5 секунд для швидкого тесту';
-                return;
-              }
-
-              const formData = new URLSearchParams();
-              formData.append('testNumber', testNumber);
-              formData.append('name', name);
-              formData.append('timeLimit', timeLimit);
-              formData.append('randomQuestions', randomQuestions);
-              formData.append('randomAnswers', randomAnswers);
-              formData.append('questionLimit', questionLimit || '');
-              formData.append('attemptLimit', attemptLimit);
-              formData.append('isQuickTest', isQuickTest);
-              formData.append('timePerQuestion', timePerQuestion || '');
-              formData.append('_csrf', '${res.locals._csrf}');
-
-              try {
-                const response = await fetch('/admin/edit-tests', {
-                  method: 'POST',
-                  headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-                  body: formData
-                });
-                const result = await response.json();
-                if (result.success) {
-                  window.location.reload();
-                } else {
-                  errorMessage.textContent = result.message || 'Помилка збереження тесту';
-                }
-              } catch (error) {
-                console.error('Помилка:', error);
-                errorMessage.textContent = 'Помилка: ' + error.message;
-              }
-            }
-
-            async function deleteTest(testNumber) {
-              if (!confirm('Ви впевнені, що хочете видалити цей тест?')) return;
-              const formData = new URLSearchParams();
-              formData.append('_csrf', '${res.locals._csrf}');
-              try {
-                const response = await fetch('/admin/delete-test/' + testNumber, {
-                  method: 'POST',
-                  headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-                  body: formData
-                });
-                const result = await response.json();
-                if (result.success) {
-                  window.location.reload();
-                } else {
-                  alert('Помилка видалення: ' + result.message);
-                }
-              } catch (error) {
-                console.error('Помилка видалення:', error);
-                alert('Не вдалося видалити тест.');
-              }
-            }
-          </script>
-        </body>
-      </html>
-    `;
-    res.send(html);
-  } catch (error) {
-    logger.error('Помилка в /admin/edit-tests', { message: error.message, stack: error.stack });
-    res.status(500).send('Помилка при завантаженні сторінки редагування тестів');
-  } finally {
-    const endTime = Date.now();
-    logger.info('Маршрут /admin/edit-tests виконано', { duration: `${endTime - startTime} мс` });
-  }
-});
-
-app.post('/admin/edit-tests', checkAuth, checkAdmin, async (req, res) => {
-  const startTime = Date.now();
-  try {
-    const { testNumber, name, timeLimit, randomQuestions, randomAnswers, questionLimit, attemptLimit, isQuickTest, timePerQuestion } = req.body;
-
-    if (!testNumber || !name || name.length > 100) {
-      return res.status(400).json({ success: false, message: 'Невірна назва тесту або номер' });
-    }
-    if (parseInt(timeLimit) < 60) {
-      return res.status(400).json({ success: false, message: 'Ліміт часу має бути не менше 60 секунд' });
-    }
-    if (parseInt(attemptLimit) < 1) {
-      return res.status(400).json({ success: false, message: 'Ліміт спроб має бути не менше 1' });
-    }
-    if (isQuickTest === 'true' && (!timePerQuestion || parseInt(timePerQuestion) < 5)) {
-      return res.status(400).json({ success: false, message: 'Час на питання має бути не менше 5 секунд' });
-    }
-
-    const testData = {
-      name,
-      timeLimit: parseInt(timeLimit),
-      randomQuestions: randomQuestions === 'true',
-      randomAnswers: randomAnswers === 'true',
-      questionLimit: questionLimit ? parseInt(questionLimit) : null,
-      attemptLimit: parseInt(attemptLimit),
-      isQuickTest: isQuickTest === 'true',
-      timePerQuestion: timePerQuestion ? parseInt(timePerQuestion) : null
-    };
-
-    await saveTestToMongoDB(testNumber, testData);
-    await loadTestsFromMongoDB();
-    res.json({ success: true });
-  } catch (error) {
-    logger.error('Помилка збереження тесту', { message: error.message, stack: error.stack });
-    res.status(500).json({ success: false, message: 'Помилка при збереженні тесту' });
-  } finally {
-    const endTime = Date.now();
-    logger.info('Маршрут /admin/edit-tests (POST) виконано', { duration: `${endTime - startTime} мс` });
-  }
-});
-
-app.post('/admin/delete-test/:testNumber', checkAuth, checkAdmin, async (req, res) => {
-  const startTime = Date.now();
-  try {
-    const testNumber = req.params.testNumber;
-    if (!testNames[testNumber]) {
-      return res.status(404).json({ success: false, message: 'Тест не знайдено' });
-    }
-
-    // Видаляємо тест із усіх розділів
-    await db.collection('sections').updateMany(
-      { tests: testNumber },
-      { $pull: { tests: testNumber } }
-    );
-
-    await deleteTestFromMongoDB(testNumber);
-    await db.collection('questions').deleteMany({ testNumber });
-    await CacheManager.invalidateCache('questions', testNumber);
-    await CacheManager.invalidateCache('allQuestions', 'all');
-    await loadTestsFromMongoDB();
-    logger.info('Тест видалено', { testNumber });
-    res.json({ success: true });
-  } catch (error) {
-    logger.error('Помилка видалення тесту', { message: error.message, stack: error.stack });
-    res.status(500).json({ success: false, message: 'Помилка при видаленні тесту' });
-  } finally {
-    const endTime = Date.now();
-    logger.info('Маршрут /admin/delete-test/:testNumber виконано', { duration: `${endTime - startTime} мс` });
-  }
-});
-
-// Маршрут для створення нового тесту
-app.get('/admin/create-test', checkAuth, checkAdmin, (req, res) => {
-  const startTime = Date.now();
-  try {
-    const html = `
-      <!DOCTYPE html>
-      <html lang="uk">
-        <head>
-          <meta charset="UTF-8">
-          <meta name="viewport" content="width=device-width, initial-scale=1.0">
-          <title>Створити новий тест</title>
-          <style>
-            body { font-family: Arial, sans-serif; text-align: center; padding: 50px; }
-            input, select { margin: 10px; padding: 10px; font-size: 16px; width: 300px; }
-            button { padding: 10px 20px; margin: 5px; cursor: pointer; border: none; border-radius: 5px; font-size: 16px; }
-            .submit-btn { background-color: #4CAF50; color: white; }
-            .submit-btn:hover { background-color: #45a049; }
-            .back-btn { background-color: #007bff; color: white; }
-            .back-btn:hover { background-color: #0056b3; }
-            .error { color: red; }
-            @media (max-width: 600px) {
-              input, select { width: 90%; font-size: 14px; }
-              button { width: 90%; font-size: 14px; }
-            }
-          </style>
-        </head>
-        <body>
-          <h1>Створити новий тест</h1>
-          <form id="create-test-form">
-            <input type="hidden" name="_csrf" value="${res.locals._csrf}">
-            <input type="text" name="name" placeholder="Назва тесту" required><br>
-            <input type="number" name="timeLimit" placeholder="Ліміт часу (сек)" required><br>
-            <label><input type="checkbox" name="randomQuestions"> Випадкові питання</label><br>
-            <label><input type="checkbox" name="randomAnswers"> Випадкові відповіді</label><br>
-            <input type="number" name="questionLimit" placeholder="Ліміт питань (необов’язково)"><br>
-            <input type="number" name="attemptLimit" placeholder="Ліміт спроб" required><br>
-            <label><input type="checkbox" name="isQuickTest"> Швидкий тест</label><br>
-            <input type="number" name="timePerQuestion" placeholder="Час на питання (сек, для швидкого тесту)"><br>
-            <button type="submit" class="submit-btn">Створити</button>
-          </form>
-          <button class="back-btn" onclick="window.location.href='/admin'">Повернутися до адмін-панелі</button>
-          <div id="error-message" class="error"></div>
-          <script>
-            document.getElementById('create-test-form').addEventListener('submit', async (e) => {
-              e.preventDefault();
-              const form = e.target;
-              const formData = new URLSearchParams(new FormData(form));
-              const errorMessage = document.getElementById('error-message');
-              const submitBtn = form.querySelector('.submit-btn');
-              submitBtn.disabled = true;
-              submitBtn.textContent = 'Створення...';
-              try {
-                const response = await fetch('/admin/create-test', {
-                  method: 'POST',
-                  headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-                  body: formData
-                });
-                const result = await response.json();
-                if (result.success) {
-                  window.location.href = '/admin/edit-tests';
-                } else {
-                  errorMessage.textContent = result.message || 'Помилка створення тесту';
-                }
-              } catch (error) {
-                console.error('Помилка:', error);
-                errorMessage.textContent = 'Помилка: ' + error.message;
-              } finally {
-                submitBtn.disabled = false;
-                submitBtn.textContent = 'Створити';
-              }
-            });
-          </script>
-        </body>
-      </html>
-    `;
-    res.send(html);
-  } catch (error) {
-    logger.error('Помилка в /admin/create-test', { message: error.message, stack: error.stack });
-    res.status(500).send('Помилка при завантаженні форми створення тесту');
-  } finally {
-    const endTime = Date.now();
-    logger.info('Маршрут /admin/create-test виконано', { duration: `${endTime - startTime} мс` });
-  }
-});
-
-app.post('/admin/create-test', checkAuth, checkAdmin, async (req, res) => {
-  const startTime = Date.now();
-  try {
-    const { name, timeLimit, randomQuestions, randomAnswers, questionLimit, attemptLimit, isQuickTest, timePerQuestion } = req.body;
-
-    if (!name || name.length > 100) {
-      return res.status(400).json({ success: false, message: 'Назва тесту має бути від 1 до 100 символів' });
-    }
-    if (parseInt(timeLimit) < 60) {
-      return res.status(400).json({ success: false, message: 'Ліміт часу має бути не менше 60 секунд' });
-    }
-    if (parseInt(attemptLimit) < 1) {
-      return res.status(400).json({ success: false, message: 'Ліміт спроб має бути не менше 1' });
-    }
-    if (isQuickTest === 'true' && (!timePerQuestion || parseInt(timePerQuestion) < 5)) {
-      return res.status(400).json({ success: false, message: 'Час на питання має бути не менше 5 секунд' });
-    }
-
-    const existingTests = await db.collection('tests').find({}).toArray();
-    const newTestNumber = (Math.max(...existingTests.map(t => parseInt(t.testNumber)), 0) + 1).toString();
-
-    const testData = {
-      name,
-      timeLimit: parseInt(timeLimit),
-      randomQuestions: randomQuestions === 'true',
-      randomAnswers: randomAnswers === 'true',
-      questionLimit: questionLimit ? parseInt(questionLimit) : null,
-      attemptLimit: parseInt(attemptLimit),
-      isQuickTest: isQuickTest === 'true',
-      timePerQuestion: timePerQuestion ? parseInt(timePerQuestion) : null
-    };
-
-    await saveTestToMongoDB(newTestNumber, testData);
-    await loadTestsFromMongoDB();
-    res.json({ success: true });
-  } catch (error) {
-    logger.error('Помилка створення тесту', { message: error.message, stack: error.stack });
-    res.status(500).json({ success: false, message: 'Помилка при створенні тесту' });
-  } finally {
-    const endTime = Date.now();
-    logger.info('Маршрут /admin/create-test (POST) виконано', { duration: `${endTime - startTime} мс` });
-  }
-});
-
-// Маршрут для журналу дій
-app.get('/admin/activity-log', checkAuth, checkAdmin, async (req, res) => {
-  const startTime = Date.now();
-  try {
-    const page = parseInt(req.query.page) || 1;
-    const limit = 20;
-    const skip = (page - 1) * limit;
-
-    const logs = await db.collection('activity_log')
-      .find({})
-      .sort({ timestamp: -1 })
-      .skip(skip)
-      .limit(limit)
-      .toArray();
-
-    const totalLogs = await db.collection('activity_log').countDocuments();
-    const totalPages = Math.ceil(totalLogs / limit);
-
-    const html = `
-      <!DOCTYPE html>
-      <html lang="uk">
-        <head>
-          <meta charset="UTF-8">
-          <meta name="viewport" content="width=device-width, initial-scale=1.0">
-          <title>Журнал дій</title>
-          <style>
-            body { font-family: Arial, sans-serif; text-align: center; padding: 50px; }
-            table { border-collapse: collapse; width: 90%; margin: 20px auto; }
-            th, td { border: 1px solid black; padding: 8px; text-align: left; }
-            th { background-color: #f2f2f2; }
-            button { padding: 10px 20px; margin: 5px; cursor: pointer; border: none; border-radius: 5px; font-size: 16px; }
-            .back-btn { background-color: #007bff; color: white; }
-            .back-btn:hover { background-color: #0056b3; }
-            .pagination { margin-top: 20px; }
-            .pagination a { margin: 0 5px; padding: 5px 10px; background-color: #007bff; color: white; text-decoration: none; border-radius: 5px; }
-            .pagination a:hover { background-color: #0056b3; }
-            .details { max-width: 300px; overflow-wrap: break-word; }
-            @media (max-width: 600px) {
-              table { width: 100%; font-size: 14px; }
-              button { width: 100%; font-size: 14px; }
-            }
-          </style>
-        </head>
-        <body>
-          <h1>Журнал дій</h1>
-          <table>
-            <tr>
-              <th>Користувач</th>
-              <th>Дія</th>
-              <th>Час</th>
-              <th>IP-адреса</th>
-              <th>Деталі</th>
-            </tr>
-            ${logs.map(log => `
-              <tr>
-                <td>${log.user}</td>
-                <td>${log.action}</td>
-                <td>${new Date(log.timestamp).toLocaleString('uk-UA')}</td>
-                <td>${log.ipAddress}</td>
-                <td class="details">${JSON.stringify(log.additionalInfo || {}, null, 2).replace(/"/g, '&quot;')}</td>
-              </tr>
-            `).join('')}
-          </table>
-          <div class="pagination">
-            ${page > 1 ? `<a href="/admin/activity-log?page=${page - 1}">Попередня</a>` : ''}
-            <span>Сторінка ${page} з ${totalPages}</span>
-            ${page < totalPages ? `<a href="/admin/activity-log?page=${page + 1}">Наступна</a>` : ''}
-          </div>
-          <button class="back-btn" onclick="window.location.href='/admin'">Повернутися до адмін-панелі</button>
         </body>
       </html>
     `;
@@ -6166,19 +6529,18 @@ app.get('/admin/activity-log', checkAuth, checkAdmin, async (req, res) => {
     logger.error('Помилка в /admin/activity-log', { message: error.message, stack: error.stack });
     res.status(500).send('Помилка при завантаженні журналу дій');
   } finally {
-    const endTime = Date.now();
-    logger.info('Маршрут /admin/activity-log виконано', { duration: `${endTime - startTime} мс` });
+    logger.info('Маршрут /admin/activity-log виконано', { duration: `${Date.now() - startTime} мс` });
   }
+});
+
+// Middleware для обробки помилок
+app.use((err, req, res, next) => {
+  logger.error('Неперехоплена помилка', { message: err.message, stack: err.stack });
+  res.status(500).send('Щось пішло не так! Спробуйте ще раз або зверніться до адміністратора.');
 });
 
 // Запуск сервера
 const port = process.env.PORT || 3000;
 app.listen(port, () => {
   logger.info(`Сервер запущено на порту ${port}`);
-});
-
-// Обробка помилок
-app.use((err, req, res, next) => {
-  logger.error('Неперехоплена помилка', { message: err.message, stack: err.stack, url: req.url });
-  res.status(500).send('Внутрішня помилка сервера');
 });
