@@ -614,6 +614,13 @@ const initializeServer = async () => {
   try {
     logger.info('Початок ініціалізації сервера');
 
+    // Перевірка змінної MONGODB_URI
+    if (!process.env.MONGODB_URI) {
+      logger.error('MONGODB_URI не визначено');
+      throw new Error('MONGODB_URI не визначено');
+    }
+    logger.info('MONGODB_URI знайдено', { uri: process.env.MONGODB_URI.substring(0, 30) + '...' });
+
     // Підключення до MongoDB
     logger.info('Спроба підключення до MongoDB');
     await connectToMongoDB();
