@@ -954,7 +954,7 @@ app.post('/login', [
     logger.info('Сесія перевірена', { sessionID: req.sessionID });
 
     // Перевірка CSRF-токена
-    const csrfToken: string = (req.body && req.body._csrf) || (req.headers && (req.headers['x-csrf-token'] || req.headers['xsrf-token'])) || '';
+    const csrfToken = (req.body && req.body._csrf) || (req.headers && (req.headers['x-csrf-token'] || req.headers['xsrf-token'])) || '';
     logger.info('Отримано CSRF-токен', { csrfToken, body: req.body, headers: req.headers });
     if (!csrfToken || csrfToken !== res.locals._csrf) {
       logger.error('Невірний або відсутній CSRF-токен', { received: csrfToken, expected: res.locals._csrf });
@@ -1026,7 +1026,7 @@ app.post('/login', [
       return res.status(500).json({ success: false, message: 'Помилка конфігурації сервера' });
     }
 
-    const jwtToken: string = jwt.sign(
+    const jwtToken = jwt.sign(
       { username: foundUser.username, role: foundUser.role },
       jwtSecret,
       { expiresIn: '24h' }
