@@ -15,6 +15,7 @@ const winston = require('winston'); // Логування
 const session = require('express-session'); // Управління сесіями
 const MongoStore = require('connect-mongo'); // Зберігання сесій у MongoDB
 const { createClient } = require('@vercel/blob'); // Імпорт createClient з @vercel/blob
+const { blob } = require('@vercel/blob');
 
 // Ініціалізація Express-додатку
 const app = express();
@@ -44,14 +45,16 @@ const upload = multer({
 });
 
 // Ініціалізація клієнта Vercel Blob
-const blob = createClient({
-  token: process.env.BLOB_READ_WRITE_TOKEN, // Токен з Vercel Dashboard
-});
+const blobClient = blob; // Використовуємо прямий доступ до blob, якщо createClient не підтримується
+// Переконайтеся, що токен додано в .env
+if (!process.env.BLOB_READ_WRITE_TOKEN) {
+  logger.error('BLOB_READ_WRITE_TOKEN не знайдено в змінних середовища');
+  process.exit(1);
+}
 
-// Налаштування multer для матеріалів з використанням memoryStorage (для завантаження в пам’ять перед Blob)
+// Налаштування multer для матеріалів з використанням memoryStorage
 const materialStorage = multer.memoryStorage(); // Використовуємо memoryStorage для тимчасового зберігання в пам’яті
 
-// Ініціалізація uploadMaterial з фільтрами та лімітом
 const uploadMaterial = multer({
   storage: materialStorage,
   limits: { fileSize: 10 * 1024 * 1024 }, // Ліміт 10MB
@@ -1365,8 +1368,9 @@ app.post('/admin/upload-material', checkAuth, async (req, res) => {
       }
 
       // Завантаження файлу в Vercel Blob
-      const blobResult = await blob.upload(req.file.originalname, req.file.buffer, {
+      const blobResult = await blobClient.upload(req.file.originalname, req.file.buffer, {
         access: 'public', // Файл буде доступний публічно
+        token: process.env.BLOB_READ_WRITE_TOKEN, // Передача токена
       });
 
       const fileUrl = blobResult.url; // URL завантаженого файлу
