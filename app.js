@@ -1,29 +1,41 @@
-// Імпорт необхідних модулів
-require('dotenv').config(); // Завантаження змінних середовища з .env файлу
-const express = require('express'); // Фреймворк для створення веб-додатку
-const cookieParser = require('cookie-parser'); // Парсинг cookies
-const path = require('path'); // Робота з шляхами до файлів
-const ExcelJS = require('exceljs'); // Робота з Excel-файлами
-const { MongoClient, ObjectId } = require('mongodb'); // Клієнт MongoDB та ObjectId для роботи з ID
-const bcrypt = require('bcrypt'); // Хешування паролів
-const fs = require('fs'); // Робота з файловою системою
-const multer = require('multer'); // Завантаження файлів
-const nodemailer = require('nodemailer'); // Відправка email
-const { body, validationResult } = require('express-validator'); // Валідація вхідних даних
-const jwt = require('jsonwebtoken'); // Робота з JWT-токенами
-const winston = require('winston'); // Логування
-const session = require('express-session'); // Управління сесіями
-const MongoStore = require('connect-mongo'); // Зберігання сесій у MongoDB
-const { createClient } = require('@vercel/blob'); // Імпорт createClient з @vercel/blob
+// Імпорт модулів
+// dotenv - завантажує змінні середовища з файлу .env для конфігурації
+// express - основний фреймворк для створення веб-сервера
+// multer - обробка завантаження файлів
+// winston - бібліотека для логування
+// mongodb - клієнт для роботи з MongoDB
+// bcrypt - хешування паролів
+// fs - робота з файловою системою
+// nodemailer - відправка email
+// express-validator - валідація вхідних даних
+// jwt - генерація та перевірка JSON Web Token
+// cookie-parser - парсинг HTTP cookies
+// path - утиліти для роботи з шляхами файлів
+// session і connect-mongo - управління сесіями з збереженням у MongoDB
+// @vercel/blob - хмарне сховище для файлів на Vercel
+require('dotenv').config();
+const express = require('express');
+const multer = require('multer');
+const winston = require('winston');
+const { MongoClient, ObjectId } = require('mongodb');
+const bcrypt = require('bcrypt');
+const fs = require('fs');
+const nodemailer = require('nodemailer');
+const { body, validationResult } = require('express-validator');
+const jwt = require('jsonwebtoken');
+const cookieParser = require('cookie-parser');
+const path = require('path');
+const session = require('express-session');
+const MongoStore = require('connect-mongo');
 const { blob } = require('@vercel/blob');
 
-// Ініціалізація Express-додатку
+// Створення екземпляра Express-додатку
 const app = express();
 
-// Увімкнення довіри до проксі для коректної роботи за проксі-серверами
+// Налаштування довіри до проксі для коректної роботи заголовків (наприклад, при використанні Vercel)
 app.set('trust proxy', 1);
 
-// Налаштування логування
+// Налаштування логування з виводом у консоль і файли
 const logger = winston.createLogger({
   level: 'info',
   format: winston.format.combine(
@@ -31,49 +43,33 @@ const logger = winston.createLogger({
     winston.format.json()
   ),
   transports: [
-    new winston.transports.File({ filename: 'error.log', level: 'error' }), // Логи помилок
-    new winston.transports.File({ filename: 'combined.log' }), // Всі логи
-    new winston.transports.Console() // Вивід у консоль
+    new winston.transports.File({ filename: 'error.log', level: 'error' }),
+    new winston.transports.File({ filename: 'combined.log' }),
+    new winston.transports.Console()
   ]
 });
 
-// Налаштування multer для імпорту файлів (Excel)
-const storage = multer.memoryStorage();
-const upload = multer({
-  storage: storage,
-  limits: { fileSize: 4 * 1024 * 1024 } // Ліміт 4MB
-});
-
-// Ініціалізація клієнта Vercel Blob
-const blobClient = blob; // Використовуємо прямий доступ до blob, якщо createClient не підтримується
-// Переконайтеся, що токен додано в .env
-if (!process.env.BLOB_READ_WRITE_TOKEN) {
-  logger.error('BLOB_READ_WRITE_TOKEN не знайдено в змінних середовища');
-  process.exit(1);
-}
-
-// Налаштування multer для матеріалів з використанням memoryStorage
-const materialStorage = multer.memoryStorage(); // Використовуємо memoryStorage для тимчасового зберігання в пам’яті
-
+// Налаштування multer для роботи з файлами в пам’яті (memoryStorage), оскільки Vercel має read-only файлову систему
+const materialStorage = multer.memoryStorage();
 const uploadMaterial = multer({
   storage: materialStorage,
-  limits: { fileSize: 10 * 1024 * 1024 }, // Ліміт 10MB
+  limits: { fileSize: 10 * 1024 * 1024 }, // Ліміт розміру файлу - 10MB
   fileFilter: (req, file, cb) => {
-    const allowedTypes = ['application/pdf', 'image/jpeg', 'image/png', 'text/plain'];
+    const allowedTypes = ['application/pdf', 'image/jpeg', 'image/png', 'text/plain']; // Дозволені типи файлів
     if (allowedTypes.includes(file.mimetype)) {
-      cb(null, true);
+      cb(null, true); // Дозволяємо завантаження
     } else {
-      cb(new Error('Дозволені формати: PDF, JPEG, PNG, TXT'));
+      cb(new Error('Дозволені формати: PDF, JPEG, PNG, TXT')); // Повідомлення про помилку
     }
   }
 });
 
-// Налаштування nodemailer для відправки email
+// Налаштування nodemailer для відправки email про підозрілу активність
 const transporter = nodemailer.createTransport({
   service: 'gmail',
   auth: {
-    user: process.env.EMAIL_USER || 'alphacentertest@gmail.com',
-    pass: process.env.EMAIL_PASS || 'xfcd cvkl xiii qhtl'
+    user: process.env.EMAIL_USER || 'alphacentertest@gmail.com', // Email для відправки
+    pass: process.env.EMAIL_PASS || 'xfcd cvkl xiii qhtl' // Пароль додатку для email
   }
 });
 
@@ -84,13 +80,7 @@ const sendSuspiciousActivityEmail = async (user, activityDetails) => {
       from: process.env.EMAIL_USER,
       to: process.env.EMAIL_USER,
       subject: 'Підозріла активність',
-      text: `
-        Користувач: ${user}
-        Час поза вкладкою: ${activityDetails.timeAwayPercent}%
-        Переключення вкладок: ${activityDetails.switchCount}
-        Середній час відповіді (сек): ${activityDetails.avgResponseTime}
-        Загальна кількість дій: ${activityDetails.totalActivityCount}
-      `
+      text: `Користувач: ${user}\nЧас поза вкладкою: ${activityDetails.timeAwayPercent}%\nПереключення вкладок: ${activityDetails.switchCount}\nСередній час відповіді (сек): ${activityDetails.avgResponseTime}\nЗагальна кількість дій: ${activityDetails.totalActivityCount}`
     };
     await transporter.sendMail(mailOptions);
     logger.info(`Email відправлено для ${user}`);
@@ -99,26 +89,22 @@ const sendSuspiciousActivityEmail = async (user, activityDetails) => {
   }
 };
 
-// Конфігурація для підозрілої активності
+// Конфігурація для виявлення підозрілої активності
 const config = {
   suspiciousActivity: {
-    timeAwayThreshold: 50,
-    switchCountThreshold: 5
+    timeAwayThreshold: 50, // Поріг часу поза вкладкою в %
+    switchCountThreshold: 5 // Поріг кількості переключень вкладок
   }
 };
 
 // Налаштування підключення до MongoDB
 const MONGODB_URI = process.env.MONGODB_URI || 'mongodb+srv://romanhaleckij7:DNMaH9w2X4gel3Xc@cluster0.r93r1p8.mongodb.net/alpha?retryWrites=true&w=majority';
-const client = new MongoClient(MONGODB_URI, {
-  connectTimeoutMS: 5000,
-  serverSelectionTimeoutMS: 5000
-});
+const client = new MongoClient(MONGODB_URI, { connectTimeoutMS: 5000, serverSelectionTimeoutMS: 5000 });
 let db;
 
 // Клас для кешування даних
 class CacheManager {
   static cache = {};
-
   static async getOrFetch(key, testNumber, fetchFn) {
     const cacheKey = `${key}:${testNumber}`;
     if (this.cache[cacheKey]) {
@@ -132,19 +118,16 @@ class CacheManager {
     logger.info(`Оновлено кеш ${key} за ${Date.now() - startTime} мс`);
     return data;
   }
-
   static async invalidateCache(key, testNumber) {
     const cacheKey = `${key}:${testNumber}`;
     delete this.cache[cacheKey];
     logger.info(`Інвалідовано кеш ${cacheKey}`);
   }
-
   static async getQuestions(testNumber) {
     return await this.getOrFetch('questions', testNumber, async () => {
       return await db.collection('questions').find({ testNumber }).sort({ order: 1 }).toArray();
     });
   }
-
   static async getAllQuestions() {
     return await this.getOrFetch('allQuestions', 'all', async () => {
       return await db.collection('questions').find({}).sort({ order: 1 }).toArray();
@@ -152,7 +135,7 @@ class CacheManager {
   }
 }
 
-// Ініціалізація кешів та змінних
+// Глобальні змінні для кешу
 let userCache = [];
 const questionsCache = {};
 let isInitialized = false;
@@ -160,7 +143,7 @@ let initializationError = null;
 let testNames = {};
 let sectionNames = {};
 
-// Підключення до MongoDB із повторними спробами
+// Функція підключення до MongoDB із повторними спробами
 const connectToMongoDB = async (attempt = 1, maxAttempts = 3) => {
   try {
     logger.info(`Спроба підключення до MongoDB (${attempt}/${maxAttempts})`);
@@ -178,7 +161,7 @@ const connectToMongoDB = async (attempt = 1, maxAttempts = 3) => {
   }
 };
 
-// Завантаження тестів із MongoDB
+// Функція завантаження тестів із MongoDB
 const loadTestsFromMongoDB = async () => {
   try {
     const tests = await db.collection('tests').find({}).toArray();
@@ -186,7 +169,7 @@ const loadTestsFromMongoDB = async () => {
     tests.forEach(test => {
       testNames[test.testNumber] = {
         name: test.name,
-        sectionId: test.sectionId || null, // Додано поле sectionId
+        sectionId: test.sectionId || null,
         timeLimit: test.timeLimit,
         randomQuestions: test.randomQuestions,
         randomAnswers: test.randomAnswers,
@@ -203,7 +186,7 @@ const loadTestsFromMongoDB = async () => {
   }
 };
 
-// Завантаження розділів із MongoDB
+// Функція завантаження розділів із MongoDB
 const loadSectionsFromMongoDB = async () => {
   try {
     const sections = await db.collection('sections').find({}).toArray();
@@ -221,7 +204,7 @@ const loadSectionsFromMongoDB = async () => {
   }
 };
 
-// Збереження тесту в MongoDB
+// Функція збереження тесту в MongoDB
 const saveTestToMongoDB = async (testNumber, testData) => {
   try {
     await db.collection('tests').updateOne(
@@ -247,7 +230,7 @@ const saveTestToMongoDB = async (testNumber, testData) => {
   }
 };
 
-// Видалення тесту з MongoDB
+// Функція видалення тесту з MongoDB
 const deleteTestFromMongoDB = async (testNumber) => {
   try {
     await db.collection('tests').deleteOne({ testNumber });
@@ -258,30 +241,25 @@ const deleteTestFromMongoDB = async (testNumber) => {
   }
 };
 
-// Middleware
-app.use(express.urlencoded({ extended: true }));
-app.use(express.json());
-app.use(express.static(path.join(__dirname, 'public')));
-app.use(cookieParser());
+// Middleware для обробки запитів
+app.use(express.urlencoded({ extended: true })); // Парсинг URL-закодованої форми
+app.use(express.json()); // Парсинг JSON-запитів
+app.use(express.static(path.join(__dirname, 'public'))); // Статичні файли з папки public
+app.use(cookieParser()); // Парсинг cookies
 
-// Налаштування сесій
+// Налаштування сесій із збереженням у MongoDB
 app.use(session({
-  secret: process.env.SESSION_SECRET || 'your-secret-key',
-  resave: false,
-  saveUninitialized: false,
-  store: MongoStore.create({
-    client: client,
-    dbName: 'alpha',
-    collectionName: 'sessions',
-    ttl: 24 * 60 * 60
-  }).on('error', (error) => {
+  secret: process.env.SESSION_SECRET || 'your-secret-key', // Секретний ключ для сесій
+  resave: false, // Не перезберігати сесію, якщо вона не змінилася
+  saveUninitialized: false, // Не створювати сесію, якщо вона не ініціалізована
+  store: MongoStore.create({ client, dbName: 'alpha', collectionName: 'sessions', ttl: 24 * 60 * 60 }).on('error', (error) => {
     logger.error('Помилка MongoStore', { message: error.message, stack: error.stack });
   }),
   cookie: {
-    secure: process.env.NODE_ENV === 'production',
-    httpOnly: true,
-    sameSite: process.env.NODE_ENV === 'production' ? 'none' : 'lax',
-    maxAge: 24 * 60 * 60 * 1000
+    secure: process.env.NODE_ENV === 'production', // Безпека cookie тільки для HTTPS
+    httpOnly: true, // Захист від доступу через JavaScript
+    sameSite: process.env.NODE_ENV === 'production' ? 'none' : 'lax', // Політика SameSite
+    maxAge: 24 * 60 * 60 * 1000 // Тривалість сесії - 24 години
   }
 }));
 
@@ -291,13 +269,13 @@ app.use((req, res, next) => {
   next();
 });
 
-// Логування запитів
+// Логування вхідних запитів
 app.use((req, res, next) => {
   logger.info('Запит отримано', { url: req.url, method: req.method, userRole: req.userRole, timestamp: new Date().toISOString() });
   next();
 });
 
-// Ініціалізація res.locals
+// Ініціалізація res.locals для зберігання даних між middleware
 app.use((req, res, next) => {
   if (!res.locals) {
     res.locals = {};
@@ -318,21 +296,14 @@ app.use((req, res, next) => {
   }
   const token = require('crypto').createHmac('sha256', req.session.csrfSecret).update(req.sessionID).digest('hex');
   res.locals._csrf = token;
-  res.cookie('XSRF-TOKEN', token, { 
-    httpOnly: false, 
-    secure: process.env.NODE_ENV === 'production', 
-    sameSite: process.env.NODE_ENV === 'production' ? 'none' : 'lax' 
-  });
+  res.cookie('XSRF-TOKEN', token, { httpOnly: false, secure: process.env.NODE_ENV === 'production', sameSite: process.env.NODE_ENV === 'production' ? 'none' : 'lax' });
   logger.info('Згенеровано CSRF-токен', { token, url: req.url });
   next();
 });
 
-// Валідація CSRF-токена (виключено для маршрутів завантаження файлів)
+// Валідація CSRF-токена
 app.use((req, res, next) => {
-  if (['POST', 'PUT', 'DELETE'].includes(req.method) && 
-      !req.url.startsWith('/admin/import-users') && 
-      !req.url.startsWith('/admin/import-questions') &&
-      !req.url.startsWith('/admin/upload-material')) {
+  if (['POST', 'PUT', 'DELETE'].includes(req.method) && !req.url.startsWith('/admin/import-users') && !req.url.startsWith('/admin/import-questions') && !req.url.startsWith('/admin/upload-material')) {
     const token = req.body._csrf || req.headers['x-csrf-token'] || req.headers['xsrf-token'];
     if (!token) {
       logger.error('Відсутній CSRF-токен', { method: req.method, url: req.url, body: req.body, headers: req.headers });
@@ -370,42 +341,20 @@ app.use((err, req, res, next) => {
   }
 });
 
-// Додавання водяного знаку та блокування копіювання/скріншотів
+// Додавання водяного знаку та захисту від копіювання/скріншотів
 app.use((req, res, next) => {
   const originalSend = res.send;
   res.send = function (body) {
     if (typeof body === 'string' && body.includes('</body>') && req.user) {
       const watermarkScript = `
-        <style>
-          .watermark {
-            position: fixed;
-            top: 10px;
-            right: 10px;
-            color: rgba(255, 0, 0, 0.3);
-            font-size: 24px;
-            pointer-events: none;
-            z-index: 10000;
-          }
-        </style>
+        <style>.watermark { position: fixed; top: 10px; right: 10px; color: rgba(255, 0, 0, 0.3); font-size: 24px; pointer-events: none; z-index: 10000; }</style>
         <div class="watermark">Користувач: ${req.user}</div>
         <script>
-          document.addEventListener('keydown', (e) => {
-            if (
-              e.key === 'PrintScreen' ||
-              (e.ctrlKey && ['p', 'P', 's', 'S'].includes(e.key)) ||
-              (e.metaKey && ['p', 'P', 's', 'S'].includes(e.key)) ||
-              (e.altKey && e.key === 'PrintScreen') ||
-              (e.metaKey && e.shiftKey && ['3', '4'].includes(e.key))
-            ) {
-              e.preventDefault();
-            }
-          });
+          document.addEventListener('keydown', (e) => { if (e.key === 'PrintScreen' || (e.ctrlKey && ['p', 'P', 's', 'S'].includes(e.key)) || (e.metaKey && ['p', 'P', 's', 'S'].includes(e.key)) || (e.altKey && e.key === 'PrintScreen') || (e.metaKey && e.shiftKey && ['3', '4'].includes(e.key))) e.preventDefault(); });
           document.addEventListener('contextmenu', (e) => e.preventDefault());
           document.addEventListener('selectstart', (e) => e.preventDefault());
           document.addEventListener('copy', (e) => e.preventDefault());
-          document.addEventListener('visibilitychange', () => {
-            if (document.hidden) console.log('Вкладка невидима');
-          });
+          document.addEventListener('visibilitychange', () => { if (document.hidden) console.log('Вкладка невидима'); });
         </script>
       `;
       body = body.replace('</body>', `${watermarkScript}</body>`);
@@ -649,7 +598,6 @@ const updateUserPasswords = async () => {
 const initializeServer = async () => {
   try {
     await connectToMongoDB();
-    // Створення індексів для всіх колекцій, включаючи нові sections та materials
     await db.collection('users').createIndex({ username: 1 }, { unique: true });
     await db.collection('questions').createIndex({ testNumber: 1, variant: 1 });
     await db.collection('test_results').createIndex({ user: 1, testNumber: 1, endTime: -1 });
@@ -662,7 +610,6 @@ const initializeServer = async () => {
     await db.collection('materials').createIndex({ sectionId: 1 });
     logger.info('Індекси створено');
 
-    // Міграція ролей користувачів
     const userCount = await db.collection('users').countDocuments();
     if (userCount > 0) {
       await db.collection('users').updateMany(
@@ -680,7 +627,6 @@ const initializeServer = async () => {
       logger.info('Міграція ролей завершена');
     }
 
-    // Ініціалізація дефолтних тестів
     const testCount = await db.collection('tests').countDocuments();
     if (!testCount) {
       const defaultTests = {
@@ -692,6 +638,18 @@ const initializeServer = async () => {
         await saveTestToMongoDB(testNumber, testData);
       }
       logger.info('Міграція тестів завершена', { count: Object.keys(defaultTests).length });
+    }
+
+    // Додавання трьох дефолтних розділів, якщо їх немає
+    const sectionCount = await db.collection('sections').countDocuments();
+    if (sectionCount === 0) {
+      const defaultSections = [
+        { sectionId: 'section1', name: 'Розділ 1', imageUrl: '/images/default-section.png' },
+        { sectionId: 'section2', name: 'Розділ 2', imageUrl: '/images/default-section.png' },
+        { sectionId: 'section3', name: 'Розділ 3', imageUrl: '/images/default-section.png' }
+      ];
+      await db.collection('sections').insertMany(defaultSections);
+      logger.info('Додано 3 дефолтних розділи', { count: defaultSections.length });
     }
 
     await updateUserPasswords();
@@ -708,7 +666,6 @@ const initializeServer = async () => {
   }
 };
 
-// Очищення старих записів активності
 const cleanupActivityLog = async () => {
   try {
     const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
@@ -721,7 +678,6 @@ const cleanupActivityLog = async () => {
   }
 };
 
-// Очищення активних тестів
 const cleanupActiveTests = async () => {
   try {
     const twentyFourHoursAgo = new Date(Date.now() - 24 * 60 * 60 * 1000);
@@ -733,12 +689,9 @@ const cleanupActiveTests = async () => {
     logger.error('Помилка очищення тестів', { message: error.message, stack: error.stack });
   }
 };
-
-// Періодичне очищення
 setInterval(cleanupActivityLog, 24 * 60 * 60 * 1000);
 setInterval(cleanupActiveTests, 24 * 60 * 60 * 1000);
 
-// Запуск ініціалізації сервера
 (async () => {
   try {
     await initializeServer();
@@ -751,7 +704,6 @@ setInterval(cleanupActiveTests, 24 * 60 * 60 * 1000);
   }
 })();
 
-// Обмеження спроб входу
 const MAX_LOGIN_ATTEMPTS = 30;
 const ONE_DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -791,7 +743,6 @@ const checkLoginAttempts = async (ipAddress, reset = false) => {
   );
 };
 
-// Логування активності
 const logActivity = async (user, action, ipAddress, additionalInfo = {}, session = null) => {
   try {
     const timestamp = new Date();
@@ -809,7 +760,6 @@ const logActivity = async (user, action, ipAddress, additionalInfo = {}, session
   }
 };
 
-// Тест підключення до MongoDB
 app.get('/test-mongo', async (req, res) => {
   try {
     if (!db) throw new Error('MongoDB не підключено');
@@ -821,18 +771,15 @@ app.get('/test-mongo', async (req, res) => {
   }
 });
 
-// Тест API
 app.get('/api/test', (req, res) => {
   logger.info('Запит /api/test');
   res.json({ success: true, message: 'API працює' });
 });
 
-// Обробка favicon
 app.get('/favicon.ico', (req, res) => {
   res.status(204).end();
 });
 
-// Головна сторінка з формою авторизації
 app.get('/', (req, res) => {
   logger.info('Відображення index.html');
   res.send(`
@@ -883,27 +830,18 @@ app.get('/', (req, res) => {
             const password = document.getElementById('password').value;
             const errorMessage = document.getElementById('error-message');
             const loginButton = document.getElementById('login-button');
-
             loginButton.disabled = true;
             loginButton.textContent = 'Завантаження...';
-
             const formData = new URLSearchParams();
             formData.append('username', username);
             formData.append('password', password);
             const csrfToken = document.querySelector('input[name="_csrf"]').value;
             console.log('Відправка CSRF-токена:', csrfToken);
             formData.append('_csrf', csrfToken);
-
             try {
-              const response = await fetch('/login', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-                body: formData
-              });
-
+              const response = await fetch('/login', { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: formData });
               const result = await response.json();
               console.log('Відповідь на вхід:', result);
-
               if (result.success) {
                 window.location.href = result.redirect + '?nocache=' + Date.now();
               } else {
@@ -925,7 +863,6 @@ app.get('/', (req, res) => {
               loginButton.textContent = 'Увійти';
             }
           });
-
           function togglePassword() {
             const passwordField = document.getElementById('password');
             const showPasswordCheckbox = document.getElementById('show-password');
@@ -937,13 +874,9 @@ app.get('/', (req, res) => {
   `);
 });
 
-// Обробка входу користувача
 app.post('/login', [
-  body('username')
-    .isLength({ min: 3, max: 50 }).withMessage('Логін має бути від 3 до 50 символів')
-    .matches(/^[a-zA-Z0-9а-яА-Я]+$/).withMessage('Логін може містити лише літери та цифри'),
-  body('password')
-    .isLength({ min: 6, max: 100 }).withMessage('Пароль має бути від 6 до 100 символів')
+  body('username').isLength({ min: 3, max: 50 }).withMessage('Логін має бути від 3 до 50 символів').matches(/^[a-zA-Z0-9а-яА-Я]+$/).withMessage('Логін може містити лише літери та цифри'),
+  body('password').isLength({ min: 6, max: 100 }).withMessage('Пароль має бути від 6 до 100 символів')
 ], async (req, res) => {
   const startTime = Date.now();
   try {
@@ -988,29 +921,13 @@ app.post('/login', [
 
     await checkLoginAttempts(ipAddress, true);
 
-    const token = jwt.sign(
-      { username: foundUser.username, role: foundUser.role },
-      process.env.JWT_SECRET || 'your-secret-key',
-      { expiresIn: '24h' }
-    );
+    const token = jwt.sign({ username: foundUser.username, role: foundUser.role }, process.env.JWT_SECRET || 'your-secret-key', { expiresIn: '24h' });
 
-    res.cookie('token', token, {
-      httpOnly: true,
-      secure: process.env.NODE_ENV === 'production',
-      sameSite: process.env.NODE_ENV === 'production' ? 'none' : 'lax',
-      maxAge: 24 * 60 * 60 * 1000
-    });
-
-    res.cookie('auth_token', token, {
-      httpOnly: false,
-      secure: process.env.NODE_ENV === 'production',
-      sameSite: process.env.NODE_ENV === 'production' ? 'none' : 'lax',
-      maxAge: 24 * 60 * 60 * 1000
-    });
+    res.cookie('token', token, { httpOnly: true, secure: process.env.NODE_ENV === 'production', sameSite: process.env.NODE_ENV === 'production' ? 'none' : 'lax', maxAge: 24 * 60 * 60 * 1000 });
+    res.cookie('auth_token', token, { httpOnly: false, secure: process.env.NODE_ENV === 'production', sameSite: process.env.NODE_ENV === 'production' ? 'none' : 'lax', maxAge: 24 * 60 * 60 * 1000 });
 
     await logActivity(foundUser.username, 'увійшов на сайт', ipAddress);
 
-    // Перенаправлення на сторінку вибору розділів для звичайних користувачів
     if (foundUser.role === 'admin') {
       res.json({ success: true, redirect: '/admin' });
     } else {
@@ -1024,13 +941,11 @@ app.post('/login', [
   }
 });
 
-// Middleware для перевірки авторизації через JWT
 const checkAuth = (req, res, next) => {
   const token = req.headers['authorization']?.split(' ')[1] || req.cookies.token;
   if (!token) {
     return res.redirect('/');
   }
-
   try {
     const decoded = jwt.verify(token, process.env.JWT_SECRET || 'your-secret-key');
     req.user = decoded.username;
@@ -1042,7 +957,6 @@ const checkAuth = (req, res, next) => {
   }
 };
 
-// Middleware для перевірки ролі адміністратора
 const checkAdmin = (req, res, next) => {
   if (req.userRole !== 'admin') {
     return res.status(403).send('Доступно тільки для адміністратора (403 Forbidden)');
@@ -1050,19 +964,18 @@ const checkAdmin = (req, res, next) => {
   next();
 };
 
-// Сторінка вибору розділів
 app.get('/select-section', checkAuth, async (req, res) => {
   const startTime = Date.now();
   try {
     if (req.userRole === 'admin') {
       return res.redirect('/admin');
     }
-    // Перевірка кешу розділів
     if (Object.keys(sectionNames).length === 0) {
       logger.warn('sectionNames порожній, повторне завантаження з MongoDB');
       await loadSectionsFromMongoDB();
       if (Object.keys(sectionNames).length === 0) {
-        throw new Error('Не вдалося завантажити розділи з бази даних');
+        logger.error('Не вдалося завантажити розділи з бази даних');
+        return res.status(500).send('Помилка при завантаженні розділів');
       }
     }
     const html = `
@@ -1073,85 +986,16 @@ app.get('/select-section', checkAuth, async (req, res) => {
           <meta name="viewport" content="width=device-width, initial-scale=1.0">
           <title>Вибір розділу</title>
           <style>
-            body { 
-              font-family: Arial, sans-serif; 
-              display: flex; 
-              justify-content: center; 
-              align-items: center; 
-              min-height: 100vh; 
-              margin: 0; 
-              background-color: #f0f0f0; 
-            }
-            .container { 
-              display: grid; 
-              grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); 
-              gap: 20px; 
-              padding: 20px; 
-              max-width: 1200px; 
-            }
-            .section-card { 
-              position: relative; 
-              width: 100%; 
-              height: 200px; 
-              overflow: hidden; 
-              border-radius: 10px; 
-              cursor: pointer; 
-              transition: transform 0.3s ease; 
-            }
-            .section-card:hover { 
-              transform: scale(1.05); 
-            }
-            .section-card img { 
-              width: 100%; 
-              height: 100%; 
-              object-fit: cover; 
-            }
-            .section-title { 
-              position: absolute; 
-              bottom: 0; 
-              left: 0; 
-              right: 0; 
-              background: rgba(0, 0, 0, 0.6); 
-              color: white; 
-              padding: 10px; 
-              text-align: center; 
-              font-size: 1.2em; 
-            }
-            #logout { 
-              position: fixed; 
-              bottom: 20px; 
-              left: 50%; 
-              transform: translateX(-50%); 
-              padding: 10px 20px; 
-              font-size: 18px; 
-              cursor: pointer; 
-              border: none; 
-              border-radius: 5px; 
-              background-color: #ef5350; 
-              color: white; 
-            }
-            #logout:hover { 
-              background-color: #d32f2f; 
-            }
-            .no-sections { 
-              color: red; 
-              font-size: 18px; 
-              margin-top: 20px; 
-            }
-            @media (max-width: 600px) {
-              .container { 
-                grid-template-columns: 1fr; 
-              }
-              .section-card { 
-                height: 150px; 
-              }
-              .section-title { 
-                font-size: 1em; 
-              }
-              #logout { 
-                width: 90%; 
-              }
-            }
+            body { font-family: Arial, sans-serif; display: flex; justify-content: center; align-items: center; min-height: 100vh; margin: 0; background-color: #f0f0f0; }
+            .container { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 20px; padding: 20px; max-width: 1200px; }
+            .section-card { position: relative; width: 100%; height: 200px; overflow: hidden; border-radius: 10px; cursor: pointer; transition: transform 0.3s ease; }
+            .section-card:hover { transform: scale(1.05); }
+            .section-card img { width: 100%; height: 100%; object-fit: cover; }
+            .section-title { position: absolute; bottom: 0; left: 0; right: 0; background: rgba(0, 0, 0, 0.6); color: white; padding: 10px; text-align: center; font-size: 1.2em; }
+            #logout { position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%); padding: 10px 20px; font-size: 18px; cursor: pointer; border: none; border-radius: 5px; background-color: #ef5350; color: white; }
+            #logout:hover { background-color: #d32f2f; }
+            .no-sections { color: red; font-size: 18px; margin-top: 20px; }
+            @media (max-width: 600px) { .container { grid-template-columns: 1fr; } .section-card { height: 150px; } .section-title { font-size: 1em; } #logout { width: 90%; } }
           </style>
         </head>
         <body>
@@ -1172,19 +1016,9 @@ app.get('/select-section', checkAuth, async (req, res) => {
               const formData = new URLSearchParams();
               formData.append('_csrf', '${res.locals._csrf}');
               try {
-                const response = await fetch('/logout', {
-                  method: 'POST',
-                  headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-                  body: formData
-                });
-                if (response.ok) {
-                  window.location.href = '/';
-                } else {
-                  alert('Помилка при виході');
-                }
-              } catch (error) {
-                alert('Не вдалося вийти');
-              }
+                const response = await fetch('/logout', { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: formData });
+                if (response.ok) window.location.href = '/'; else alert('Помилка при виході');
+              } catch (error) { alert('Не вдалося вийти'); }
             }
           </script>
         </body>
@@ -1200,7 +1034,6 @@ app.get('/select-section', checkAuth, async (req, res) => {
   }
 });
 
-// Сторінка розділу
 app.get('/section', checkAuth, async (req, res) => {
   const startTime = Date.now();
   try {
@@ -1220,97 +1053,26 @@ app.get('/section', checkAuth, async (req, res) => {
           <meta name="viewport" content="width=device-width, initial-scale=1.0">
           <title>${sectionNames[sectionId].name.replace(/"/g, '\\"')}</title>
           <style>
-            body { 
-              font-family: Arial, sans-serif; 
-              display: flex; 
-              justify-content: center; 
-              align-items: center; 
-              min-height: 100vh; 
-              margin: 0; 
-              background-color: #f0f0f0; 
-            }
-            .container { 
-              text-align: center; 
-              max-width: 600px; 
-              padding: 20px; 
-            }
-            h1 { 
-              font-size: 24px; 
-              margin-bottom: 20px; 
-            }
-            .button { 
-              display: inline-block; 
-              padding: 15px 30px; 
-              margin: 10px; 
-              background-color: #007bff; 
-              color: white; 
-              text-decoration: none; 
-              border-radius: 5px; 
-              font-size: 1.2em; 
-              transition: background-color 0.3s; 
-            }
-            .button:hover { 
-              background-color: #0056b3; 
-            }
-            .test-buttons { 
-              display: flex; 
-              flex-direction: column; 
-              align-items: center; 
-              gap: 10px; 
-              margin-top: 20px; 
-            }
-            .test-button { 
-              padding: 10px; 
-              font-size: 18px; 
-              cursor: pointer; 
-              width: 200px; 
-              border: none; 
-              border-radius: 5px; 
-              background-color: #4CAF50; 
-              color: white; 
-            }
-            .test-button:hover { 
-              background-color: #45a049; 
-            }
-            #logout { 
-              position: fixed; 
-              bottom: 20px; 
-              left: 50%; 
-              transform: translateX(-50%); 
-              padding: 10px 20px; 
-              font-size: 18px; 
-              cursor: pointer; 
-              border: none; 
-              border-radius: 5px; 
-              background-color: #ef5350; 
-              color: white; 
-            }
-            #logout:hover { 
-              background-color: #d32f2f; 
-            }
-            .no-tests { 
-              color: red; 
-              font-size: 18px; 
-              margin-top: 20px; 
-            }
-            @media (max-width: 600px) {
-              h1 { font-size: 20px; }
-              .button, .test-button { font-size: 16px; width: 90%; padding: 15px; }
-              #logout { width: 90%; }
-            }
+            body { font-family: Arial, sans-serif; display: flex; justify-content: center; align-items: center; min-height: 100vh; margin: 0; background-color: #f0f0f0; }
+            .container { text-align: center; max-width: 600px; padding: 20px; }
+            h1 { font-size: 24px; margin-bottom: 20px; }
+            .button { display: inline-block; padding: 15px 30px; margin: 10px; background-color: #007bff; color: white; text-decoration: none; border-radius: 5px; font-size: 1.2em; transition: background-color 0.3s; }
+            .button:hover { background-color: #0056b3; }
+            .test-buttons { display: flex; flex-direction: column; align-items: center; gap: 10px; margin-top: 20px; }
+            .test-button { padding: 10px; font-size: 18px; cursor: pointer; width: 200px; border: none; border-radius: 5px; background-color: #4CAF50; color: white; }
+            .test-button:hover { background-color: #45a049; }
+            #logout { position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%); padding: 10px 20px; font-size: 18px; cursor: pointer; border: none; border-radius: 5px; background-color: #ef5350; color: white; }
+            #logout:hover { background-color: #d32f2f; }
+            .no-tests { color: red; font-size: 18px; margin-top: 20px; }
+            @media (max-width: 600px) { h1 { font-size: 20px; } .button, .test-button { font-size: 16px; width: 90%; padding: 15px; } #logout { width: 90%; } }
           </style>
         </head>
         <body>
           <div class="container">
             <h1>${sectionNames[sectionId].name.replace(/"/g, '\\"')}</h1>
-            <a href="/materials?section=${sectionId}" class="button">Ознайомитись з навчальними матеріалами</a>
+            <a href="/materials?section=${sectionId}" class="button">Навчальні матеріали</a>
             <div class="test-buttons">
-              ${tests.length > 0
-                ? tests.map(test => `
-                    <button class="test-button" onclick="window.location.href='/test?test=${test.testNumber}'">${test.name.replace(/"/g, '\\"')}</button>
-                  `).join('')
-                : '<p class="no-tests">Немає доступних тестів у цьому розділі</p>'
-              }
+              <button class="test-button" onclick="window.location.href='/select-tests?section=${sectionId}'">Пройти тест</button>
             </div>
             <button id="logout" onclick="logout()">Вийти</button>
           </div>
@@ -1319,19 +1081,9 @@ app.get('/section', checkAuth, async (req, res) => {
               const formData = new URLSearchParams();
               formData.append('_csrf', '${res.locals._csrf}');
               try {
-                const response = await fetch('/logout', {
-                  method: 'POST',
-                  headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-                  body: formData
-                });
-                if (response.ok) {
-                  window.location.href = '/';
-                } else {
-                  alert('Помилка при виході');
-                }
-              } catch (error) {
-                alert('Не вдалося вийти');
-              }
+                const response = await fetch('/logout', { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: formData });
+                if (response.ok) window.location.href = '/'; else alert('Помилка при виході');
+              } catch (error) { alert('Не вдалося вийти'); }
             }
           </script>
         </body>
@@ -1347,14 +1099,13 @@ app.get('/section', checkAuth, async (req, res) => {
   }
 });
 
-// Обробка завантаження матеріалів
 app.post('/admin/upload-material', checkAuth, async (req, res) => {
-  if (req.userRole !== 'admin' && req.userRole !== 'instructor') {
-    return res.status(403).send('Доступно тільки для адміністраторів та інструкторів');
-  }
-  uploadMaterial.single('file')(req, res, async (err) => {
-    const startTime = Date.now();
-    try {
+  const startTime = Date.now();
+  try {
+    if (req.userRole !== 'admin' && req.userRole !== 'instructor') {
+      return res.status(403).send('Доступно тільки для адміністраторів та інструкторів');
+    }
+    uploadMaterial.single('file')(req, res, async (err) => {
       if (err) {
         logger.error('Помилка завантаження файлу', { message: err.message, stack: err.stack });
         return res.status(400).send(err.message);
@@ -1367,13 +1118,12 @@ app.post('/admin/upload-material', checkAuth, async (req, res) => {
         return res.status(400).send('Файл не надано');
       }
 
-      // Завантаження файлу в Vercel Blob
-      const blobResult = await blobClient.upload(req.file.originalname, req.file.buffer, {
-        access: 'public', // Файл буде доступний публічно
-        token: process.env.BLOB_READ_WRITE_TOKEN, // Передача токена
+      const blobResult = await blob.upload(req.file.originalname, req.file.buffer, {
+        access: 'public',
+        token: process.env.BLOB_READ_WRITE_TOKEN,
       });
 
-      const fileUrl = blobResult.url; // URL завантаженого файлу
+      const fileUrl = blobResult.url;
       await db.collection('materials').insertOne({
         sectionId,
         fileUrl,
@@ -1382,33 +1132,18 @@ app.post('/admin/upload-material', checkAuth, async (req, res) => {
       });
       logger.info('Матеріал завантажено в Vercel Blob', { sectionId, fileUrl, uploadedBy: req.user });
       res.send(`
-        <!DOCTYPE html>
-        <html lang="uk">
-          <head>
-            <meta charset="UTF-8">
-            <title>Матеріал завантажено</title>
-            <style>
-              body { font-family: Arial, sans-serif; padding: 20px; text-align: center; }
-              button { padding: 10px 20px; cursor: pointer; border: none; border-radius: 5px; background-color: #4CAF50; color: white; }
-            </style>
-          </head>
-          <body>
-            <h1>Матеріал успішно завантажено</h1>
-            <button onclick="window.location.href='/admin'">Повернутися до адмін-панелі</button>
-          </body>
-        </html>
+        <!DOCTYPE html><html lang="uk"><head><meta charset="UTF-8"><title>Матеріал завантажено</title><style>body { font-family: Arial, sans-serif; padding: 20px; text-align: center; } button { padding: 10px 20px; cursor: pointer; border: none; border-radius: 5px; background-color: #4CAF50; color: white; }</style></head><body><h1>Матеріал успішно завантажено</h1><button onclick="window.location.href='/admin'">Повернутися до адмін-панелі</button></body></html>
       `);
-    } catch (error) {
-      logger.error('Помилка в /admin/upload-material', { message: error.message, stack: error.stack });
-      res.status(500).send('Помилка при завантаженні матеріалу');
-    } finally {
-      const endTime = Date.now();
-      logger.info('Маршрут /admin/upload-material виконано', { duration: `${endTime - startTime} мс` });
-    }
-  });
+    });
+  } catch (error) {
+    logger.error('Помилка в /admin/upload-material', { message: error.message, stack: error.stack });
+    res.status(500).send('Помилка при завантаженні матеріалу');
+  } finally {
+    const endTime = Date.now();
+    logger.info('Маршрут /admin/upload-material виконано', { duration: `${endTime - startTime} мс` });
+  }
 });
 
-// Перегляд навчальних матеріалів
 app.get('/materials', checkAuth, async (req, res) => {
   const startTime = Date.now();
   try {
@@ -1433,10 +1168,8 @@ app.get('/materials', checkAuth, async (req, res) => {
             .material a:hover { text-decoration: underline; }
             button { padding: 10px 20px; margin: 5px; cursor: pointer; border: none; border-radius: 5px; background-color: #007bff; color: white; }
             button:hover { background-color: #0056b3; }
-            @media (max-width: 600px) {
-              h1 { font-size: 20px; }
-              button { width: 100%; }
-            }
+            .no-materials { color: red; font-size: 18px; margin-top: 20px; }
+            @media (max-width: 600px) { h1 { font-size: 20px; } button { width: 100%; } }
           </style>
         </head>
         <body>
@@ -1449,7 +1182,7 @@ app.get('/materials', checkAuth, async (req, res) => {
                     <p>Завантажено: ${new Date(m.uploadDate).toLocaleString('uk-UA')} | Автор: ${m.uploadedBy}</p>
                   </div>
                 `).join('')
-              : '<p>Немає доступних матеріалів</p>'
+              : '<p class="no-materials">Поки немає жодного навчального матеріалу у цьому розділі</p>'
             }
             <button onclick="window.location.href='/section?section=${sectionId}'">Повернутися до розділу</button>
           </div>
@@ -1466,7 +1199,67 @@ app.get('/materials', checkAuth, async (req, res) => {
   }
 });
 
-// Обробка виходу користувача
+app.get('/select-tests', checkAuth, async (req, res) => {
+  const startTime = Date.now();
+  try {
+    const sectionId = req.query.section;
+    if (!sectionId || !sectionNames[sectionId]) {
+      return res.status(400).send('Розділ не знайдено');
+    }
+    const tests = await db.collection('tests').find({ sectionId }).toArray();
+    const html = `
+      <!DOCTYPE html>
+      <html lang="uk">
+        <head>
+          <meta charset="UTF-8">
+          <meta name="viewport" content="width=device-width, initial-scale=1.0">
+          <title>Вибір тестів</title>
+          <style>
+            body { font-family: Arial, sans-serif; display: flex; justify-content: center; align-items: center; min-height: 100vh; margin: 0; background-color: #f0f0f0; }
+            .container { text-align: center; max-width: 600px; padding: 20px; }
+            h1 { font-size: 24px; margin-bottom: 20px; }
+            .test-button { padding: 10px; font-size: 18px; cursor: pointer; width: 200px; border: none; border-radius: 5px; background-color: #4CAF50; color: white; margin: 5px; }
+            .test-button:hover { background-color: #45a049; }
+            #logout { position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%); padding: 10px 20px; font-size: 18px; cursor: pointer; border: none; border-radius: 5px; background-color: #ef5350; color: white; }
+            #logout:hover { background-color: #d32f2f; }
+            .no-tests { color: red; font-size: 18px; margin-top: 20px; }
+            @media (max-width: 600px) { h1 { font-size: 20px; } .test-button { font-size: 16px; width: 90%; padding: 15px; } #logout { width: 90%; } }
+          </style>
+        </head>
+        <body>
+          <div class="container">
+            <h1>Вибір тестів для ${sectionNames[sectionId].name.replace(/"/g, '\\"')}</h1>
+            ${tests.length > 0
+              ? tests.map(test => `
+                  <button class="test-button" onclick="window.location.href='/test?test=${test.testNumber}'">${test.name.replace(/"/g, '\\"')}</button>
+                `).join('')
+              : '<p class="no-tests">Поки немає доступних тестів у цьому розділі</p>'
+            }
+            <button id="logout" onclick="logout()">Вийти</button>
+          </div>
+          <script>
+            async function logout() {
+              const formData = new URLSearchParams();
+              formData.append('_csrf', '${res.locals._csrf}');
+              try {
+                const response = await fetch('/logout', { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: formData });
+                if (response.ok) window.location.href = '/'; else alert('Помилка при виході');
+              } catch (error) { alert('Не вдалося вийти'); }
+            }
+          </script>
+        </body>
+      </html>
+    `;
+    res.send(html);
+  } catch (error) {
+    logger.error('Помилка в /select-tests', { message: error.message, stack: error.stack });
+    res.status(500).send('Помилка при завантаженні сторінки вибору тестів');
+  } finally {
+    const endTime = Date.now();
+    logger.info('Маршрут /select-tests виконано', { duration: `${endTime - startTime} мс` });
+  }
+});
+
 app.post('/logout', checkAuth, (req, res) => {
   const startTime = Date.now();
   try {
@@ -1491,7 +1284,6 @@ app.post('/logout', checkAuth, (req, res) => {
   }
 });
 
-// Збереження результатів тесту
 const saveResult = async (user, testNumber, score, totalPoints, startTime, endTime, totalClicks, correctClicks, totalQuestions, percentage, suspiciousActivity, answers, scoresPerQuestion, variant, ipAddress, testSessionId) => {
   const startTimeLog = Date.now();
   const session = client.startSession();
@@ -1530,10 +1322,8 @@ const saveResult = async (user, testNumber, score, totalPoints, startTime, endTi
     await session.endSession();
     const endTimeLog = Date.now();
     logger.info('saveResult виконано', { duration: `${endTimeLog - startTimeLog} мс` });
-  }
 };
 
-// Перевірка кількості спроб проходження тесту
 const checkTestAttempts = async (user, testNumber) => {
   try {
     const now = new Date();
@@ -1569,7 +1359,6 @@ const checkTestAttempts = async (user, testNumber) => {
   }
 };
 
-// Початок тесту
 app.get('/test', checkAuth, async (req, res) => {
   const startTime = Date.now();
   try {
@@ -1624,63 +1413,49 @@ app.get('/test', checkAuth, async (req, res) => {
       questions = shuffleArray([...questions]).slice(0, questionLimit);
     }
 
-    if (testNames[testNumber].randomQuestions) {
+        if (testNames[testNumber].randomQuestions) {
       questions = shuffleArray([...questions]);
     }
 
-    if (testNames[testNumber].randomAnswers) {
-      questions = questions.map(q => {
-        if (q.options && q.options.length > 0 && q.type !== 'ordering' && q.type !== 'matching') {
-          const shuffledOptions = shuffleArray([...q.options]);
-          return { ...q, options: shuffledOptions };
-        } else if (q.type === 'matching' && q.pairs) {
-          const shuffledPairs = shuffleArray([...q.pairs]);
-          return { ...q, pairs: shuffledPairs };
-        }
-        return q;
-      });
-    }
+    const timeLimit = testNames[testNumber].timeLimit || 3600; // За замовчуванням 1 година
+    const isQuickTest = testNames[testNumber].isQuickTest || false;
+    const timePerQuestion = testNames[testNumber].timePerQuestion || null;
 
-    const testStartTime = Date.now();
-    const testSessionId = `${req.user}_${testNumber}_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
-
-    const testData = {
+    const testSessionId = require('crypto').randomBytes(16).toString('hex');
+    const activeTest = {
       user: req.user,
       testNumber,
       questions,
       answers: {},
-      currentQuestion: 0,
-      startTime: testStartTime,
-      timeLimit: testNames[testNumber].timeLimit * 1000,
-      variant: userVariant,
-      isQuickTest: testNames[testNumber].isQuickTest,
-      timePerQuestion: testNames[testNumber].timePerQuestion,
-      testSessionId: testSessionId,
-      isSavingResult: false,
       answerTimestamps: {},
-      questionStartTime: {},
-      suspiciousActivity: { timeAway: 0, switchCount: 0, responseTimes: [], activityCounts: [] }
+      suspiciousActivity: {
+        timeAway: 0,
+        switchCount: 0,
+        responseTimes: [],
+        activityCounts: []
+      },
+      startTime: Date.now(),
+      timeLimit,
+      isQuickTest,
+      timePerQuestion,
+      testSessionId,
+      variant: `Variant ${userVariant}`
     };
 
-    await db.collection('active_tests').updateOne(
-      { user: req.user },
-      { $set: testData },
-      { upsert: true }
-    );
+    await db.collection('active_tests').deleteOne({ user: req.user });
+    await db.collection('active_tests').insertOne(activeTest);
 
-    const ipAddress = req.headers['x-forwarded-for'] || req.socket.remoteAddress;
-    await logActivity(req.user, `розпочав тест ${testNames[testNumber].name.replace(/"/g, '\\"')}`, ipAddress);
     res.redirect(`/test/question?index=0`);
   } catch (error) {
     logger.error('Помилка в /test', { message: error.message, stack: error.stack });
-    res.status(500).send('Помилка при завантаженні тесту: ' + error.message);
+    res.status(500).send('Помилка при завантаженні тесту');
   } finally {
     const endTime = Date.now();
     logger.info('Маршрут /test виконано', { duration: `${endTime - startTime} мс` });
   }
 });
 
-// Сторінка інструкцій до тестів
+// Маршрут для інструкцій до тесту
 app.get('/instructions', checkAuth, (req, res) => {
   const startTime = Date.now();
   try {
@@ -1692,49 +1467,13 @@ app.get('/instructions', checkAuth, (req, res) => {
           <meta name="viewport" content="width=device-width, initial-scale=1.0">
           <title>Інструкція до тестів</title>
           <style>
-            body {
-              font-family: Arial, sans-serif;
-              margin: 0;
-              padding: 20px;
-              background-color: #f5f5f5;
-              text-align: center;
-            }
-            .container {
-              max-width: 800px;
-              margin: 0 auto;
-              background-color: white;
-              padding: 20px;
-              border-radius: 8px;
-              box-shadow: 0 0 10px rgba(0, 0, 0, 0.1);
-            }
-            h1 {
-              font-size: 24px;
-              margin-bottom: 20px;
-              color: #333;
-            }
-            p {
-              font-size: 16px;
-              line-height: 1.5;
-              margin-bottom: 15px;
-            }
-            button {
-              padding: 10px 20px;
-              font-size: 16px;
-              cursor: pointer;
-              border: none;
-              border-radius: 5px;
-              background-color: #4CAF50;
-              color: white;
-            }
-            button:hover {
-              background-color: #45a049;
-            }
-            @media (max-width: 600px) {
-              .container { padding: 15px; }
-              h1 { font-size: 20px; }
-              p { font-size: 14px; }
-              button { width: 100%; font-size: 14px; }
-            }
+            body { font-family: Arial, sans-serif; margin: 0; padding: 20px; background-color: #f5f5f5; text-align: center; }
+            .container { max-width: 800px; margin: 0 auto; background-color: white; padding: 20px; border-radius: 8px; box-shadow: 0 0 10px rgba(0, 0, 0, 0.1); }
+            h1 { font-size: 24px; margin-bottom: 20px; color: #333; }
+            p { font-size: 16px; line-height: 1.5; margin-bottom: 15px; }
+            button { padding: 10px 20px; font-size: 16px; cursor: pointer; border: none; border-radius: 5px; background-color: #4CAF50; color: white; }
+            button:hover { background-color: #45a049; }
+            @media (max-width: 600px) { .container { padding: 15px; } h1 { font-size: 20px; } p { font-size: 14px; } button { width: 100%; font-size: 14px; } }
           </style>
         </head>
         <body>
@@ -1761,7 +1500,7 @@ app.get('/instructions', checkAuth, (req, res) => {
   }
 });
 
-// Відображення питання тесту
+// Маршрут для відображення питання тесту
 app.get('/test/question', checkAuth, async (req, res) => {
   const startTime = Date.now();
   try {
@@ -2092,7 +1831,7 @@ app.post('/test/submit-answer', checkAuth, async (req, res) => {
       timeAwayPercent: parseFloat(timeAwayPercent),
       switchCount: activeTest.suspiciousActivity.switchCount,
       avgResponseTime: parseFloat(avgResponseTime),
-      totalActivityCount: activeTest.suspiciousActivity.activityCounts.reduce((a, b) => a + b, 0, 0)
+      totalActivityCount: activeTest.suspiciousActivity.activityCounts.reduce((a, b) => a + b, 0)
     };
 
     if (
@@ -2134,7 +1873,7 @@ app.post('/test/submit-answer', checkAuth, async (req, res) => {
   }
 });
 
-// Відображення результатів тесту
+// Маршрут для відображення результатів тесту
 app.get('/results', checkAuth, async (req, res) => {
   const startTime = Date.now();
   try {
@@ -2209,7 +1948,7 @@ app.get('/results', checkAuth, async (req, res) => {
   }
 });
 
-// Адмін-панель
+// Маршрут для адмін-панелі
 app.get('/admin', checkAuth, checkAdmin, async (req, res) => {
   const startTime = Date.now();
   try {
@@ -2292,7 +2031,7 @@ app.get('/admin', checkAuth, checkAdmin, async (req, res) => {
 });
 
 // Імпорт користувачів
-app.post('/admin/import-users', checkAuth, checkAdmin, upload.single('file'), async (req, res) => {
+app.post('/admin/import-users', checkAuth, checkAdmin, uploadMaterial.single('file'), async (req, res) => {
   const startTime = Date.now();
   try {
     if (!req.file) {
@@ -2327,7 +2066,7 @@ app.post('/admin/import-users', checkAuth, checkAdmin, upload.single('file'), as
 });
 
 // Імпорт питань
-app.post('/admin/import-questions', checkAuth, checkAdmin, upload.single('file'), async (req, res) => {
+app.post('/admin/import-questions', checkAuth, checkAdmin, uploadMaterial.single('file'), async (req, res) => {
   const startTime = Date.now();
   try {
     const { testNumber } = req.body;
@@ -2823,7 +2562,7 @@ app.post('/admin/edit-test', checkAuth, checkAdmin, async (req, res) => {
       </html>
     `);
   } catch (error) {
-    logger.error('Помилка в /admin/edit-test (POST)', { message: error.message, stack: error.stack});
+    logger.error('Помилка в /admin/edit-test (POST)', { message: error.message, stack: error.stack });
     res.status(500).send('Помилка при оновлення тесту');
   } finally {
     const endTime = Date.now();
@@ -2831,17 +2570,16 @@ app.post('/admin/edit-test', checkAuth, checkAdmin, async (req, res) => {
   }
 });
 
-// Видалити тест
+// Видалення тесту
 app.post('/admin/delete-test', checkAuth, checkAdmin, async (req, res) => {
   const startTime = Date.now();
   try {
-    const { testNumber } = req.body; // Очікуємо testNumber як рядок
+    const { testNumber } = req.body;
     if (!testNumber || !testNames[testNumber]) {
       return res.status(400).json({ success: false, message: 'Невірний номер тесту' });
     }
     await deleteTestFromMongoDB(testNumber);
-    await loadTestsFromMongoDB(); // Оновлюємо кеш тестів
-
+    await loadTestsFromMongoDB();
     res.json({ success: true });
   } catch (error) {
     logger.error('Помилка в /admin/delete-test', { message: error.message, stack: error.stack });
@@ -2852,7 +2590,7 @@ app.post('/admin/delete-test', checkAuth, checkAdmin, async (req, res) => {
   }
 });
 
-// Список розділов для редактирования
+// Список розділів для редагування
 app.get('/admin/edit-sections', checkAuth, checkAdmin, async (req, res) => {
   const startTime = Date.now();
   try {
@@ -2863,7 +2601,7 @@ app.get('/admin/edit-sections', checkAuth, checkAdmin, async (req, res) => {
         <head>
           <meta charset="UTF-8">
           <meta name="viewport" content="width=device-width, initial-scale=1.0">
-          <title>Редактировать разделы</title>
+          <title>Редагувати розділи</title>
           <style>
             body { font-family: Arial, sans-serif; padding: 20px; background-color: #f5f5f5; }
             .container { max-width: 800px; margin: auto; background-color: white; padding: 20px; border-radius: 10px; box-shadow: 0 0 10px rgba(0,0,0,0); }
@@ -3026,6 +2764,7 @@ app.post('/admin/add-section', checkAuth, checkAdmin, uploadMaterial.single('ima
       imageUrl
     });
     await loadSectionsFromMongoDB();
+    logger.info('Розділ додано', { sectionId, name });
     res.send(`
       <!DOCTYPE html>
       <html lang="uk">
@@ -3037,6 +2776,7 @@ app.post('/admin/add-section', checkAuth, checkAdmin, uploadMaterial.single('ima
             button { padding: 10px 20px; cursor: pointer; border: none; border-radius: 5px; background-color: #4CAF50; color: white; }
             button:hover { background-color: #45a049; }
           </style>
+        </head>
         <body>
           <h1>Розділ успішно додано</h1>
           <button onclick="window.location.href='/admin/edit-sections'">Повернутися до списку розділів</button>
@@ -3101,7 +2841,7 @@ app.get('/admin/edit-section', checkAuth, checkAdmin, async (req, res) => {
               <input type="file" id="image" name="image" accept="image/*">
               <button type="submit" class="submit-btn">Зберегти</button>
             </form>
-            <div id="error-message" class="error"></div>
+                        <div id="error-message" class="error"></div>
             <button class="nav-btn" onclick="window.location.href='/admin/edit-sections'">Повернутися до списку розділів</button>
           </div>
         </body>
@@ -3110,7 +2850,7 @@ app.get('/admin/edit-section', checkAuth, checkAdmin, async (req, res) => {
     res.send(html);
   } catch (error) {
     logger.error('Помилка в /admin/edit-section', { message: error.message, stack: error.stack });
-    res.status(500).send('Помилка при редагуванні розділу');
+    res.status(500).send('Помилка при завантаженні форми редагування розділу');
   } finally {
     const endTime = Date.now();
     logger.info('Маршрут /admin/edit-section виконано', { duration: `${endTime - startTime} мс` });
@@ -3367,214 +3107,8 @@ app.post('/admin/feedback/delete-all', checkAuth, checkAdmin, async (req, res) =
   }
 });
 
-// Форма зворотного зв’язку для користувачів
-app.get('/feedback', checkAuth, (req, res) => {
-  const startTime = Date.now();
-  try {
-    const html = `
-      <!DOCTYPE html>
-      <html lang="uk">
-        <head>
-          <meta charset="UTF-8">
-          <meta name="viewport" content="width=device-width, initial-scale=1.0">
-          <title>Зворотний зв’язок</title>
-          <style>
-            body {
-              font-family: Arial, sans-serif;
-              margin: 0;
-              padding: 20px;
-              background-color: #f5f5f5;
-              text-align: center;
-            }
-            .container {
-              max-width: 600px;
-              margin: 0 auto;
-              background-color: white;
-              padding: 20px;
-              border-radius: 8px;
-              box-shadow: 0 0 10px rgba(0, 0, 0, 0.1);
-            }
-            h1 {
-              font-size: 24px;
-              margin-bottom: 20px;
-              color: #333;
-            }
-            label {
-              display: block;
-              font-size: 16px;
-              margin-bottom: 5px;
-              text-align: left;
-            }
-            textarea {
-              width: 100%;
-              height: 150px;
-              padding: 10px;
-              font-size: 16px;
-              border: 1px solid #ccc;
-              border-radius: 5px;
-              margin-bottom: 10px;
-              box-sizing: border-box;
-            }
-            button {
-              padding: 10px 20px;
-              font-size: 16px;
-              cursor: pointer;
-              border: none;
-              border-radius: 5px;
-              background-color: #4CAF50;
-              color: white;
-            }
-            button:hover {
-              background-color: #45a049;
-            }
-            button:disabled {
-              background-color: #cccccc;
-              cursor: not-allowed;
-            }
-            .error {
-              color: red;
-              margin-top: 10px;
-              font-size: 14px;
-            }
-            .back-btn {
-              background-color: #007bff;
-              margin-top: 10px;
-            }
-            .back-btn:hover {
-              background-color: #0056b3;
-            }
-            @media (max-width: 600px) {
-              .container { padding: 15px; }
-              h1 { font-size: 20px; }
-              textarea { font-size: 14px; }
-              button { width: 100%; font-size: 14px; }
-            }
-          </style>
-        </head>
-        <body>
-          <div class="container">
-            <h1>Зворотний зв’язок</h1>
-            <form id="feedback-form" method="POST" action="/feedback">
-              <input type="hidden" name="_csrf" value="${res.locals._csrf}">
-              <label for="message">Ваше повідомлення:</label>
-              <textarea id="message" name="message" placeholder="Введіть ваше повідомлення, пропозицію або повідомте про проблему" required></textarea>
-              <button type="submit" id="submit-btn">Надіслати</button>
-            </form>
-            <div id="error-message" class="error"></div>
-            <button class="back-btn" onclick="window.location.href='/select-section'">Назад до вибору розділу</button>
-          </div>
-          <script>
-            document.getElementById('feedback-form').addEventListener('submit', async (e) => {
-              e.preventDefault();
-              const message = document.getElementById('message').value;
-              const errorMessage = document.getElementById('error-message');
-              const submitBtn = document.getElementById('submit-btn');
-
-              submitBtn.disabled = true;
-              submitBtn.textContent = 'Надсилання...';
-
-              const formData = new URLSearchParams();
-              formData.append('message', message);
-              formData.append('_csrf', document.querySelector('input[name="_csrf"]').value);
-
-              try {
-                const response = await fetch('/feedback', {
-                  method: 'POST',
-                  headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-                  body: formData
-                });
-
-                const result = await response.json();
-                if (result.success) {
-                  errorMessage.style.color = 'green';
-                  errorMessage.textContent = 'Повідомлення успішно надіслано!';
-                  document.getElementById('message').value = '';
-                } else {
-                  errorMessage.textContent = result.message || 'Помилка при надсиланні повідомлення.';
-                }
-              } catch (error) {
-                console.error('Помилка надсилання зворотного зв’язку:', error);
-                errorMessage.textContent = 'Не вдалося підключитися до сервера. Перевірте ваше з’єднання з Інтернетом.';
-              } finally {
-                submitBtn.disabled = false;
-                submitBtn.textContent = 'Надіслати';
-              }
-            });
-          </script>
-        </body>
-      </html>
-    `;
-    res.send(html);
-  } catch (error) {
-    logger.error('Помилка в /feedback', { message: error.message, stack: error.stack });
-    res.status(500).send('Помилка при завантаженні форми зворотного зв’язку');
-  } finally {
-    const endTime = Date.now();
-    logger.info('Маршрут /feedback виконано', { duration: `${endTime - startTime} мс` });
-  }
-});
-
-// Обробка надсилання зворотного зв’язку
-app.post('/feedback', checkAuth, [
-  body('message')
-    .isLength({ min: 5, max: 1000 }).withMessage('Повідомлення має бути від 5 до 1000 символів')
-], async (req, res) => {
-  const startTime = Date.now();
-  try {
-    const errors = validationResult(req);
-    if (!errors.isEmpty()) {
-      return res.status(400).json({ success: false, message: errors.array()[0].msg });
-    }
-
-    const { message } = req.body;
-    const user = req.user;
-    const ipAddress = req.headers['x-forwarded-for'] || req.socket.remoteAddress;
-    const timestamp = new Date().toISOString();
-
-    await db.collection('feedback').insertOne({
-      user,
-      message,
-      timestamp,
-      ipAddress,
-      read: false
-    });
-
-    logger.info('Зворотний зв’язок збережено', { user, message });
-
-    try {
-      const mailOptions = {
-        from: process.env.EMAIL_USER || 'alphacentertest@gmail.com',
-        to: process.env.EMAIL_USER || 'alphacentertest@gmail.com',
-        subject: 'Нове повідомлення зворотного зв’язку',
-        text: `
-          Користувач: ${user}
-          Повідомлення: ${message}
-          Час: ${new Date(timestamp).toLocaleString('uk-UA')}
-          IP-адреса: ${ipAddress}
-        `
-      };
-      await transporter.sendMail(mailOptions);
-      logger.info('Email зворотного зв’язку надіслано', { user, email: process.env.EMAIL_USER });
-    } catch (emailError) {
-      logger.error('Помилка відправки email зворотного зв’язку', { 
-        message: emailError.message, 
-        stack: emailError.stack, 
-        emailUser: process.env.EMAIL_USER 
-      });
-    }
-
-    res.json({ success: true });
-  } catch (error) {
-    logger.error('Помилка в /feedback (POST)', { message: error.message, stack: error.stack });
-    res.status(500).json({ success: false, message: 'Помилка при надсиланні зворотного зв’язку' });
-  } finally {
-    const endTime = Date.now();
-    logger.info('Маршрут /feedback (POST) виконано', { duration: `${endTime - startTime} мс` });
-  }
-});
-
 // Запуск сервера
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => {
-  logger.info(`Сервер запущено на порту ${PORT}`);
+const port = process.env.PORT || 3000;
+app.listen(port, () => {
+  logger.info(`Сервер запущено на порту ${port}`);
 });
