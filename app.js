@@ -14,6 +14,7 @@ const jwt = require('jsonwebtoken'); // Робота з JWT-токенами
 const winston = require('winston'); // Логування
 const session = require('express-session'); // Управління сесіями
 const MongoStore = require('connect-mongo'); // Зберігання сесій у MongoDB
+const { createClient } = require('@vercel/blob'); // Імпорт createClient з @vercel/blob
 
 // Ініціалізація Express-додатку
 const app = express();
@@ -42,13 +43,15 @@ const upload = multer({
   limits: { fileSize: 4 * 1024 * 1024 } // Ліміт 4MB
 });
 
-// Налаштування multer для завантаження навчальних матеріалів
-const materialStorage = multer.diskStorage({
-  destination: path.join(__dirname, 'public', 'materials'), // Папка для матеріалів
-  filename: (req, file, cb) => {
-    cb(null, `${Date.now()}-${file.originalname}`); // Унікальне ім'я файлу
-  }
+// Ініціалізація клієнта Vercel Blob
+const blob = createClient({
+  token: process.env.BLOB_READ_WRITE_TOKEN, // Токен з Vercel Dashboard
 });
+
+// Налаштування multer для матеріалів з використанням memoryStorage (для завантаження в пам’ять перед Blob)
+const materialStorage = multer.memoryStorage(); // Використовуємо memoryStorage для тимчасового зберігання в пам’яті
+
+// Ініціалізація uploadMaterial з фільтрами та лімітом
 const uploadMaterial = multer({
   storage: materialStorage,
   limits: { fileSize: 10 * 1024 * 1024 }, // Ліміт 10MB
@@ -1341,7 +1344,7 @@ app.get('/section', checkAuth, async (req, res) => {
   }
 });
 
-// Завантаження навчальних матеріалів
+// Обробка завантаження матеріалів
 app.post('/admin/upload-material', checkAuth, async (req, res) => {
   if (req.userRole !== 'admin' && req.userRole !== 'instructor') {
     return res.status(403).send('Доступно тільки для адміністраторів та інструкторів');
@@ -1360,14 +1363,20 @@ app.post('/admin/upload-material', checkAuth, async (req, res) => {
       if (!req.file) {
         return res.status(400).send('Файл не надано');
       }
-      const fileUrl = `/materials/${req.file.filename}`;
+
+      // Завантаження файлу в Vercel Blob
+      const blobResult = await blob.upload(req.file.originalname, req.file.buffer, {
+        access: 'public', // Файл буде доступний публічно
+      });
+
+      const fileUrl = blobResult.url; // URL завантаженого файлу
       await db.collection('materials').insertOne({
         sectionId,
         fileUrl,
         uploadedBy: req.user,
         uploadDate: new Date().toISOString()
       });
-      logger.info('Матеріал завантажено', { sectionId, fileUrl, uploadedBy: req.user });
+      logger.info('Матеріал завантажено в Vercel Blob', { sectionId, fileUrl, uploadedBy: req.user });
       res.send(`
         <!DOCTYPE html>
         <html lang="uk">
@@ -1377,7 +1386,6 @@ app.post('/admin/upload-material', checkAuth, async (req, res) => {
             <style>
               body { font-family: Arial, sans-serif; padding: 20px; text-align: center; }
               button { padding: 10px 20px; cursor: pointer; border: none; border-radius: 5px; background-color: #4CAF50; color: white; }
-              button:hover { background-color: #45a049; }
             </style>
           </head>
           <body>

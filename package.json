@@ -3,6 +3,7 @@
   "version": "1.0.0",
   "packageManager": "npm@11.3.0",
   "dependencies": {
+    "@vercel/blob": "^1.1.1",
     "alphatest": "file:",
     "bcrypt": "^6.0.0",
     "bcryptjs": "^2.4.3",
