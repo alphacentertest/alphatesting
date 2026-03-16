@@ -251,14 +251,16 @@ const connectToMongoDB = async (attempt = 1, maxAttempts = 5) => {
 (async () => {
   try {
     await connectToMongoDB();
-    // await loadTestsFromMongoDB(); // якщо є
-    app.listen(process.env.PORT || 3000, () => {
-      logger.info(`Сервер запущено на порту ${process.env.PORT || 3000}`);
-    });
+    logger.info('База даних підключена успішно');
   } catch (err) {
-    logger.error('Помилка запуску сервера', err);
-    process.exit(1);
+    logger.error('Не вдалося підключитися до бази при запуску', err);
+    // НЕ process.exit(1) — просто логувати і продовжувати
   }
+
+  const PORT = process.env.PORT || 3000;
+  app.listen(PORT, () => {
+    logger.info(`Сервер запущено на порту ${PORT}`);
+  });
 })();
 
 // Завантаження тестів
@@ -6646,6 +6648,20 @@ app.get('/admin/activity-log', checkAuth, checkAdmin, async (req, res) => {
 app.use((err, req, res, next) => {
   logger.error('Неперехоплена помилка', { message: err.message, stack: err.stack });
   res.status(500).send('Щось пішло не так! Спробуйте ще раз або зверніться до адміністратора.');
+});
+
+app.use((err, req, res, next) => {
+  logger.error('Неперехоплена помилка на сервері', {
+    message: err.message,
+    stack: err.stack,
+    url: req.url,
+    method: req.method
+  });
+
+  res.status(500).json({
+    success: false,
+    message: 'Внутрішня помилка сервера. Перевірте логи.'
+  });
 });
 
 // Запуск сервера
