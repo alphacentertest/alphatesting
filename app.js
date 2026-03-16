@@ -1,8 +1,5 @@
-// ────────────────────────────────────────────────────────────────
 // Імпорт необхідних модулів
-// ────────────────────────────────────────────────────────────────
 require('dotenv').config();
-
 const express = require('express');
 const cookieParser = require('cookie-parser');
 const path = require('path');
@@ -17,20 +14,14 @@ const jwt = require('jsonwebtoken');
 const winston = require('winston');
 const session = require('express-session');
 const MongoStore = require('connect-mongo');
-const helmet = require('helmet');
-const rateLimit = require('express-rate-limit');
 
-// ────────────────────────────────────────────────────────────────
 // Ініціалізація Express-додатку
-// ────────────────────────────────────────────────────────────────
 const app = express();
 
-// Увімкнення довіри до проксі (обов’язково для Vercel, Cloudflare тощо)
+// Увімкнення довіри до проксі
 app.set('trust proxy', 1);
 
-// ────────────────────────────────────────────────────────────────
-// Налаштування логування (winston)
-// ────────────────────────────────────────────────────────────────
+// Налаштування логування
 const logger = winston.createLogger({
   level: 'info',
   format: winston.format.combine(
@@ -44,89 +35,23 @@ const logger = winston.createLogger({
   ]
 });
 
-// ────────────────────────────────────────────────────────────────
-// helmet — захист заголовків (перший middleware)
-// ────────────────────────────────────────────────────────────────
-app.use(helmet({
-  contentSecurityPolicy: {
-    directives: {
-      defaultSrc: ["'self'"],
-      scriptSrc: ["'self'", "'unsafe-inline'"],        // ← дозволяє <script>код</script>
-      scriptSrcAttr: ["'unsafe-inline'"],              // ← дозволяє onclick="..."
-      styleSrc: ["'self'", "'unsafe-inline'"],         // для стилів
-      imgSrc: ["'self'", "data:"],                     // для картинок
-      connectSrc: ["'self'"],                          // для fetch/axios
-    },
-  },
-}));
-
-// ────────────────────────────────────────────────────────────────
-// Глобальний rate-limit (на всі запити)
-// ────────────────────────────────────────────────────────────────
-app.use(rateLimit({
-  windowMs: 15 * 60 * 1000,           // 15 хвилин
-  limit: 100,                         // максимум 100 запитів з однієї IP
-  standardHeaders: true,
-  legacyHeaders: false,
-  message: { success: false, message: 'Забагато запитів, спробуйте пізніше' }
-}));
-
-// Сильніший ліміт саме на логін
-app.use('/login', rateLimit({
-  windowMs: 10 * 60 * 1000,           // 10 хвилин
-  limit: 5,                           // тільки 5 спроб
-  message: { success: false, message: 'Забагато спроб входу. Почекайте 10 хвилин' },
-  keyGenerator: (req) => {
-    return req.headers['x-forwarded-for']?.split(',')[0]?.trim()
-      || req.socket.remoteAddress
-      || 'unknown';
-  }
-}));
-
-// Ліміт на адмінські маршрути (опціонально, можна налаштувати сильніше)
-app.use('/admin', rateLimit({
-  windowMs: 60 * 60 * 1000,           // 1 година
-  limit: 300,
-}));
-
-// ────────────────────────────────────────────────────────────────
-// Простий health-check ендпоінт (доступний без авторизації)
-// ────────────────────────────────────────────────────────────────
-// health-check (має бути ДО app.listen)
-app.get('/health', async (req, res) => {
-  const isDbReady = !!db && client?.topology?.isConnected?.();
-  res.status(isDbReady ? 200 : 503).json({
-    status: isDbReady ? 'healthy' : 'starting',
-    database: isDbReady ? 'ok' : 'not ready yet',
-    uptime: Math.round(process.uptime()) + ' секунд',
-    timestamp: new Date().toISOString()
-  });
-});
-
-// ────────────────────────────────────────────────────────────────
-// Налаштування multer (для завантаження файлів)
-// ────────────────────────────────────────────────────────────────
+// Налаштування multer
 const storage = multer.memoryStorage();
 const upload = multer({
   storage: storage,
-  limits: { fileSize: 4 * 1024 * 1024 } // 4 MB
+  limits: { fileSize: 4 * 1024 * 1024 }
 });
 
-// ────────────────────────────────────────────────────────────────
-// Налаштування nodemailer (Gmail)
-// ────────────────────────────────────────────────────────────────
+// Налаштування nodemailer
 const transporter = nodemailer.createTransport({
   service: 'gmail',
   auth: {
-    user: process.env.EMAIL_USER,
-    pass: process.env.EMAIL_PASS
-  },
-  tls: {
-    rejectUnauthorized: false // іноді потрібно для тестових середовищ
+    user: process.env.EMAIL_USER || 'alphacentertest@gmail.com',
+    pass: process.env.EMAIL_PASS || 'xfcd cvkl xiii qhtl'
   }
 });
 
-// Функція для відправки email про підозрілу активність
+// Функція для відправки email
 const sendSuspiciousActivityEmail = async (user, activityDetails) => {
   try {
     const mailOptions = {
@@ -141,7 +66,6 @@ const sendSuspiciousActivityEmail = async (user, activityDetails) => {
         Загальна кількість дій: ${activityDetails.totalActivityCount}
       `
     };
-
     await transporter.sendMail(mailOptions);
     logger.info(`Email відправлено для ${user}`);
   } catch (error) {
@@ -149,9 +73,7 @@ const sendSuspiciousActivityEmail = async (user, activityDetails) => {
   }
 };
 
-// ────────────────────────────────────────────────────────────────
-// Конфігурація підозрілої активності
-// ────────────────────────────────────────────────────────────────
+// Конфігурація
 const config = {
   suspiciousActivity: {
     timeAwayThreshold: 50,
@@ -159,26 +81,15 @@ const config = {
   }
 };
 
-// ────────────────────────────────────────────────────────────────
-// Налаштування MongoDB клієнта
-// ────────────────────────────────────────────────────────────────
-const MONGODB_URI = process.env.MONGODB_URI;
-
-if (!MONGODB_URI) {
-  logger.error('MONGODB_URI не задано в .env або змінних середовища');
-  // не exit — просто не підключайся до бази
-}
-
+// Налаштування MongoDB
+const MONGODB_URI = process.env.MONGODB_URI || 'mongodb+srv://romanhaleckij7:DNMaH9w2X4gel3Xc@cluster0.r93r1p8.mongodb.net/alpha?retryWrites=true&w=majority';
 const client = new MongoClient(MONGODB_URI, {
-  connectTimeoutMS: 10000,
-  serverSelectionTimeoutMS: 10000
+  connectTimeoutMS: 5000,
+  serverSelectionTimeoutMS: 5000
 });
-
 let db;
 
-// ────────────────────────────────────────────────────────────────
 // Клас CacheManager
-// ────────────────────────────────────────────────────────────────
 class CacheManager {
   static cache = {};
 
@@ -215,9 +126,7 @@ class CacheManager {
   }
 }
 
-// ────────────────────────────────────────────────────────────────
-// Глобальні змінні кешу та стану
-// ────────────────────────────────────────────────────────────────
+// Кеш
 let userCache = [];
 const questionsCache = {};
 
@@ -225,10 +134,8 @@ let isInitialized = false;
 let initializationError = null;
 let testNames = {};
 
-// ────────────────────────────────────────────────────────────────
-// Функція підключення до MongoDB з ретраями
-// ────────────────────────────────────────────────────────────────
-const connectToMongoDB = async (attempt = 1, maxAttempts = 5) => {
+// Підключення до MongoDB
+const connectToMongoDB = async (attempt = 1, maxAttempts = 3) => {
   try {
     logger.info(`Спроба підключення до MongoDB (${attempt}/${maxAttempts})`);
     const startTime = Date.now();
@@ -236,49 +143,14 @@ const connectToMongoDB = async (attempt = 1, maxAttempts = 5) => {
     db = client.db('alpha');
     logger.info(`Підключено до MongoDB за ${Date.now() - startTime} мс`, { databaseName: db.databaseName });
   } catch (error) {
-    logger.error('Помилка підключення до MongoDB', { error });
-    // НЕ process.exit(1) — просто поверни помилку або продовжуй
-    throw error;  // або просто return, щоб сервер не падав
+    logger.error('Помилка підключення', { message: error.message, stack: error.stack });
+    if (attempt < maxAttempts) {
+      await new Promise(resolve => setTimeout(resolve, 5000));
+      return connectToMongoDB(attempt + 1, maxAttempts);
+    }
+    throw error;
   }
 };
-
-// ────────────────────────────────────────────────────────────────
-// Запуск сервера та ініціалізація
-// ────────────────────────────────────────────────────────────────
-(async () => {
-  try {
-    // 1. Підключення до бази
-    await connectToMongoDB();
-    logger.info('База даних підключена успішно');
-
-    // 2. Створення адміна, якщо його немає (робимо це після підключення!)
-    const adminExists = await db.collection('users').findOne({ username: 'admin1' });
-    if (!adminExists) {
-      const hashedPassword = await bcrypt.hash('admin123', 10); // ← змінити на сильний пароль!
-      await db.collection('users').insertOne({
-        username: 'admin1',
-        password: hashedPassword,
-        role: 'admin'
-      });
-      logger.info('Створено нового адміністратора: admin1 / admin123');
-    }
-
-    // 3. Завантаження кешу користувачів (тепер адмін точно є)
-    await loadUsersToCache();
-    logger.info('Кеш користувачів оновлено');
-
-    // 4. Запуск сервера
-    const PORT = process.env.PORT || 3000;
-    app.listen(PORT, () => {
-      logger.info(`Сервер запущено на порту ${PORT}`);
-    });
-
-  } catch (err) {
-    logger.error('Критична помилка при запуску сервера', err);
-    // НЕ process.exit(1) — Vercel не любить це
-    // Просто логувати і не завершувати процес
-  }
-})();
 
 // Завантаження тестів
 const loadTestsFromMongoDB = async () => {
@@ -952,32 +824,50 @@ app.get('/', (req, res) => {
         <script>
           document.getElementById('login-form').addEventListener('submit', async (e) => {
             e.preventDefault();
+            const username = document.getElementById('username').value;
+            const password = document.getElementById('password').value;
+            const errorMessage = document.getElementById('error-message');
+            const loginButton = document.getElementById('login-button');
 
-            const formData = new FormData(e.target);
+            loginButton.disabled = true;
+            loginButton.textContent = 'Завантаження...';
+
+            const formData = new URLSearchParams();
+            formData.append('username', username);
+            formData.append('password', password);
+            const csrfToken = document.querySelector('input[name="_csrf"]').value;
+            console.log('Відправка CSRF-токена:', csrfToken);
+            formData.append('_csrf', csrfToken);
 
             try {
               const response = await fetch('/login', {
                 method: 'POST',
+                headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
                 body: formData
               });
 
-              // Якщо сервер зробив редірект — йдемо за ним
-              if (response.redirected) {
-                window.location.href = response.url;
-                return;
-              }
-
-              // Якщо не редірект — парсимо JSON (якщо сервер поверне JSON)
               const result = await response.json();
+              console.log('Відповідь на вхід:', result);
 
               if (result.success) {
-                window.location.href = result.redirect || '/select-test';
+                window.location.href = result.redirect + '?nocache=' + Date.now();
               } else {
-                document.getElementById('error-message').textContent = result.message || 'Помилка входу';
+                if (response.status === 429) {
+                  errorMessage.textContent = result.message || 'Перевищено ліміт спроб входу. Спробуйте знову завтра.';
+                } else if (response.status === 400) {
+                  errorMessage.textContent = result.message || 'Некоректні дані. Перевірте логін та пароль.';
+                } else if (response.status === 401) {
+                  errorMessage.textContent = result.message || 'Невірний логін або пароль.';
+                } else {
+                  errorMessage.textContent = result.message || 'Помилка входу.';
+                }
               }
             } catch (error) {
               console.error('Помилка під час входу:', error);
-              document.getElementById('error-message').textContent = 'Не вдалося підключитися до сервера';
+              errorMessage.textContent = 'Не вдалося підключитися до сервера. Перевірте ваше з’єднання з Інтернетом.';
+            } finally {
+              loginButton.disabled = false;
+              loginButton.textContent = 'Увійти';
             }
           });
 
@@ -1068,9 +958,9 @@ app.post('/login', [
     await logActivity(foundUser.username, 'увійшов на сайт', ipAddress);
 
     if (foundUser.role === 'admin') {
-      return res.redirect('/admin');
+      res.json({ success: true, redirect: '/admin' });
     } else {
-      return res.redirect('/select-test');
+      res.json({ success: true, redirect: '/select-test' });
     }
   } catch (error) {
     logger.error('Помилка в /login', { message: error.message, stack: error.stack });
@@ -6647,20 +6537,6 @@ app.get('/admin/activity-log', checkAuth, checkAdmin, async (req, res) => {
 app.use((err, req, res, next) => {
   logger.error('Неперехоплена помилка', { message: err.message, stack: err.stack });
   res.status(500).send('Щось пішло не так! Спробуйте ще раз або зверніться до адміністратора.');
-});
-
-app.use((err, req, res, next) => {
-  logger.error('Неперехоплена помилка', {
-    message: err.message,
-    stack: err.stack,
-    url: req.url,
-    method: req.method
-  });
-
-  res.status(500).json({
-    success: false,
-    message: 'Внутрішня помилка сервера. Деталі в логах.'
-  });
 });
 
 // Запуск сервера
