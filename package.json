@@ -22,7 +22,7 @@
     "fs": "^0.0.1-security",
     "helmet": "^8.1.0",
     "jsonwebtoken": "^9.0.2",
-    "mongodb": "^6.17.0",
+    "mongodb": "^6.21.0",
     "multer": "^2.0.1",
     "nodemailer": "^7.0.3",
     "pdfmake": "^0.2.19",
