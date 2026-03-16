@@ -2028,86 +2028,143 @@ app.get('/test/question', checkAuth, async (req, res) => {
       let score = 0;
       const totalPoints = questions.reduce((sum, q) => sum + q.points, 0);
       const scoresPerQuestion = questions.map((q, index) => {
-        const userAnswer = answers[index];
+        const userAnswer = result.answers[index]; // масив або значення
         let questionScore = 0;
 
-        const normalizeAnswer = (answer) => {
-          if (!answer) return '';
-          return String(answer)
-            .trim()
-            .toLowerCase()
-            .replace(/\s+/g, '')
-            .replace(',', '.')
-            .replace(/\\'/g, "'")
-            .replace(/°/g, 'deg');
-        };
+        // Кількість елементів, на які ділимо бали
+        let numElements = 1; // за замовчуванням для single-choice тощо
 
-        if (q.type === 'multiple' && userAnswer && Array.isArray(userAnswer)) {
-          const correctAnswers = q.correctAnswers.map(val => normalizeAnswer(val));
-          const userAnswers = userAnswer.map(val => normalizeAnswer(val));
-          const isCorrect = correctAnswers.length === userAnswers.length &&
-            correctAnswers.every(val => userAnswers.includes(val)) &&
-            userAnswers.every(val => correctAnswers.includes(val));
-          if (isCorrect) {
-            questionScore = q.points;
-          }
-        } else if (q.type === 'input' && userAnswer) {
-          const normalizedUserAnswer = normalizeAnswer(userAnswer);
-          const normalizedCorrectAnswer = normalizeAnswer(q.correctAnswers[0]);
-          if (normalizedCorrectAnswer.includes('-')) {
-            const [min, max] = normalizedCorrectAnswer.split('-').map(val => parseFloat(val.trim()));
-            const userValue = parseFloat(normalizedUserAnswer);
-            const isCorrect = !isNaN(userValue) && userValue >= min && userValue <= max;
-            if (isCorrect) {
-              questionScore = q.points;
-            }
-          } else {
-            const isCorrect = normalizedUserAnswer === normalizedCorrectAnswer;
-            if (isCorrect) {
-              questionScore = q.points;
-            }
-          }
-        } else if (q.type === 'ordering' && userAnswer && Array.isArray(userAnswer)) {
-          const userAnswers = userAnswer.map(val => normalizeAnswer(val));
-          const correctAnswers = q.correctAnswers.map(val => normalizeAnswer(val));
-          const isCorrect = userAnswers.join(',') === correctAnswers.join(',');
-          if (isCorrect) {
-            questionScore = q.points;
-          }
-        } else if (q.type === 'matching' && userAnswer && Array.isArray(userAnswer)) {
-          const userPairs = userAnswer.map(pair => [normalizeAnswer(pair[0]), normalizeAnswer(pair[1])]);
-          const correctPairs = q.correctPairs.map(pair => [normalizeAnswer(pair[0]), normalizeAnswer(pair[1])]);
-          const isCorrect = userPairs.length === correctPairs.length &&
-            userPairs.every(userPair => correctPairs.some(correctPair => userPair[0] === correctPair[0] && userPair[1] === correctPair[1]));
-          if (isCorrect) {
-            questionScore = q.points;
-          }
-        } else if (q.type === 'fillblank' && userAnswer && Array.isArray(userAnswer)) {
-          const userAnswers = userAnswer.map(val => normalizeAnswer(val));
-          const correctAnswers = q.correctAnswers.map(val => normalizeAnswer(val));
-          const isCorrect = userAnswers.length === correctAnswers.length &&
-            userAnswers.every((answer, idx) => {
-              const correctAnswer = correctAnswers[idx];
-              if (correctAnswer.includes('-')) {
-                const [min, max] = correctAnswer.split('-').map(val => parseFloat(val.trim()));
-                const userValue = parseFloat(answer);
-                return !isNaN(userValue) && userValue >= min && userValue <= max;
+        switch (q.type) {
+          case 'multiple':
+          case 'fillblank':
+            numElements = q.correctAnswers?.length || 1;
+            break;
+          case 'matching':
+            numElements = q.correctPairs?.length || 1;
+            break;
+          case 'ordering':
+            numElements = q.correctAnswers?.length || 1;
+            break;
+          default:
+            numElements = 1;
+        }
+
+        const partial = q.points / numElements; // базовий бал за елемент
+
+        const normalize = (val) => String(val || '')
+          .trim()
+          .toLowerCase()
+          .replace(/\s+/g, ' ')
+          .replace(/[^a-z0-9а-яіїєґ\s]/gi, '');
+
+        switch (q.type) {
+          // ────────────────────────────────────────────────────────────────
+          // Multiple choice
+          // ────────────────────────────────────────────────────────────────
+          case 'multiple':
+            if (!Array.isArray(userAnswer)) break;
+            const correctSet = new Set(q.correctAnswers.map(normalize));
+            const userSet   = new Set(userAnswer.map(normalize));
+
+            // + за правильні
+            correctSet.forEach(c => {
+              if (userSet.has(c)) questionScore += partial;
+            });
+
+            // - за зайві (штраф половина від partial)
+            userSet.forEach(u => {
+              if (!correctSet.has(u)) questionScore -= partial / 2;
+            });
+            break;
+
+          // ────────────────────────────────────────────────────────────────
+          // Fill in the blank
+          // ────────────────────────────────────────────────────────────────
+          case 'fillblank':
+            if (!Array.isArray(userAnswer) || userAnswer.length !== q.correctAnswers.length) break;
+
+            q.correctAnswers.forEach((correct, i) => {
+              const userVal = normalize(userAnswer[i]);
+              let isCorrect = false;
+
+              if (correct.includes('-')) {
+                const [min, max] = correct.split('-').map(Number);
+                const val = Number(userVal);
+                isCorrect = !isNaN(val) && val >= min && val <= max;
               } else {
-                return answer === correctAnswer;
+                isCorrect = userVal === normalize(correct);
+              }
+
+              if (isCorrect) questionScore += partial;
+              else questionScore -= partial / 2;
+            });
+            break;
+
+          // ────────────────────────────────────────────────────────────────
+          // Matching
+          // ────────────────────────────────────────────────────────────────
+          case 'matching':
+            if (!Array.isArray(userAnswer) || userAnswer.length !== q.correctPairs.length) break;
+
+            q.correctPairs.forEach((correctPair, i) => {
+              const userPair = userAnswer[i];
+              if (!userPair || userPair.length !== 2) {
+                questionScore -= partial / 2;
+                return;
+              }
+
+              const leftCorrect  = normalize(correctPair[0]);
+              const rightCorrect = normalize(correctPair[1]);
+              const leftUser     = normalize(userPair[0]);
+              const rightUser    = normalize(userPair[1]);
+
+              if (leftCorrect === leftUser && rightCorrect === rightUser) {
+                questionScore += partial;
+              } else {
+                questionScore -= partial / 2;
               }
             });
-          if (isCorrect) {
-            questionScore = q.points;
-          }
-        } else if (q.type === 'singlechoice' && userAnswer && Array.isArray(userAnswer)) {
-          const userAnswers = userAnswer.map(val => normalizeAnswer(val));
-          const correctAnswer = normalizeAnswer(q.correctAnswer);
-          const isCorrect = userAnswers.length === 1 && userAnswers[0] === correctAnswer;
-          if (isCorrect) {
-            questionScore = q.points;
-          }
+            break;
+
+          // ────────────────────────────────────────────────────────────────
+          // Ordering
+          // ────────────────────────────────────────────────────────────────
+          case 'ordering':
+            if (!Array.isArray(userAnswer)) break;
+            const correctOrder = q.correctAnswers.map(normalize);
+            const userOrder    = userAnswer.map(normalize);
+
+            correctOrder.forEach((correct, i) => {
+              if (userOrder[i] === correct) questionScore += partial;
+              else questionScore -= partial / 2;
+            });
+            break;
+
+          // ────────────────────────────────────────────────────────────────
+          // Single choice, truefalse, input — все або нічого
+          // ────────────────────────────────────────────────────────────────
+          default:
+            let isCorrect = false;
+
+            if (q.type === 'singlechoice' || q.type === 'truefalse') {
+              isCorrect = normalize(userAnswer) === normalize(q.correctAnswer || q.correctAnswers[0]);
+            } else if (q.type === 'input') {
+              const correct = q.correctAnswers[0];
+              if (correct.includes('-')) {
+                const [min, max] = correct.split('-').map(Number);
+                const val = Number(normalize(userAnswer));
+                isCorrect = !isNaN(val) && val >= min && val <= max;
+              } else {
+                isCorrect = normalize(userAnswer) === normalize(correct);
+              }
+            }
+
+            questionScore = isCorrect ? q.points : 0;
+            break;
         }
-        return questionScore;
+
+        // Не нижче нуля
+        return Math.max(0, Math.round(questionScore * 10) / 10); // округлення до 1 знаку
       });
 
       score = scoresPerQuestion.reduce((sum, s) => sum + s, 0);
@@ -3569,88 +3626,143 @@ app.get('/results', checkAuth, async (req, res) => {
       let score = 0;
       const totalPoints = questions.reduce((sum, q) => sum + q.points, 0);
       const scoresPerQuestion = questions.map((q, index) => {
-        const userAnswer = answers[index];
+        const userAnswer = result.answers[index]; // масив або значення
         let questionScore = 0;
 
-        const normalizeAnswer = (answer) => {
-          if (!answer) return '';
-          return String(answer)
-            .trim()
-            .toLowerCase()
-            .replace(/\s+/g, '')
-            .replace(',', '.')
-            .replace(/\\'/g, "'")
-            .replace(/°/g, 'deg');
-        };
+        // Кількість елементів, на які ділимо бали
+        let numElements = 1; // за замовчуванням для single-choice тощо
 
-        if (q.type === 'multiple' && userAnswer && Array.isArray(userAnswer)) {
-          const correctAnswers = q.correctAnswers.map(val => normalizeAnswer(val));
-          const userAnswers = userAnswer.map(val => normalizeAnswer(val));
-          const isCorrect = correctAnswers.length === userAnswers.length &&
-            correctAnswers.every(val => userAnswers.includes(val)) &&
-            userAnswers.every(val => correctAnswers.includes(val));
-          if (isCorrect) {
-            questionScore = q.points;
-          }
-        } else if (q.type === 'input' && userAnswer) {
-          const normalizedUserAnswer = normalizeAnswer(userAnswer);
-          const normalizedCorrectAnswer = normalizeAnswer(q.correctAnswers[0]);
-          if (normalizedCorrectAnswer.includes('-')) {
-            const [min, max] = normalizedCorrectAnswer.split('-').map(val => parseFloat(val.trim()));
-            const userValue = parseFloat(normalizedUserAnswer);
-            const isCorrect = !isNaN(userValue) && userValue >= min && userValue <= max;
-            if (isCorrect) {
-              questionScore = q.points;
-            }
-          } else {
-            const isCorrect = normalizedUserAnswer === normalizedCorrectAnswer;
-            if (isCorrect) {
-              questionScore = q.points;
-            }
-          }
-        } else if (q.type === 'ordering' && userAnswer && Array.isArray(userAnswer)) {
-          const userAnswers = userAnswer.map(val => normalizeAnswer(val));
-          const correctAnswers = q.correctAnswers.map(val => normalizeAnswer(val));
-          const isCorrect = userAnswers.join(',') === correctAnswers.join(',');
-          if (isCorrect) {
-            questionScore = q.points;
-          }
-        } else if (q.type === 'matching' && userAnswer && Array.isArray(userAnswer)) {
-          const userPairs = userAnswer.map(pair => [normalizeAnswer(pair[0]), normalizeAnswer(pair[1])]);
-          const correctPairs = q.correctPairs.map(pair => [normalizeAnswer(pair[0]), normalizeAnswer(pair[1])]);
-          const isCorrect = userPairs.length === correctPairs.length &&
-            userPairs.every(userPair => correctPairs.some(correctPair => userPair[0] === correctPair[0] && userPair[1] === correctPair[1]));
-          if (isCorrect) {
-            questionScore = q.points;
-          }
-        } else if (q.type === 'fillblank' && userAnswer && Array.isArray(userAnswer)) {
-          const userAnswers = userAnswer.map(val => normalizeAnswer(val));
-          const correctAnswers = q.correctAnswers.map(val => normalizeAnswer(val));
-          logger.info(`Питання fillblank ${index + 1} в /results`, { userAnswers, correctAnswers });
-          const isCorrect = userAnswers.length === correctAnswers.length &&
-            userAnswers.every((answer, idx) => {
-              const correctAnswer = correctAnswers[idx];
-              if (correctAnswer.includes('-')) {
-                const [min, max] = correctAnswer.split('-').map(val => parseFloat(val.trim()));
-                const userValue = parseFloat(answer);
-                return !isNaN(userValue) && userValue >= min && userValue <= max;
+        switch (q.type) {
+          case 'multiple':
+          case 'fillblank':
+            numElements = q.correctAnswers?.length || 1;
+            break;
+          case 'matching':
+            numElements = q.correctPairs?.length || 1;
+            break;
+          case 'ordering':
+            numElements = q.correctAnswers?.length || 1;
+            break;
+          default:
+            numElements = 1;
+        }
+
+        const partial = q.points / numElements; // базовий бал за елемент
+
+        const normalize = (val) => String(val || '')
+          .trim()
+          .toLowerCase()
+          .replace(/\s+/g, ' ')
+          .replace(/[^a-z0-9а-яіїєґ\s]/gi, '');
+
+        switch (q.type) {
+          // ────────────────────────────────────────────────────────────────
+          // Multiple choice
+          // ────────────────────────────────────────────────────────────────
+          case 'multiple':
+            if (!Array.isArray(userAnswer)) break;
+            const correctSet = new Set(q.correctAnswers.map(normalize));
+            const userSet   = new Set(userAnswer.map(normalize));
+
+            // + за правильні
+            correctSet.forEach(c => {
+              if (userSet.has(c)) questionScore += partial;
+            });
+
+            // - за зайві (штраф половина від partial)
+            userSet.forEach(u => {
+              if (!correctSet.has(u)) questionScore -= partial / 2;
+            });
+            break;
+
+          // ────────────────────────────────────────────────────────────────
+          // Fill in the blank
+          // ────────────────────────────────────────────────────────────────
+          case 'fillblank':
+            if (!Array.isArray(userAnswer) || userAnswer.length !== q.correctAnswers.length) break;
+
+            q.correctAnswers.forEach((correct, i) => {
+              const userVal = normalize(userAnswer[i]);
+              let isCorrect = false;
+
+              if (correct.includes('-')) {
+                const [min, max] = correct.split('-').map(Number);
+                const val = Number(userVal);
+                isCorrect = !isNaN(val) && val >= min && val <= max;
               } else {
-                return answer === correctAnswer;
+                isCorrect = userVal === normalize(correct);
+              }
+
+              if (isCorrect) questionScore += partial;
+              else questionScore -= partial / 2;
+            });
+            break;
+
+          // ────────────────────────────────────────────────────────────────
+          // Matching
+          // ────────────────────────────────────────────────────────────────
+          case 'matching':
+            if (!Array.isArray(userAnswer) || userAnswer.length !== q.correctPairs.length) break;
+
+            q.correctPairs.forEach((correctPair, i) => {
+              const userPair = userAnswer[i];
+              if (!userPair || userPair.length !== 2) {
+                questionScore -= partial / 2;
+                return;
+              }
+
+              const leftCorrect  = normalize(correctPair[0]);
+              const rightCorrect = normalize(correctPair[1]);
+              const leftUser     = normalize(userPair[0]);
+              const rightUser    = normalize(userPair[1]);
+
+              if (leftCorrect === leftUser && rightCorrect === rightUser) {
+                questionScore += partial;
+              } else {
+                questionScore -= partial / 2;
               }
             });
-          if (isCorrect) {
-            questionScore = q.points;
-          }
-        } else if (q.type === 'singlechoice' && userAnswer && Array.isArray(userAnswer)) {
-          const userAnswers = userAnswer.map(val => normalizeAnswer(val));
-          const correctAnswer = normalizeAnswer(q.correctAnswer);
-          logger.info(`Питання single choice ${index + 1} в /results`, { userAnswers, correctAnswer });
-          const isCorrect = userAnswers.length === 1 && userAnswers[0] === correctAnswer;
-          if (isCorrect) {
-            questionScore = q.points;
-          }
+            break;
+
+          // ────────────────────────────────────────────────────────────────
+          // Ordering
+          // ────────────────────────────────────────────────────────────────
+          case 'ordering':
+            if (!Array.isArray(userAnswer)) break;
+            const correctOrder = q.correctAnswers.map(normalize);
+            const userOrder    = userAnswer.map(normalize);
+
+            correctOrder.forEach((correct, i) => {
+              if (userOrder[i] === correct) questionScore += partial;
+              else questionScore -= partial / 2;
+            });
+            break;
+
+          // ────────────────────────────────────────────────────────────────
+          // Single choice, truefalse, input — все або нічого
+          // ────────────────────────────────────────────────────────────────
+          default:
+            let isCorrect = false;
+
+            if (q.type === 'singlechoice' || q.type === 'truefalse') {
+              isCorrect = normalize(userAnswer) === normalize(q.correctAnswer || q.correctAnswers[0]);
+            } else if (q.type === 'input') {
+              const correct = q.correctAnswers[0];
+              if (correct.includes('-')) {
+                const [min, max] = correct.split('-').map(Number);
+                const val = Number(normalize(userAnswer));
+                isCorrect = !isNaN(val) && val >= min && val <= max;
+              } else {
+                isCorrect = normalize(userAnswer) === normalize(correct);
+              }
+            }
+
+            questionScore = isCorrect ? q.points : 0;
+            break;
         }
-        return questionScore;
+
+        // Не нижче нуля
+        return Math.max(0, Math.round(questionScore * 10) / 10); // округлення до 1 знаку
       });
 
       score = scoresPerQuestion.reduce((sum, s) => sum + s, 0);
