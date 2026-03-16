@@ -952,50 +952,31 @@ app.get('/', (req, res) => {
         <script>
           document.getElementById('login-form').addEventListener('submit', async (e) => {
             e.preventDefault();
-            const username = document.getElementById('username').value;
-            const password = document.getElementById('password').value;
-            const errorMessage = document.getElementById('error-message');
-            const loginButton = document.getElementById('login-button');
 
-            loginButton.disabled = true;
-            loginButton.textContent = 'Завантаження...';
-
-            const formData = new URLSearchParams();
-            formData.append('username', username);
-            formData.append('password', password);
-            const csrfToken = document.querySelector('input[name="_csrf"]').value;
-            console.log('Відправка CSRF-токена:', csrfToken);
-            formData.append('_csrf', csrfToken);
-
+            const formData = new FormData(e.target);
             try {
               const response = await fetch('/login', {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
                 body: formData
               });
 
+              // Якщо сервер зробив редірект — йдемо за ним
+              if (response.redirected) {
+                window.location.href = response.url;
+                return;
+              }
+
+              // Якщо не редірект — парсимо JSON
               const result = await response.json();
-              console.log('Відповідь на вхід:', result);
 
               if (result.success) {
-                window.location.href = result.redirect + '?nocache=' + Date.now();
+                window.location.href = result.redirect;
               } else {
-                if (response.status === 429) {
-                  errorMessage.textContent = result.message || 'Перевищено ліміт спроб входу. Спробуйте знову завтра.';
-                } else if (response.status === 400) {
-                  errorMessage.textContent = result.message || 'Некоректні дані. Перевірте логін та пароль.';
-                } else if (response.status === 401) {
-                  errorMessage.textContent = result.message || 'Невірний логін або пароль.';
-                } else {
-                  errorMessage.textContent = result.message || 'Помилка входу.';
-                }
+                document.getElementById('error-message').textContent = result.message || 'Помилка входу';
               }
             } catch (error) {
               console.error('Помилка під час входу:', error);
-              errorMessage.textContent = 'Не вдалося підключитися до сервера. Перевірте ваше з’єднання з Інтернетом.';
-            } finally {
-              loginButton.disabled = false;
-              loginButton.textContent = 'Увійти';
+              document.getElementById('error-message').textContent = 'Не вдалося підключитися до сервера';
             }
           });
 
