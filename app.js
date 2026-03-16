@@ -1057,9 +1057,9 @@ app.post('/login', [
     await logActivity(foundUser.username, 'увійшов на сайт', ipAddress);
 
     if (foundUser.role === 'admin') {
-      res.json({ success: true, redirect: '/admin' });
+      return res.redirect('/admin');
     } else {
-      res.json({ success: true, redirect: '/select-test' });
+      return res.redirect('/select-test');
     }
   } catch (error) {
     logger.error('Помилка в /login', { message: error.message, stack: error.stack });
