@@ -5747,22 +5747,20 @@ app.get('/admin/view-result', checkAuth, async (req, res) => {
     if (req.userRole !== 'admin' && req.userRole !== 'instructor') {
       return res.status(403).send('Доступно тільки для адміністраторів та інструкторів');
     }
-
     const { id } = req.query;
     if (!id || !ObjectId.isValid(id)) {
       return res.status(400).send('Невірний ідентифікатор результату');
     }
-
     const result = await db.collection('test_results').findOne({ _id: new ObjectId(id) });
     if (!result) {
       return res.status(404).send('Результат не знайдено');
     }
-
-    const questions = await db.collection('questions')
+    let questions = await db.collection('questions')
       .find({ testNumber: result.testNumber })
       .sort({ order: 1 })
       .toArray();
-
+    // Фільтрація питань за варіантом користувача
+    questions = questions.filter(q => !q.variant || q.variant === '' || q.variant === result.variant);
     let html = `
       <!DOCTYPE html>
       <html lang="uk">
@@ -5806,8 +5804,7 @@ app.get('/admin/view-result', checkAuth, async (req, res) => {
               <th>Бали</th>
             </tr>
     `;
-
-    // Перебираємо питання в порядку order і зіставляємо з відповідями за індексом
+    // Перебираємо відфільтровані питання
     questions.forEach((question, index) => {
       const userAnswer = result.answers[index] !== undefined ? result.answers[index] : 'Не відповіли';
       const questionScore = result.scoresPerQuestion[index] || 0;
@@ -5825,11 +5822,10 @@ app.get('/admin/view-result', checkAuth, async (req, res) => {
         <tr>
           <td>${question.text}</td>
           <td class="answers">${userAnswerDisplay}</td>
-          <td>${questionScore} з ${question.points}</td>
+          <td>${questionScore}/${question.points}</td>
         </tr>
       `;
     });
-
     html += `
           </table>
           <button class="nav-btn" onclick="window.location.href='/select-test'">Повернутися до вибору тесту</button>
