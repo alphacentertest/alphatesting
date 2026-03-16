@@ -1,5 +1,8 @@
+// ────────────────────────────────────────────────────────────────
 // Імпорт необхідних модулів
+// ────────────────────────────────────────────────────────────────
 require('dotenv').config();
+
 const express = require('express');
 const cookieParser = require('cookie-parser');
 const path = require('path');
@@ -14,14 +17,20 @@ const jwt = require('jsonwebtoken');
 const winston = require('winston');
 const session = require('express-session');
 const MongoStore = require('connect-mongo');
+const helmet = require('helmet');
+const rateLimit = require('express-rate-limit');
 
+// ────────────────────────────────────────────────────────────────
 // Ініціалізація Express-додатку
+// ────────────────────────────────────────────────────────────────
 const app = express();
 
-// Увімкнення довіри до проксі
+// Увімкнення довіри до проксі (обов’язково для Vercel, Cloudflare тощо)
 app.set('trust proxy', 1);
 
-// Налаштування логування
+// ────────────────────────────────────────────────────────────────
+// Налаштування логування (winston)
+// ────────────────────────────────────────────────────────────────
 const logger = winston.createLogger({
   level: 'info',
   format: winston.format.combine(
@@ -35,23 +44,78 @@ const logger = winston.createLogger({
   ]
 });
 
-// Налаштування multer
+// ────────────────────────────────────────────────────────────────
+// helmet — захист заголовків (перший middleware)
+// ────────────────────────────────────────────────────────────────
+app.use(helmet());
+
+// ────────────────────────────────────────────────────────────────
+// Глобальний rate-limit (на всі запити)
+// ────────────────────────────────────────────────────────────────
+app.use(rateLimit({
+  windowMs: 15 * 60 * 1000,           // 15 хвилин
+  limit: 100,                         // максимум 100 запитів з однієї IP
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { success: false, message: 'Забагато запитів, спробуйте пізніше' }
+}));
+
+// Сильніший ліміт саме на логін
+app.use('/login', rateLimit({
+  windowMs: 10 * 60 * 1000,           // 10 хвилин
+  limit: 5,                           // тільки 5 спроб
+  message: { success: false, message: 'Забагато спроб входу. Почекайте 10 хвилин' },
+  keyGenerator: (req) => {
+    return req.headers['x-forwarded-for']?.split(',')[0]?.trim()
+      || req.socket.remoteAddress
+      || 'unknown';
+  }
+}));
+
+// Ліміт на адмінські маршрути (опціонально, можна налаштувати сильніше)
+app.use('/admin', rateLimit({
+  windowMs: 60 * 60 * 1000,           // 1 година
+  limit: 300,
+}));
+
+// ────────────────────────────────────────────────────────────────
+// Простий health-check ендпоінт (доступний без авторизації)
+// ────────────────────────────────────────────────────────────────
+// health-check (має бути ДО app.listen)
+app.get('/health', async (req, res) => {
+  const isDbReady = !!db && client?.topology?.isConnected?.();
+  res.status(isDbReady ? 200 : 503).json({
+    status: isDbReady ? 'healthy' : 'starting',
+    database: isDbReady ? 'ok' : 'not ready yet',
+    uptime: Math.round(process.uptime()) + ' секунд',
+    timestamp: new Date().toISOString()
+  });
+});
+
+// ────────────────────────────────────────────────────────────────
+// Налаштування multer (для завантаження файлів)
+// ────────────────────────────────────────────────────────────────
 const storage = multer.memoryStorage();
 const upload = multer({
   storage: storage,
-  limits: { fileSize: 4 * 1024 * 1024 }
+  limits: { fileSize: 4 * 1024 * 1024 } // 4 MB
 });
 
-// Налаштування nodemailer
+// ────────────────────────────────────────────────────────────────
+// Налаштування nodemailer (Gmail)
+// ────────────────────────────────────────────────────────────────
 const transporter = nodemailer.createTransport({
   service: 'gmail',
   auth: {
-    user: process.env.EMAIL_USER || 'alphacentertest@gmail.com',
-    pass: process.env.EMAIL_PASS || 'xfcd cvkl xiii qhtl'
+    user: process.env.EMAIL_USER,
+    pass: process.env.EMAIL_PASS
+  },
+  tls: {
+    rejectUnauthorized: false // іноді потрібно для тестових середовищ
   }
 });
 
-// Функція для відправки email
+// Функція для відправки email про підозрілу активність
 const sendSuspiciousActivityEmail = async (user, activityDetails) => {
   try {
     const mailOptions = {
@@ -66,6 +130,7 @@ const sendSuspiciousActivityEmail = async (user, activityDetails) => {
         Загальна кількість дій: ${activityDetails.totalActivityCount}
       `
     };
+
     await transporter.sendMail(mailOptions);
     logger.info(`Email відправлено для ${user}`);
   } catch (error) {
@@ -73,7 +138,9 @@ const sendSuspiciousActivityEmail = async (user, activityDetails) => {
   }
 };
 
-// Конфігурація
+// ────────────────────────────────────────────────────────────────
+// Конфігурація підозрілої активності
+// ────────────────────────────────────────────────────────────────
 const config = {
   suspiciousActivity: {
     timeAwayThreshold: 50,
@@ -81,15 +148,26 @@ const config = {
   }
 };
 
-// Налаштування MongoDB
-const MONGODB_URI = process.env.MONGODB_URI || 'mongodb+srv://romanhaleckij7:DNMaH9w2X4gel3Xc@cluster0.r93r1p8.mongodb.net/alpha?retryWrites=true&w=majority';
+// ────────────────────────────────────────────────────────────────
+// Налаштування MongoDB клієнта
+// ────────────────────────────────────────────────────────────────
+const MONGODB_URI = process.env.MONGODB_URI;
+
+if (!MONGODB_URI) {
+  logger.error('MONGODB_URI не задано в .env або змінних середовища');
+  process.exit(1);
+}
+
 const client = new MongoClient(MONGODB_URI, {
-  connectTimeoutMS: 5000,
-  serverSelectionTimeoutMS: 5000
+  connectTimeoutMS: 10000,
+  serverSelectionTimeoutMS: 10000
 });
+
 let db;
 
+// ────────────────────────────────────────────────────────────────
 // Клас CacheManager
+// ────────────────────────────────────────────────────────────────
 class CacheManager {
   static cache = {};
 
@@ -126,7 +204,9 @@ class CacheManager {
   }
 }
 
-// Кеш
+// ────────────────────────────────────────────────────────────────
+// Глобальні змінні кешу та стану
+// ────────────────────────────────────────────────────────────────
 let userCache = [];
 const questionsCache = {};
 
@@ -134,8 +214,10 @@ let isInitialized = false;
 let initializationError = null;
 let testNames = {};
 
-// Підключення до MongoDB
-const connectToMongoDB = async (attempt = 1, maxAttempts = 3) => {
+// ────────────────────────────────────────────────────────────────
+// Функція підключення до MongoDB з ретраями
+// ────────────────────────────────────────────────────────────────
+const connectToMongoDB = async (attempt = 1, maxAttempts = 5) => {
   try {
     logger.info(`Спроба підключення до MongoDB (${attempt}/${maxAttempts})`);
     const startTime = Date.now();
@@ -145,12 +227,29 @@ const connectToMongoDB = async (attempt = 1, maxAttempts = 3) => {
   } catch (error) {
     logger.error('Помилка підключення', { message: error.message, stack: error.stack });
     if (attempt < maxAttempts) {
-      await new Promise(resolve => setTimeout(resolve, 5000));
+      await new Promise(resolve => setTimeout(resolve, 5000 * attempt)); // експоненціальна затримка
       return connectToMongoDB(attempt + 1, maxAttempts);
     }
     throw error;
   }
 };
+
+// ────────────────────────────────────────────────────────────────
+// Запуск сервера та ініціалізація
+// ────────────────────────────────────────────────────────────────
+(async () => {
+  try {
+    await connectToMongoDB();
+    // інші ініціалізації
+    const PORT = process.env.PORT || 3000;
+    app.listen(PORT, () => {
+      logger.info(`Сервер запущено на порту ${PORT}`);
+    });
+  } catch (err) {
+    logger.error('Помилка запуску сервера', err);
+    process.exit(1);
+  }
+})();
 
 // Завантаження тестів
 const loadTestsFromMongoDB = async () => {
