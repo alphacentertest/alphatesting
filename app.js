@@ -166,7 +166,7 @@ const MONGODB_URI = process.env.MONGODB_URI;
 
 if (!MONGODB_URI) {
   logger.error('MONGODB_URI не задано в .env або змінних середовища');
-  process.exit(1);
+  // не exit — просто не підключайся до бази
 }
 
 const client = new MongoClient(MONGODB_URI, {
@@ -236,12 +236,9 @@ const connectToMongoDB = async (attempt = 1, maxAttempts = 5) => {
     db = client.db('alpha');
     logger.info(`Підключено до MongoDB за ${Date.now() - startTime} мс`, { databaseName: db.databaseName });
   } catch (error) {
-    logger.error('Помилка підключення', { message: error.message, stack: error.stack });
-    if (attempt < maxAttempts) {
-      await new Promise(resolve => setTimeout(resolve, 5000 * attempt)); // експоненціальна затримка
-      return connectToMongoDB(attempt + 1, maxAttempts);
-    }
-    throw error;
+    logger.error('Помилка підключення до MongoDB', { error });
+    // НЕ process.exit(1) — просто поверни помилку або продовжуй
+    throw error;  // або просто return, щоб сервер не падав
   }
 };
 
@@ -253,8 +250,8 @@ const connectToMongoDB = async (attempt = 1, maxAttempts = 5) => {
     await connectToMongoDB();
     logger.info('База даних підключена успішно');
   } catch (err) {
-    logger.error('Не вдалося підключитися до бази при запуску', err);
-    // НЕ process.exit(1) — просто логувати і продовжувати
+    logger.error('Не вдалося підключитися до бази при запуску (продовжуємо роботу)', err);
+    // НЕ process.exit(1) — продовжуємо, щоб сервер відповідав
   }
 
   const PORT = process.env.PORT || 3000;
@@ -6651,7 +6648,7 @@ app.use((err, req, res, next) => {
 });
 
 app.use((err, req, res, next) => {
-  logger.error('Неперехоплена помилка на сервері', {
+  logger.error('Неперехоплена помилка', {
     message: err.message,
     stack: err.stack,
     url: req.url,
@@ -6660,7 +6657,7 @@ app.use((err, req, res, next) => {
 
   res.status(500).json({
     success: false,
-    message: 'Внутрішня помилка сервера. Перевірте логи.'
+    message: 'Внутрішня помилка сервера. Деталі в логах.'
   });
 });
 
