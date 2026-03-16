@@ -954,6 +954,7 @@ app.get('/', (req, res) => {
             e.preventDefault();
 
             const formData = new FormData(e.target);
+
             try {
               const response = await fetch('/login', {
                 method: 'POST',
@@ -966,11 +967,11 @@ app.get('/', (req, res) => {
                 return;
               }
 
-              // Якщо не редірект — парсимо JSON
+              // Якщо не редірект — парсимо JSON (якщо сервер поверне JSON)
               const result = await response.json();
 
               if (result.success) {
-                window.location.href = result.redirect;
+                window.location.href = result.redirect || '/select-test';
               } else {
                 document.getElementById('error-message').textContent = result.message || 'Помилка входу';
               }
