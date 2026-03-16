@@ -251,10 +251,9 @@ const connectToMongoDB = async (attempt = 1, maxAttempts = 5) => {
 (async () => {
   try {
     await connectToMongoDB();
-    // інші ініціалізації
-    const PORT = process.env.PORT || 3000;
-    app.listen(PORT, () => {
-      logger.info(`Сервер запущено на порту ${PORT}`);
+    // await loadTestsFromMongoDB(); // якщо є
+    app.listen(process.env.PORT || 3000, () => {
+      logger.info(`Сервер запущено на порту ${process.env.PORT || 3000}`);
     });
   } catch (err) {
     logger.error('Помилка запуску сервера', err);
