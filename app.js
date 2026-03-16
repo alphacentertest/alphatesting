@@ -51,9 +51,11 @@ app.use(helmet({
   contentSecurityPolicy: {
     directives: {
       defaultSrc: ["'self'"],
-      scriptSrc: ["'self'"],
-      scriptSrcAttr: ["'unsafe-inline'"],  // тільки для onclick тощо
-      styleSrc: ["'self'", "'unsafe-inline'"],
+      scriptSrc: ["'self'", "'unsafe-inline'"],        // ← дозволяє <script>код</script>
+      scriptSrcAttr: ["'unsafe-inline'"],              // ← дозволяє onclick="..."
+      styleSrc: ["'self'", "'unsafe-inline'"],         // для стилів
+      imgSrc: ["'self'", "data:"],                     // для картинок
+      connectSrc: ["'self'"],                          // для fetch/axios
     },
   },
 }));
