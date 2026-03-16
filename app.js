@@ -252,15 +252,15 @@ const connectToMongoDB = async (attempt = 1, maxAttempts = 5) => {
     logger.info('База даних підключена успішно');
 
     // 2. Створення адміна, якщо його немає (робимо це після підключення!)
-    const adminExists = await db.collection('users').findOne({ username: 'admin' });
+    const adminExists = await db.collection('users').findOne({ username: 'admin1' });
     if (!adminExists) {
       const hashedPassword = await bcrypt.hash('admin123', 10); // ← змінити на сильний пароль!
       await db.collection('users').insertOne({
-        username: 'admin',
+        username: 'admin1',
         password: hashedPassword,
         role: 'admin'
       });
-      logger.info('Створено нового адміністратора: admin / admin123');
+      logger.info('Створено нового адміністратора: admin1 / admin123');
     }
 
     // 3. Завантаження кешу користувачів (тепер адмін точно є)
