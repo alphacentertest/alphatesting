@@ -82,7 +82,7 @@ const config = {
 };
 
 // Налаштування MongoDB
-const MONGODB_URI = process.env.MONGODB_URI || 'mongodb+srv://romanhaleckij7:DNMaH9w2X4gel3Xc@cluster0.r93r1p8.mongodb.net/alpha?retryWrites=true&w=majority';
+const MONGODB_URI = process.env.MONGODB_URI;
 const client = new MongoClient(MONGODB_URI, {
   connectTimeoutMS: 5000,
   serverSelectionTimeoutMS: 5000
