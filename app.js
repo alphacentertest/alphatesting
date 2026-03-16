@@ -328,7 +328,7 @@ app.use(cookieParser());
 
 // Налаштування сесій
 app.use(session({
-  secret: process.env.SESSION_SECRET || 'your-secret-key',
+  secret: process.env.SESSION_SECRET,
   resave: false,
   saveUninitialized: false,
   store: MongoStore.create({
@@ -1043,7 +1043,7 @@ app.post('/login', [
 
     const token = jwt.sign(
       { username: foundUser.username, role: foundUser.role },
-      process.env.JWT_SECRET || 'your-secret-key',
+      process.env.JWT_SECRET,
       { expiresIn: '24h' }
     );
 
@@ -1086,7 +1086,7 @@ const checkAuth = (req, res, next) => {
   }
 
   try {
-    const decoded = jwt.verify(token, process.env.JWT_SECRET || 'your-secret-key');
+    const decoded = jwt.verify(token, process.env.JWT_SECRET);
     req.user = decoded.username;
     req.userRole = decoded.role;
     next();
