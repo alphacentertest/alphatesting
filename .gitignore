@@ -1,7 +1,39 @@
+# Залежності
 node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Середовище
 .env
-.vercel/
-dist/
-*.log
+.env.local
+.env.*.local
+.env.development
+.env.test
+.env.production
+
+# Vercel / хостинги
 .vercel
+.now
+.output
+
+# Логи
+*.log
+logs/
+error.log
+combined.log
+
+# Тимчасові файли
+.DS_Store
+Thumbs.db
 ~$*.xlsx
+*.tmp
+*.bak
+*.swp
+*.xlsx
+questions*.xlsx
+
+# Білди / дистрибутиви
+dist/
+build/
+out/
