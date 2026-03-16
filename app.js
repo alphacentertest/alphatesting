@@ -47,7 +47,16 @@ const logger = winston.createLogger({
 // ────────────────────────────────────────────────────────────────
 // helmet — захист заголовків (перший middleware)
 // ────────────────────────────────────────────────────────────────
-app.use(helmet());
+app.use(helmet({
+  contentSecurityPolicy: {
+    directives: {
+      defaultSrc: ["'self'"],
+      scriptSrc: ["'self'"],
+      scriptSrcAttr: ["'unsafe-inline'"],  // тільки для onclick тощо
+      styleSrc: ["'self'", "'unsafe-inline'"],
+    },
+  },
+}));
 
 // ────────────────────────────────────────────────────────────────
 // Глобальний rate-limit (на всі запити)
