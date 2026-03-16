@@ -686,36 +686,13 @@ setInterval(cleanupActiveTests, 24 * 60 * 60 * 1000);
 // Ініціалізація
 (async () => {
   try {
-    // 1. Підключення до бази
-    await connectToMongoDB();
-    logger.info('База даних підключена успішно');
-
-    // 2. Створення адміна, якщо його немає (робимо це після підключення!)
-    const adminExists = await db.collection('users').findOne({ username: 'admin1' });
-    if (!adminExists) {
-      const hashedPassword = await bcrypt.hash('admin123', 10); // ← змінити на сильний пароль!
-      await db.collection('users').insertOne({
-        username: 'admin1',
-        password: hashedPassword,
-        role: 'admin'
-      });
-      logger.info('Створено нового адміністратора: admin1 / admin123');
-    }
-
-    // 3. Завантаження кешу користувачів (тепер адмін точно є)
-    await loadUsersToCache();
-    logger.info('Кеш користувачів оновлено');
-
-    // 4. Запуск сервера
-    const PORT = process.env.PORT || 3000;
-    app.listen(PORT, () => {
-      logger.info(`Сервер запущено на порту ${PORT}`);
-    });
-
-  } catch (err) {
-    logger.error('Критична помилка при запуску сервера', err);
-    // НЕ process.exit(1) — Vercel не любить це
-    // Просто логувати і не завершувати процес
+    await initializeServer();
+    app.use(ensureInitialized);
+    await cleanupActivityLog();
+    await cleanupActiveTests();
+  } catch (error) {
+    logger.error('Помилка запуску', { message: error.message, stack: error.stack });
+    process.exit(1);
   }
 })();
 
