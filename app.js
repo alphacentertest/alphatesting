@@ -247,17 +247,37 @@ const connectToMongoDB = async (attempt = 1, maxAttempts = 5) => {
 // ────────────────────────────────────────────────────────────────
 (async () => {
   try {
+    // 1. Підключення до бази
     await connectToMongoDB();
     logger.info('База даних підключена успішно');
-  } catch (err) {
-    logger.error('Не вдалося підключитися до бази при запуску (продовжуємо роботу)', err);
-    // НЕ process.exit(1) — продовжуємо, щоб сервер відповідав
-  }
 
-  const PORT = process.env.PORT || 3000;
-  app.listen(PORT, () => {
-    logger.info(`Сервер запущено на порту ${PORT}`);
-  });
+    // 2. Створення адміна, якщо його немає (робимо це після підключення!)
+    const adminExists = await db.collection('users').findOne({ username: 'admin' });
+    if (!adminExists) {
+      const hashedPassword = await bcrypt.hash('admin123', 10); // ← змінити на сильний пароль!
+      await db.collection('users').insertOne({
+        username: 'admin',
+        password: hashedPassword,
+        role: 'admin'
+      });
+      logger.info('Створено нового адміністратора: admin / admin123');
+    }
+
+    // 3. Завантаження кешу користувачів (тепер адмін точно є)
+    await loadUsersToCache();
+    logger.info('Кеш користувачів оновлено');
+
+    // 4. Запуск сервера
+    const PORT = process.env.PORT || 3000;
+    app.listen(PORT, () => {
+      logger.info(`Сервер запущено на порту ${PORT}`);
+    });
+
+  } catch (err) {
+    logger.error('Критична помилка при запуску сервера', err);
+    // НЕ process.exit(1) — Vercel не любить це
+    // Просто логувати і не завершувати процес
+  }
 })();
 
 // Завантаження тестів
