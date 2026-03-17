@@ -2028,143 +2028,86 @@ app.get('/test/question', checkAuth, async (req, res) => {
       let score = 0;
       const totalPoints = questions.reduce((sum, q) => sum + q.points, 0);
       const scoresPerQuestion = questions.map((q, index) => {
-        const userAnswer = result.answers[index]; // масив або значення
+        const userAnswer = answers[index];
         let questionScore = 0;
 
-        // Кількість елементів, на які ділимо бали
-        let numElements = 1; // за замовчуванням для single-choice тощо
+        const normalizeAnswer = (answer) => {
+          if (!answer) return '';
+          return String(answer)
+            .trim()
+            .toLowerCase()
+            .replace(/\s+/g, '')
+            .replace(',', '.')
+            .replace(/\\'/g, "'")
+            .replace(/°/g, 'deg');
+        };
 
-        switch (q.type) {
-          case 'multiple':
-          case 'fillblank':
-            numElements = q.correctAnswers?.length || 1;
-            break;
-          case 'matching':
-            numElements = q.correctPairs?.length || 1;
-            break;
-          case 'ordering':
-            numElements = q.correctAnswers?.length || 1;
-            break;
-          default:
-            numElements = 1;
-        }
-
-        const partial = q.points / numElements; // базовий бал за елемент
-
-        const normalize = (val) => String(val || '')
-          .trim()
-          .toLowerCase()
-          .replace(/\s+/g, ' ')
-          .replace(/[^a-z0-9а-яіїєґ\s]/gi, '');
-
-        switch (q.type) {
-          // ────────────────────────────────────────────────────────────────
-          // Multiple choice
-          // ────────────────────────────────────────────────────────────────
-          case 'multiple':
-            if (!Array.isArray(userAnswer)) break;
-            const correctSet = new Set(q.correctAnswers.map(normalize));
-            const userSet   = new Set(userAnswer.map(normalize));
-
-            // + за правильні
-            correctSet.forEach(c => {
-              if (userSet.has(c)) questionScore += partial;
-            });
-
-            // - за зайві (штраф половина від partial)
-            userSet.forEach(u => {
-              if (!correctSet.has(u)) questionScore -= partial / 2;
-            });
-            break;
-
-          // ────────────────────────────────────────────────────────────────
-          // Fill in the blank
-          // ────────────────────────────────────────────────────────────────
-          case 'fillblank':
-            if (!Array.isArray(userAnswer) || userAnswer.length !== q.correctAnswers.length) break;
-
-            q.correctAnswers.forEach((correct, i) => {
-              const userVal = normalize(userAnswer[i]);
-              let isCorrect = false;
-
-              if (correct.includes('-')) {
-                const [min, max] = correct.split('-').map(Number);
-                const val = Number(userVal);
-                isCorrect = !isNaN(val) && val >= min && val <= max;
-              } else {
-                isCorrect = userVal === normalize(correct);
-              }
-
-              if (isCorrect) questionScore += partial;
-              else questionScore -= partial / 2;
-            });
-            break;
-
-          // ────────────────────────────────────────────────────────────────
-          // Matching
-          // ────────────────────────────────────────────────────────────────
-          case 'matching':
-            if (!Array.isArray(userAnswer) || userAnswer.length !== q.correctPairs.length) break;
-
-            q.correctPairs.forEach((correctPair, i) => {
-              const userPair = userAnswer[i];
-              if (!userPair || userPair.length !== 2) {
-                questionScore -= partial / 2;
-                return;
-              }
-
-              const leftCorrect  = normalize(correctPair[0]);
-              const rightCorrect = normalize(correctPair[1]);
-              const leftUser     = normalize(userPair[0]);
-              const rightUser    = normalize(userPair[1]);
-
-              if (leftCorrect === leftUser && rightCorrect === rightUser) {
-                questionScore += partial;
-              } else {
-                questionScore -= partial / 2;
-              }
-            });
-            break;
-
-          // ────────────────────────────────────────────────────────────────
-          // Ordering
-          // ────────────────────────────────────────────────────────────────
-          case 'ordering':
-            if (!Array.isArray(userAnswer)) break;
-            const correctOrder = q.correctAnswers.map(normalize);
-            const userOrder    = userAnswer.map(normalize);
-
-            correctOrder.forEach((correct, i) => {
-              if (userOrder[i] === correct) questionScore += partial;
-              else questionScore -= partial / 2;
-            });
-            break;
-
-          // ────────────────────────────────────────────────────────────────
-          // Single choice, truefalse, input — все або нічого
-          // ────────────────────────────────────────────────────────────────
-          default:
-            let isCorrect = false;
-
-            if (q.type === 'singlechoice' || q.type === 'truefalse') {
-              isCorrect = normalize(userAnswer) === normalize(q.correctAnswer || q.correctAnswers[0]);
-            } else if (q.type === 'input') {
-              const correct = q.correctAnswers[0];
-              if (correct.includes('-')) {
-                const [min, max] = correct.split('-').map(Number);
-                const val = Number(normalize(userAnswer));
-                isCorrect = !isNaN(val) && val >= min && val <= max;
-              } else {
-                isCorrect = normalize(userAnswer) === normalize(correct);
-              }
+        if (q.type === 'multiple' && userAnswer && Array.isArray(userAnswer)) {
+          const correctAnswers = q.correctAnswers.map(val => normalizeAnswer(val));
+          const userAnswers = userAnswer.map(val => normalizeAnswer(val));
+          const isCorrect = correctAnswers.length === userAnswers.length &&
+            correctAnswers.every(val => userAnswers.includes(val)) &&
+            userAnswers.every(val => correctAnswers.includes(val));
+          if (isCorrect) {
+            questionScore = q.points;
+          }
+        } else if (q.type === 'input' && userAnswer) {
+          const normalizedUserAnswer = normalizeAnswer(userAnswer);
+          const normalizedCorrectAnswer = normalizeAnswer(q.correctAnswers[0]);
+          if (normalizedCorrectAnswer.includes('-')) {
+            const [min, max] = normalizedCorrectAnswer.split('-').map(val => parseFloat(val.trim()));
+            const userValue = parseFloat(normalizedUserAnswer);
+            const isCorrect = !isNaN(userValue) && userValue >= min && userValue <= max;
+            if (isCorrect) {
+              questionScore = q.points;
             }
-
-            questionScore = isCorrect ? q.points : 0;
-            break;
+          } else {
+            const isCorrect = normalizedUserAnswer === normalizedCorrectAnswer;
+            if (isCorrect) {
+              questionScore = q.points;
+            }
+          }
+        } else if (q.type === 'ordering' && userAnswer && Array.isArray(userAnswer)) {
+          const userAnswers = userAnswer.map(val => normalizeAnswer(val));
+          const correctAnswers = q.correctAnswers.map(val => normalizeAnswer(val));
+          const isCorrect = userAnswers.join(',') === correctAnswers.join(',');
+          if (isCorrect) {
+            questionScore = q.points;
+          }
+        } else if (q.type === 'matching' && userAnswer && Array.isArray(userAnswer)) {
+          const userPairs = userAnswer.map(pair => [normalizeAnswer(pair[0]), normalizeAnswer(pair[1])]);
+          const correctPairs = q.correctPairs.map(pair => [normalizeAnswer(pair[0]), normalizeAnswer(pair[1])]);
+          const isCorrect = userPairs.length === correctPairs.length &&
+            userPairs.every(userPair => correctPairs.some(correctPair => userPair[0] === correctPair[0] && userPair[1] === correctPair[1]));
+          if (isCorrect) {
+            questionScore = q.points;
+          }
+        } else if (q.type === 'fillblank' && userAnswer && Array.isArray(userAnswer)) {
+          const userAnswers = userAnswer.map(val => normalizeAnswer(val));
+          const correctAnswers = q.correctAnswers.map(val => normalizeAnswer(val));
+          const isCorrect = userAnswers.length === correctAnswers.length &&
+            userAnswers.every((answer, idx) => {
+              const correctAnswer = correctAnswers[idx];
+              if (correctAnswer.includes('-')) {
+                const [min, max] = correctAnswer.split('-').map(val => parseFloat(val.trim()));
+                const userValue = parseFloat(answer);
+                return !isNaN(userValue) && userValue >= min && userValue <= max;
+              } else {
+                return answer === correctAnswer;
+              }
+            });
+          if (isCorrect) {
+            questionScore = q.points;
+          }
+        } else if (q.type === 'singlechoice' && userAnswer && Array.isArray(userAnswer)) {
+          const userAnswers = userAnswer.map(val => normalizeAnswer(val));
+          const correctAnswer = normalizeAnswer(q.correctAnswer);
+          const isCorrect = userAnswers.length === 1 && userAnswers[0] === correctAnswer;
+          if (isCorrect) {
+            questionScore = q.points;
+          }
         }
-
-        // Не нижче нуля
-        return Math.max(0, Math.round(questionScore * 10) / 10); // округлення до 1 знаку
+        return questionScore;
       });
 
       score = scoresPerQuestion.reduce((sum, s) => sum + s, 0);
@@ -3232,13 +3175,14 @@ app.post('/answer', checkAuth, express.urlencoded({ extended: true }), async (re
   }
 });
 
-// Маршрут для відображення результатів тесту
+/// Маршрут для відображення результатів тесту (для користувача)
 app.get('/result', checkAuth, async (req, res) => {
   const startTime = Date.now();
   try {
     if (req.user === 'admin') return res.redirect('/admin');
 
-    const userTest = await db.collection('active_tests').findOne({ user: req.user });
+    // Отримуємо активний тест або останній збережений результат
+    let userTest = await db.collection('active_tests').findOne({ user: req.user });
     let testData;
 
     if (!userTest) {
@@ -3254,161 +3198,177 @@ app.get('/result', checkAuth, async (req, res) => {
       testData = userTest;
     }
 
-    const { questions, testNumber, answers, startTime: testStartTime, suspiciousActivity, variant, testSessionId, timeLimit } = userTest || testData;
-    let score = testData.score || 0;
-    const totalPoints = testData.totalPoints || (questions ? questions.reduce((sum, q) => sum + q.points, 0) : 0);
-    let scoresPerQuestion = testData.scoresPerQuestion || [];
+    const { questions: rawQuestions, testNumber, answers, startTime: testStartTime, suspiciousActivity, variant, testSessionId, timeLimit } = testData;
 
-    if (!scoresPerQuestion.length && questions) {
-      scoresPerQuestion = questions.map((q, index) => {
-        const userAnswer = answers[index];
-        let questionScore = 0;
+    // Фільтруємо питання за варіантом (точно як показувалося користувачу)
+    let questions = rawQuestions.filter(q => 
+      !q.variant || q.variant === '' || q.variant === variant
+    );
 
-        const normalizeAnswer = (answer) => {
-          if (!answer) return '';
-          return String(answer)
-            .trim()
-            .toLowerCase()
-            .replace(/\s+/g, '')
-            .replace(',', '.')
-            .replace(/\\'/g, "'")
-            .replace(/°/g, 'deg');
-        };
+    // Підрахунок точних (неокруглених) часткових балів
+    const scoresPerQuestion = questions.map((q, displayIndex) => {
+      const userAnswer = answers[displayIndex];
+      let questionScore = 0;
 
-        if (q.type === 'multiple' && userAnswer && Array.isArray(userAnswer)) {
-          const correctAnswers = q.correctAnswers.map(val => normalizeAnswer(val));
-          const userAnswers = userAnswer.map(val => normalizeAnswer(val));
-          const isCorrect = correctAnswers.length === userAnswers.length &&
-            correctAnswers.every(val => userAnswers.includes(val)) &&
-            userAnswers.every(val => correctAnswers.includes(val));
-          if (isCorrect) {
-            questionScore = q.points;
-          }
-        } else if (q.type === 'input' && userAnswer) {
-          const normalizedUserAnswer = normalizeAnswer(userAnswer);
-          const normalizedCorrectAnswer = normalizeAnswer(q.correctAnswers[0]);
-          logger.info(`Порівняння відповіді input для питання ${index + 1}`, {
-            userAnswer: normalizedUserAnswer,
-            correctAnswer: normalizedCorrectAnswer
+      let numElements = 1;
+      switch (q.type) {
+        case 'multiple':
+        case 'fillblank':
+          numElements = q.correctAnswers?.length || 1;
+          break;
+        case 'matching':
+          numElements = q.correctPairs?.length || 1;
+          break;
+        case 'ordering':
+          numElements = q.correctAnswers?.length || 1;
+          break;
+        default:
+          numElements = 1;
+      }
+
+      const partial = q.points / numElements;
+
+      const normalize = (val) => String(val || '')
+        .trim()
+        .toLowerCase()
+        .replace(/\s+/g, ' ')
+        .replace(/[^a-z0-9а-яіїєґ\s]/gi, '');
+
+      switch (q.type) {
+        case 'multiple':
+          if (!Array.isArray(userAnswer)) break;
+          const correctSet = new Set(q.correctAnswers.map(normalize));
+          const userSet = new Set(userAnswer.map(normalize));
+          correctSet.forEach(c => { if (userSet.has(c)) questionScore += partial; });
+          userSet.forEach(u => { if (!correctSet.has(u)) questionScore -= partial / 2; });
+          break;
+
+        case 'fillblank':
+          if (!Array.isArray(userAnswer) || userAnswer.length !== q.correctAnswers.length) break;
+          q.correctAnswers.forEach((correct, i) => {
+            const userVal = normalize(userAnswer[i]);
+            let isCorrect = false;
+            if (correct.includes('-')) {
+              const [min, max] = correct.split('-').map(Number);
+              const val = Number(userVal);
+              isCorrect = !isNaN(val) && val >= min && val <= max;
+            } else {
+              isCorrect = userVal === normalize(correct);
+            }
+            if (isCorrect) questionScore += partial;
+            else questionScore -= partial / 2;
           });
+          break;
 
-          if (normalizedCorrectAnswer.includes('-')) {
-            const [min, max] = normalizedCorrectAnswer.split('-').map(val => parseFloat(val.trim()));
-            const userValue = parseFloat(normalizedUserAnswer);
-            const isCorrect = !isNaN(userValue) && userValue >= min && userValue <= max;
-            if (isCorrect) {
-              questionScore = q.points;
+        case 'matching':
+          if (!Array.isArray(userAnswer) || userAnswer.length !== q.correctPairs.length) break;
+          q.correctPairs.forEach((correctPair, i) => {
+            const userPair = userAnswer[i];
+            if (!userPair || userPair.length !== 2) {
+              questionScore -= partial / 2;
+              return;
             }
-          } else {
-            const isCorrect = normalizedUserAnswer === normalizedCorrectAnswer;
-            if (isCorrect) {
-              questionScore = q.points;
+            const leftCorrect  = normalize(correctPair[0]);
+            const rightCorrect = normalize(correctPair[1]);
+            const leftUser     = normalize(userPair[0]);
+            const rightUser    = normalize(userPair[1]);
+            if (leftCorrect === leftUser && rightCorrect === rightUser) {
+              questionScore += partial;
+            } else {
+              questionScore -= partial / 2;
+            }
+          });
+          break;
+
+        case 'ordering':
+          if (!Array.isArray(userAnswer)) break;
+          const correctOrder = q.correctAnswers.map(normalize);
+          const userOrder    = userAnswer.map(normalize);
+          correctOrder.forEach((correct, i) => {
+            if (userOrder[i] === correct) questionScore += partial;
+            else questionScore -= partial / 2;
+          });
+          break;
+
+        default: // singlechoice, truefalse, input
+          let isCorrect = false;
+          if (q.type === 'singlechoice' || q.type === 'truefalse') {
+            isCorrect = normalize(userAnswer) === normalize(q.correctAnswer || q.correctAnswers?.[0]);
+          } else if (q.type === 'input') {
+            const correct = q.correctAnswers?.[0];
+            if (correct?.includes('-')) {
+              const [min, max] = correct.split('-').map(Number);
+              const val = Number(normalize(userAnswer));
+              isCorrect = !isNaN(val) && val >= min && val <= max;
+            } else {
+              isCorrect = normalize(userAnswer) === normalize(correct);
             }
           }
-        } else if (q.type === 'ordering' && userAnswer && Array.isArray(userAnswer)) {
-          const userAnswers = userAnswer.map(val => normalizeAnswer(val));
-          const correctAnswers = q.correctAnswers.map(val => normalizeAnswer(val));
-          const isCorrect = userAnswers.join(',') === correctAnswers.join(',');
-          if (isCorrect) {
-            questionScore = q.points;
-          }
-        } else if (q.type === 'matching' && userAnswer && Array.isArray(userAnswer)) {
-          const userPairs = userAnswer.map(pair => [normalizeAnswer(pair[0]), normalizeAnswer(pair[1])]);
-          const correctPairs = q.correctPairs.map(pair => [normalizeAnswer(pair[0]), normalizeAnswer(pair[1])]);
-          const isCorrect = userPairs.length === correctPairs.length &&
-            userPairs.every(userPair => correctPairs.some(correctPair => userPair[0] === correctPair[0] && userPair[1] === correctPair[1]));
-          if (isCorrect) {
-            questionScore = q.points;
-          }
-        } else if (q.type === 'fillblank' && userAnswer && Array.isArray(userAnswer)) {
-          const userAnswers = userAnswer.map(val => normalizeAnswer(val));
-          const correctAnswers = q.correctAnswers.map(val => normalizeAnswer(val));
-          logger.info(`Питання fillblank ${index + 1}`, { userAnswers, correctAnswers });
+          questionScore = isCorrect ? q.points : 0;
+          break;
+      }
 
-          const isCorrect = userAnswers.length === correctAnswers.length &&
-            userAnswers.every((answer, idx) => {
-              const correctAnswer = correctAnswers[idx];
-              if (correctAnswer.includes('-')) {
-                const [min, max] = correctAnswer.split('-').map(val => parseFloat(val.trim()));
-                const userValue = parseFloat(answer);
-                return !isNaN(userValue) && userValue >= min && userValue <= max;
-              } else {
-                return answer === correctAnswer;
-              }
-            });
+      return Math.max(0, questionScore); // без округлення тут!
+    });
 
-          if (isCorrect) {
-            questionScore = q.points;
-          }
-        } else if (q.type === 'singlechoice' && userAnswer && Array.isArray(userAnswer)) {
-          const userAnswers = userAnswer.map(val => normalizeAnswer(val));
-          const correctAnswer = normalizeAnswer(q.correctAnswer);
-          logger.info(`Питання single choice ${index + 1}`, { userAnswers, correctAnswer });
-          const isCorrect = userAnswers.length === 1 && userAnswers[0] === correctAnswer;
-          if (isCorrect) {
-            questionScore = q.points;
-          }
-        }
-        return questionScore;
-      });
+    // Підсумкові значення з округленням ТІЛЬКИ загальної суми
+    const exactScore = scoresPerQuestion.reduce((sum, s) => sum + s, 0);
+    const roundedScore = Math.round(exactScore * 10) / 10; // округлюємо тільки загальну суму
+    const totalPoints = questions.reduce((sum, q) => sum + q.points, 0);
+    const percentage = totalPoints > 0 ? (exactScore / totalPoints) * 100 : 0;
+    const roundedPercentage = Math.round(percentage * 10) / 10;
 
-      score = scoresPerQuestion.reduce((sum, s) => sum + s, 0);
-    }
+    const totalQuestions = questions.length;
+    const correctClicks = scoresPerQuestion.filter(s => s > 0).length;
+    const totalClicks = Object.keys(answers).length;
 
     let endTime = testData.endTime ? new Date(testData.endTime).getTime() : Date.now();
     const maxEndTime = testStartTime + timeLimit;
-    if (endTime > maxEndTime) {
-      endTime = maxEndTime;
-      logger.info(`Кориговано endTime до timeLimit для testSessionId: ${testSessionId}`);
-    }
-
-    const percentage = testData.percentage || (score / totalPoints) * 100;
-    const totalClicks = testData.totalClicks || Object.keys(answers).length;
-    const correctClicks = testData.correctClicks || scoresPerQuestion.filter(s => s > 0).length;
-    const totalQuestions = testData.totalQuestions || (questions ? questions.length : 0);
+    if (endTime > maxEndTime) endTime = maxEndTime;
 
     const duration = Math.round((endTime - testStartTime) / 1000);
-    const timeAway = testData.timeAway || (suspiciousActivity ? suspiciousActivity.timeAway || 0 : 0);
+    const timeAway = testData.timeAway || suspiciousActivity?.timeAway || 0;
     const correctedTimeAway = Math.min(timeAway, duration);
-    const timeAwayPercent = Math.round((correctedTimeAway / duration) * 100);
-    const switchCount = testData.switchCount || (suspiciousActivity ? suspiciousActivity.switchCount || 0 : 0);
-    const avgResponseTime = testData.avgResponseTime || (suspiciousActivity && suspiciousActivity.responseTimes
-      ? (suspiciousActivity.responseTimes.reduce((sum, time) => sum + (time || 0), 0) / suspiciousActivity.responseTimes.length).toFixed(2)
-      : 0);
-    const totalActivityCount = testData.totalActivityCount || (suspiciousActivity && suspiciousActivity.activityCounts
-      ? suspiciousActivity.activityCounts.reduce((sum, count) => sum + (count || 0), 0)
-      : 0);
+    const timeAwayPercent = duration > 0 ? Math.round((correctedTimeAway / duration) * 100) : 0;
 
-    if (!testData.suspiciousActivity && (timeAwayPercent > config.suspiciousActivity.timeAwayThreshold || switchCount > config.suspiciousActivity.switchCountThreshold)) {
-      const activityDetails = {
+    const switchCount = suspiciousActivity?.switchCount || 0;
+    const avgResponseTime = suspiciousActivity?.responseTimes?.length
+      ? (suspiciousActivity.responseTimes.reduce((sum, t) => sum + (t || 0), 0) / suspiciousActivity.responseTimes.length).toFixed(2)
+      : 0;
+
+    const totalActivityCount = suspiciousActivity?.activityCounts?.reduce((sum, c) => sum + (c || 0), 0) || 0;
+
+    if (timeAwayPercent > config.suspiciousActivity.timeAwayThreshold || switchCount > config.suspiciousActivity.switchCountThreshold) {
+      await sendSuspiciousActivityEmail(req.user, {
         timeAwayPercent,
         switchCount,
         avgResponseTime,
         totalActivityCount
-      };
-      await sendSuspiciousActivityEmail(req.user, activityDetails);
+      });
     }
 
     const ipAddress = req.headers['x-forwarded-for'] || req.socket.remoteAddress;
 
+    // Збереження/оновлення результату (зберігаємо точний score, а не округлений)
     if (userTest && !testData.isSaved) {
-      const existingResult = await db.collection('test_results').findOne({ testSessionId });
-      if (!existingResult && !userTest.isSavingResult) {
+      const existing = await db.collection('test_results').findOne({ testSessionId });
+      if (!existing && !userTest.isSavingResult) {
         await db.collection('active_tests').updateOne(
           { user: req.user },
           { $set: { isSavingResult: true } }
         );
+
         await saveResult(
           req.user,
           testNumber,
-          score,
+          exactScore,           // зберігаємо точну суму
           totalPoints,
           testStartTime,
           endTime,
           totalClicks,
           correctClicks,
           totalQuestions,
-          percentage,
+          percentage,           // точний відсоток
           { timeAway: correctedTimeAway, switchCount, responseTimes: suspiciousActivity?.responseTimes || [], activityCounts: suspiciousActivity?.activityCounts || [] },
           answers,
           scoresPerQuestion,
@@ -3416,180 +3376,122 @@ app.get('/result', checkAuth, async (req, res) => {
           ipAddress,
           testSessionId
         );
-        logger.info(`Результат збережено для testSessionId: ${testSessionId}`);
       }
-    }
-
-    if (userTest && testData.isSaved) {
-      await db.collection('test_results').updateOne(
-        { testSessionId },
-        { $set: {
-          score,
-          totalPoints,
-          endTime,
-          totalClicks,
-          correctClicks,
-          totalQuestions,
-          percentage,
-          suspiciousActivity: { timeAway: correctedTimeAway, switchCount, responseTimes: suspiciousActivity?.responseTimes || [], activityCounts: suspiciousActivity?.activityCounts || [] },
-          answers,
-          scoresPerQuestion,
-          variant,
-          ipAddress
-        } },
-        { upsert: true }
-      );
     }
 
     if (userTest) {
       await db.collection('active_tests').deleteOne({ user: req.user });
     }
 
+    // Форматування дати/часу
     const endDateTime = new Date(endTime);
     const formattedTime = endDateTime.toLocaleTimeString('uk-UA', { hour12: false });
     const formattedDate = endDateTime.toLocaleDateString('uk-UA');
+
+    // Зчитування логотипу
     const imagePath = path.join(__dirname, 'public', 'images', 'A.png');
     let imageBase64 = '';
     try {
-      const imageBuffer = fs.readFileSync(imagePath);
-      imageBase64 = imageBuffer.toString('base64');
-    } catch (error) {
-      logger.error('Помилка читання зображення A.png', { message: error.message, stack: error.stack });
+      imageBase64 = fs.readFileSync(imagePath).toString('base64');
+    } catch (err) {
+      logger.error('Помилка читання A.png', err);
     }
 
+    // HTML результатів
     const resultHtml = `
       <!DOCTYPE html>
       <html lang="uk">
         <head>
           <meta charset="UTF-8">
-          <title>Результати ${testNames[testNumber]?.name.replace(/"/g, '\\"') || 'Невідомий тест'}</title>
+          <title>Результати ${testNames[testNumber]?.name?.replace(/"/g, '\\"') || 'Тест'}</title>
           <style>
-            body { font-family: Arial, sans-serif; text-align: center; padding: 20px; background-color: #f5f5f5; }
-            .result-container { margin: 20px auto; width: 150px; height: 150px; position: relative; }
-            .result-circle-bg { stroke: #e0e0e0; stroke-width: 10; fill: none; }
-            .result-circle { stroke: #4CAF50; stroke-width: 10; fill: none; stroke-dasharray: 440; stroke-dashoffset: 440; animation: fillCircle 1.5s ease-in-out forwards; }
-            .result-text { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); font-size: 24px; font-weight: bold; color: #333; }
-            .buttons { margin-top: 20px; }
-            button { padding: 10px 20px; margin: 5px; cursor: pointer; border: none; border-radius: 5px; font-size: 16px; }
-            #exportPDF { background-color: #ffeb3b; }
-            #restart { background-color: #ef5350; }
-            @keyframes fillCircle {
-              to {
-                stroke-dashoffset: ${(440 * (100 - percentage)) / 100};
-              }
-            }
+            body { font-family: Arial, sans-serif; text-align: center; padding: 30px 20px; background: #f5f5f5; margin: 0; }
+            .container { max-width: 700px; margin: 0 auto; background: white; padding: 30px; border-radius: 12px; box-shadow: 0 4px 20px rgba(0,0,0,0.1); }
+            h1 { color: #333; margin-bottom: 25px; }
+            .result-circle-container { position: relative; width: 180px; height: 180px; margin: 0 auto 30px; }
+            .result-circle-bg { stroke: #e0e0e0; stroke-width: 12; fill: none; }
+            .result-circle { stroke: #4CAF50; stroke-width: 12; fill: none; stroke-dasharray: 530; animation: fillCircle 1.8s forwards; }
+            .result-text { position: absolute; top: 50%; left: 50%; transform: translate(-50%,-50%); font-size: 42px; font-weight: bold; color: #333; }
+            .summary { font-size: 20px; line-height: 1.6; margin: 20px 0 40px; text-align: left; }
+            .buttons { margin-top: 30px; }
+            button { padding: 14px 28px; margin: 10px; border: none; border-radius: 8px; font-size: 18px; cursor: pointer; transition: all 0.2s; }
+            #exportPDF { background: #ffeb3b; color: #333; }
+            #exportPDF:hover { background: #ffe082; }
+            #restart { background: #ef5350; color: white; }
+            #restart:hover { background: #e53935; }
+            @keyframes fillCircle { to { stroke-dashoffset: ${(530 * (100 - roundedPercentage)) / 100}; } }
           </style>
           <script src="/pdfmake/pdfmake.min.js"></script>
           <script src="/pdfmake/vfs_fonts.js"></script>
         </head>
         <body>
-          <h1>Результат тесту</h1>
-          <div class="result-container">
-            <svg width="150" height="150">
-              <circle class="result-circle-bg" cx="75" cy="75" r="70" />
-              <circle class="result-circle" cx="75" cy="75" r="70" />
-            </svg>
-            <div class="result-text">${Math.round(percentage)}%</div>
+          <div class="container">
+            <h1>Ваш результат</h1>
+
+            <div class="result-circle-container">
+              <svg width="180" height="180">
+                <circle class="result-circle-bg" cx="90" cy="90" r="79"/>
+                <circle class="result-circle" cx="90" cy="90" r="79" stroke-dashoffset="530"/>
+              </svg>
+              <div class="result-text">${roundedPercentage.toFixed(1)}%</div>
+            </div>
+
+            <div class="summary">
+              <strong>Тест:</strong> ${testNames[testNumber]?.name?.replace(/"/g, '\\"') || 'Тест'}<br>
+              <strong>Варіант:</strong> ${variant || 'Немає'}<br>
+              <strong>Набрано балів:</strong> ${roundedScore.toFixed(1)} з ${totalPoints}<br>
+              <strong>Кількість питань:</strong> ${totalQuestions}<br>
+              <strong>Правильних відповідей:</strong> ${correctClicks}<br>
+              <strong>Дата завершення:</strong> ${formattedDate} ${formattedTime}
+            </div>
+
+            <div class="buttons">
+              <button id="exportPDF">Експортувати в PDF</button>
+              <button id="restart">Повернутися до тестів</button>
+            </div>
           </div>
-          <p>
-            Кількість питань: ${totalQuestions}<br>
-            Правильних відповідей: ${correctClicks}<br>
-            Набрано балів: ${score}<br>
-            Максимально можлива кількість балів: ${totalPoints}<br>
-          </p>
-          <div class="buttons">
-            <button id="exportPDF">Експортувати в PDF</button>
-            <button id="restart">Вихід</button>
-          </div>
+
           <script>
             const user = "${req.user.replace(/"/g, '\\"')}";
-            const testName = "${testNames[testNumber]?.name.replace(/"/g, '\\"') || 'Невідомий тест'}";
+            const testName = "${(testNames[testNumber]?.name || 'Тест').replace(/"/g, '\\"')}";
             const totalQuestions = ${totalQuestions};
             const correctClicks = ${correctClicks};
-            const score = ${score};
+            const score = ${roundedScore.toFixed(1)};
             const totalPoints = ${totalPoints};
-            const percentage = ${Math.round(percentage)};
-            const time = "${formattedTime.replace(/"/g, '\\"')}";
-            const date = "${formattedDate.replace(/"/g, '\\"')}";
-            const imageBase64 = "${imageBase64.replace(/"/g, '\\"')}";
+            const percentage = ${roundedPercentage.toFixed(1)};
+            const time = "${formattedTime}";
+            const date = "${formattedDate}";
+            const imageBase64 = "${imageBase64}";
 
-            console.log('Сторінка результатів завантажена з даними:', {
-              user: user,
-              testName: testName,
-              totalQuestions: totalQuestions,
-              correctClicks: correctClicks,
-              score: score,
-              totalPoints: totalPoints,
-              percentage: percentage,
-              time: time,
-              date: date,
-              imageBase64Length: imageBase64.length
+            document.getElementById('exportPDF').addEventListener('click', () => {
+              const docDefinition = {
+                content: [
+                  imageBase64 ? { image: 'data:image/png;base64,' + imageBase64, width: 60, alignment: 'center', margin: [0,0,0,20] } : {},
+                  { text: 'Результат тесту ' + user + ' — ' + testName + ' — ' + percentage + '%', style: 'header' },
+                  { text: 'Бали: ' + score + ' з ' + totalPoints, margin: [0,10] },
+                  { text: 'Кількість питань: ' + totalQuestions },
+                  { text: 'Правильних: ' + correctClicks },
+                  { text: 'Дата: ' + date + ' ' + time }
+                ],
+                styles: { header: { fontSize: 18, bold: true, margin: [0,0,0,15] } }
+              };
+              pdfMake.createPdf(docDefinition).download('Мій_результат.pdf');
             });
 
-            const exportPDFButton = document.getElementById('exportPDF');
-            const restartButton = document.getElementById('restart');
-
-            if (!exportPDFButton) {
-              console.error('Кнопка експорту PDF не знайдена!');
-            } else {
-              console.log('Кнопка експорту PDF знайдена, додаємо обробник події.');
-              exportPDFButton.addEventListener('click', () => {
-                try {
-                  console.log('Натискання кнопки експорту PDF, генерація PDF...');
-                  const docDefinition = {
-                    content: [
-                      imageBase64 ? {
-                        image: 'data:image/png;base64,' + imageBase64,
-                        width: 50,
-                        alignment: 'center',
-                        margin: [0, 0, 0, 20]
-                      } : { text: 'Логотип відсутній', alignment: 'center', margin: [0, 0, 0, 20], lineHeight: 2 },
-                      { text: 'Результат тесту користувача ' + user + ' з тесту ' + testName + ' складає ' + percentage + '%', style: 'header' },
-                      { text: 'Кількість питань: ' + totalQuestions, lineHeight: 2 },
-                      { text: 'Правильних відповідей: ' + correctClicks, lineHeight: 2 },
-                      { text: 'Набрано балів: ' + score, lineHeight: 2 },
-                      { text: 'Максимально можлива кількість балів: ' + totalPoints, lineHeight: 2 },
-                      {
-                        columns: [
-                          { text: 'Час: ' + time, width: '50%', lineHeight: 2 },
-                          { text: 'Дата: ' + date, width: '50%', alignment: 'right', lineHeight: 2 }
-                        ],
-                        margin: [0, 10, 0, 0]
-                      }
-                    ],
-                    styles: {
-                      header: { fontSize: 14, bold: true, margin: [0, 0, 0, 10], lineHeight: 2 }
-                    }
-                  };
-                  pdfMake.createPdf(docDefinition).download('result.pdf');
-                  console.log('PDF згенеровано успішно.');
-                } catch (error) {
-                  console.error('Помилка генерації PDF:', error);
-                  alert('Не вдалося згенерувати PDF. Перевірте консоль браузера для деталей.');
-                }
-              });
-            }
-
-            if (!restartButton) {
-              console.error('Кнопка повернення не знайдена!');
-            } else {
-              console.log('Кнопка повернення знайдена, додаємо обробник події.');
-              restartButton.addEventListener('click', () => {
-                console.log('Натискання кнопки повернення, перенаправлення на /select-test');
-                window.location.href = '/select-test';
-              });
-            }
+            document.getElementById('restart').addEventListener('click', () => {
+              window.location.href = '/select-test';
+            });
           </script>
         </body>
       </html>
     `;
+
     res.send(resultHtml);
   } catch (error) {
     logger.error('Помилка в /result', { message: error.message, stack: error.stack });
-    res.status(500).send('Помилка при завантаженні результатів: ' + (error.message || 'Невідома помилка'));
+    res.status(500).send('Помилка при завантаженні результатів: ' + error.message);
   } finally {
-    const endTime = Date.now();
-    logger.info('Маршрут /result виконано', { duration: `${endTime - startTime} мс` });
+    logger.info('Маршрут /result виконано', { duration: `${Date.now() - startTime} мс` });
   }
 });
 
@@ -3626,143 +3528,88 @@ app.get('/results', checkAuth, async (req, res) => {
       let score = 0;
       const totalPoints = questions.reduce((sum, q) => sum + q.points, 0);
       const scoresPerQuestion = questions.map((q, index) => {
-        const userAnswer = result.answers[index]; // масив або значення
+        const userAnswer = answers[index];
         let questionScore = 0;
 
-        // Кількість елементів, на які ділимо бали
-        let numElements = 1; // за замовчуванням для single-choice тощо
+        const normalizeAnswer = (answer) => {
+          if (!answer) return '';
+          return String(answer)
+            .trim()
+            .toLowerCase()
+            .replace(/\s+/g, '')
+            .replace(',', '.')
+            .replace(/\\'/g, "'")
+            .replace(/°/g, 'deg');
+        };
 
-        switch (q.type) {
-          case 'multiple':
-          case 'fillblank':
-            numElements = q.correctAnswers?.length || 1;
-            break;
-          case 'matching':
-            numElements = q.correctPairs?.length || 1;
-            break;
-          case 'ordering':
-            numElements = q.correctAnswers?.length || 1;
-            break;
-          default:
-            numElements = 1;
-        }
-
-        const partial = q.points / numElements; // базовий бал за елемент
-
-        const normalize = (val) => String(val || '')
-          .trim()
-          .toLowerCase()
-          .replace(/\s+/g, ' ')
-          .replace(/[^a-z0-9а-яіїєґ\s]/gi, '');
-
-        switch (q.type) {
-          // ────────────────────────────────────────────────────────────────
-          // Multiple choice
-          // ────────────────────────────────────────────────────────────────
-          case 'multiple':
-            if (!Array.isArray(userAnswer)) break;
-            const correctSet = new Set(q.correctAnswers.map(normalize));
-            const userSet   = new Set(userAnswer.map(normalize));
-
-            // + за правильні
-            correctSet.forEach(c => {
-              if (userSet.has(c)) questionScore += partial;
-            });
-
-            // - за зайві (штраф половина від partial)
-            userSet.forEach(u => {
-              if (!correctSet.has(u)) questionScore -= partial / 2;
-            });
-            break;
-
-          // ────────────────────────────────────────────────────────────────
-          // Fill in the blank
-          // ────────────────────────────────────────────────────────────────
-          case 'fillblank':
-            if (!Array.isArray(userAnswer) || userAnswer.length !== q.correctAnswers.length) break;
-
-            q.correctAnswers.forEach((correct, i) => {
-              const userVal = normalize(userAnswer[i]);
-              let isCorrect = false;
-
-              if (correct.includes('-')) {
-                const [min, max] = correct.split('-').map(Number);
-                const val = Number(userVal);
-                isCorrect = !isNaN(val) && val >= min && val <= max;
-              } else {
-                isCorrect = userVal === normalize(correct);
-              }
-
-              if (isCorrect) questionScore += partial;
-              else questionScore -= partial / 2;
-            });
-            break;
-
-          // ────────────────────────────────────────────────────────────────
-          // Matching
-          // ────────────────────────────────────────────────────────────────
-          case 'matching':
-            if (!Array.isArray(userAnswer) || userAnswer.length !== q.correctPairs.length) break;
-
-            q.correctPairs.forEach((correctPair, i) => {
-              const userPair = userAnswer[i];
-              if (!userPair || userPair.length !== 2) {
-                questionScore -= partial / 2;
-                return;
-              }
-
-              const leftCorrect  = normalize(correctPair[0]);
-              const rightCorrect = normalize(correctPair[1]);
-              const leftUser     = normalize(userPair[0]);
-              const rightUser    = normalize(userPair[1]);
-
-              if (leftCorrect === leftUser && rightCorrect === rightUser) {
-                questionScore += partial;
-              } else {
-                questionScore -= partial / 2;
-              }
-            });
-            break;
-
-          // ────────────────────────────────────────────────────────────────
-          // Ordering
-          // ────────────────────────────────────────────────────────────────
-          case 'ordering':
-            if (!Array.isArray(userAnswer)) break;
-            const correctOrder = q.correctAnswers.map(normalize);
-            const userOrder    = userAnswer.map(normalize);
-
-            correctOrder.forEach((correct, i) => {
-              if (userOrder[i] === correct) questionScore += partial;
-              else questionScore -= partial / 2;
-            });
-            break;
-
-          // ────────────────────────────────────────────────────────────────
-          // Single choice, truefalse, input — все або нічого
-          // ────────────────────────────────────────────────────────────────
-          default:
-            let isCorrect = false;
-
-            if (q.type === 'singlechoice' || q.type === 'truefalse') {
-              isCorrect = normalize(userAnswer) === normalize(q.correctAnswer || q.correctAnswers[0]);
-            } else if (q.type === 'input') {
-              const correct = q.correctAnswers[0];
-              if (correct.includes('-')) {
-                const [min, max] = correct.split('-').map(Number);
-                const val = Number(normalize(userAnswer));
-                isCorrect = !isNaN(val) && val >= min && val <= max;
-              } else {
-                isCorrect = normalize(userAnswer) === normalize(correct);
-              }
+        if (q.type === 'multiple' && userAnswer && Array.isArray(userAnswer)) {
+          const correctAnswers = q.correctAnswers.map(val => normalizeAnswer(val));
+          const userAnswers = userAnswer.map(val => normalizeAnswer(val));
+          const isCorrect = correctAnswers.length === userAnswers.length &&
+            correctAnswers.every(val => userAnswers.includes(val)) &&
+            userAnswers.every(val => correctAnswers.includes(val));
+          if (isCorrect) {
+            questionScore = q.points;
+          }
+        } else if (q.type === 'input' && userAnswer) {
+          const normalizedUserAnswer = normalizeAnswer(userAnswer);
+          const normalizedCorrectAnswer = normalizeAnswer(q.correctAnswers[0]);
+          if (normalizedCorrectAnswer.includes('-')) {
+            const [min, max] = normalizedCorrectAnswer.split('-').map(val => parseFloat(val.trim()));
+            const userValue = parseFloat(normalizedUserAnswer);
+            const isCorrect = !isNaN(userValue) && userValue >= min && userValue <= max;
+            if (isCorrect) {
+              questionScore = q.points;
             }
-
-            questionScore = isCorrect ? q.points : 0;
-            break;
+          } else {
+            const isCorrect = normalizedUserAnswer === normalizedCorrectAnswer;
+            if (isCorrect) {
+              questionScore = q.points;
+            }
+          }
+        } else if (q.type === 'ordering' && userAnswer && Array.isArray(userAnswer)) {
+          const userAnswers = userAnswer.map(val => normalizeAnswer(val));
+          const correctAnswers = q.correctAnswers.map(val => normalizeAnswer(val));
+          const isCorrect = userAnswers.join(',') === correctAnswers.join(',');
+          if (isCorrect) {
+            questionScore = q.points;
+          }
+        } else if (q.type === 'matching' && userAnswer && Array.isArray(userAnswer)) {
+          const userPairs = userAnswer.map(pair => [normalizeAnswer(pair[0]), normalizeAnswer(pair[1])]);
+          const correctPairs = q.correctPairs.map(pair => [normalizeAnswer(pair[0]), normalizeAnswer(pair[1])]);
+          const isCorrect = userPairs.length === correctPairs.length &&
+            userPairs.every(userPair => correctPairs.some(correctPair => userPair[0] === correctPair[0] && userPair[1] === correctPair[1]));
+          if (isCorrect) {
+            questionScore = q.points;
+          }
+        } else if (q.type === 'fillblank' && userAnswer && Array.isArray(userAnswer)) {
+          const userAnswers = userAnswer.map(val => normalizeAnswer(val));
+          const correctAnswers = q.correctAnswers.map(val => normalizeAnswer(val));
+          logger.info(`Питання fillblank ${index + 1} в /results`, { userAnswers, correctAnswers });
+          const isCorrect = userAnswers.length === correctAnswers.length &&
+            userAnswers.every((answer, idx) => {
+              const correctAnswer = correctAnswers[idx];
+              if (correctAnswer.includes('-')) {
+                const [min, max] = correctAnswer.split('-').map(val => parseFloat(val.trim()));
+                const userValue = parseFloat(answer);
+                return !isNaN(userValue) && userValue >= min && userValue <= max;
+              } else {
+                return answer === correctAnswer;
+              }
+            });
+          if (isCorrect) {
+            questionScore = q.points;
+          }
+        } else if (q.type === 'singlechoice' && userAnswer && Array.isArray(userAnswer)) {
+          const userAnswers = userAnswer.map(val => normalizeAnswer(val));
+          const correctAnswer = normalizeAnswer(q.correctAnswer);
+          logger.info(`Питання single choice ${index + 1} в /results`, { userAnswers, correctAnswer });
+          const isCorrect = userAnswers.length === 1 && userAnswers[0] === correctAnswer;
+          if (isCorrect) {
+            questionScore = q.points;
+          }
         }
-
-        // Не нижче нуля
-        return Math.max(0, Math.round(questionScore * 10) / 10); // округлення до 1 знаку
+        return questionScore;
       });
 
       score = scoresPerQuestion.reduce((sum, s) => sum + s, 0);
@@ -5852,124 +5699,257 @@ app.get('/admin/results', checkAuth, async (req, res) => {
   }
 });
 
-// Маршрут для перегляду детального результату
+// Маршрут для перегляду детального результату (адмін/інструктор)
 app.get('/admin/view-result', checkAuth, async (req, res) => {
   const startTime = Date.now();
   try {
     if (req.userRole !== 'admin' && req.userRole !== 'instructor') {
       return res.status(403).send('Доступно тільки для адміністраторів та інструкторів');
     }
+
     const { id } = req.query;
     if (!id || !ObjectId.isValid(id)) {
       return res.status(400).send('Невірний ідентифікатор результату');
     }
+
     const result = await db.collection('test_results').findOne({ _id: new ObjectId(id) });
     if (!result) {
       return res.status(404).send('Результат не знайдено');
     }
-    let questions = await db.collection('questions')
+
+    // Завантажуємо всі питання тесту
+    let allQuestions = await db.collection('questions')
       .find({ testNumber: result.testNumber })
       .sort({ order: 1 })
       .toArray();
-    // Фільтрація питань за варіантом користувача
-    questions = questions.filter(q => !q.variant || q.variant === '' || q.variant === result.variant);
+
+    // Фільтруємо тільки ті, що показувалися користувачу за його варіантом
+    const questions = allQuestions.filter(q => 
+      !q.variant || q.variant === '' || q.variant === result.variant
+    );
+
+    // Підрахунок точних (неокруглених) часткових балів
+    const scoresPerQuestion = questions.map((q, displayIndex) => {
+      const userAnswer = result.answers[displayIndex];
+      let questionScore = 0;
+
+      let numElements = 1;
+      switch (q.type) {
+        case 'multiple':
+        case 'fillblank':
+          numElements = q.correctAnswers?.length || 1;
+          break;
+        case 'matching':
+          numElements = q.correctPairs?.length || 1;
+          break;
+        case 'ordering':
+          numElements = q.correctAnswers?.length || 1;
+          break;
+        default:
+          numElements = 1;
+      }
+
+      const partial = q.points / numElements;
+
+      const normalize = (val) => String(val || '')
+        .trim()
+        .toLowerCase()
+        .replace(/\s+/g, ' ')
+        .replace(/[^a-z0-9а-яіїєґ\s]/gi, '');
+
+      switch (q.type) {
+        case 'multiple':
+          if (!Array.isArray(userAnswer)) break;
+          const correctSet = new Set(q.correctAnswers.map(normalize));
+          const userSet = new Set(userAnswer.map(normalize));
+          correctSet.forEach(c => { if (userSet.has(c)) questionScore += partial; });
+          userSet.forEach(u => { if (!correctSet.has(u)) questionScore -= partial / 2; });
+          break;
+
+        case 'fillblank':
+          if (!Array.isArray(userAnswer) || userAnswer.length !== q.correctAnswers.length) break;
+          q.correctAnswers.forEach((correct, i) => {
+            const userVal = normalize(userAnswer[i]);
+            let isCorrect = false;
+            if (correct.includes('-')) {
+              const [min, max] = correct.split('-').map(Number);
+              const val = Number(userVal);
+              isCorrect = !isNaN(val) && val >= min && val <= max;
+            } else {
+              isCorrect = userVal === normalize(correct);
+            }
+            if (isCorrect) questionScore += partial;
+            else questionScore -= partial / 2;
+          });
+          break;
+
+        case 'matching':
+          if (!Array.isArray(userAnswer) || userAnswer.length !== q.correctPairs.length) break;
+          q.correctPairs.forEach((correctPair, i) => {
+            const userPair = userAnswer[i];
+            if (!userPair || userPair.length !== 2) {
+              questionScore -= partial / 2;
+              return;
+            }
+            const leftCorrect  = normalize(correctPair[0]);
+            const rightCorrect = normalize(correctPair[1]);
+            const leftUser     = normalize(userPair[0]);
+            const rightUser    = normalize(userPair[1]);
+            if (leftCorrect === leftUser && rightCorrect === rightUser) {
+              questionScore += partial;
+            } else {
+              questionScore -= partial / 2;
+            }
+          });
+          break;
+
+        case 'ordering':
+          if (!Array.isArray(userAnswer)) break;
+          const correctOrder = q.correctAnswers.map(normalize);
+          const userOrder    = userAnswer.map(normalize);
+          correctOrder.forEach((correct, i) => {
+            if (userOrder[i] === correct) questionScore += partial;
+            else questionScore -= partial / 2;
+          });
+          break;
+
+        default: // singlechoice, truefalse, input
+          let isCorrect = false;
+          if (q.type === 'singlechoice' || q.type === 'truefalse') {
+            isCorrect = normalize(userAnswer) === normalize(q.correctAnswer || q.correctAnswers?.[0]);
+          } else if (q.type === 'input') {
+            const correct = q.correctAnswers?.[0];
+            if (correct?.includes('-')) {
+              const [min, max] = correct.split('-').map(Number);
+              const val = Number(normalize(userAnswer));
+              isCorrect = !isNaN(val) && val >= min && val <= max;
+            } else {
+              isCorrect = normalize(userAnswer) === normalize(correct);
+            }
+          }
+          questionScore = isCorrect ? q.points : 0;
+          break;
+      }
+
+      return Math.max(0, questionScore); // точне значення без округлення
+    });
+
+    // Підсумкові значення з округленням тільки загальної суми
+    const exactScore = scoresPerQuestion.reduce((sum, s) => sum + s, 0);
+    const roundedScore = Math.round(exactScore * 10) / 10; // округлюємо тільки тут
+    const totalPoints = questions.reduce((sum, q) => sum + q.points, 0);
+    const percentage = totalPoints > 0 ? (exactScore / totalPoints) * 100 : 0;
+    const roundedPercentage = Math.round(percentage * 10) / 10;
+
+    const totalQuestions = questions.length;
+    const correctClicks = scoresPerQuestion.filter(s => s > 0).length;
+
+    // Підозріла активність
+    const timeAwayPercent = result.suspiciousActivity?.timeAway && result.duration
+      ? Math.round((result.suspiciousActivity.timeAway / result.duration) * 100)
+      : 0;
+
+    const switchCount = result.suspiciousActivity?.switchCount || 0;
+    const avgResponseTime = result.suspiciousActivity?.responseTimes?.length
+      ? (result.suspiciousActivity.responseTimes.reduce((sum, t) => sum + (t || 0), 0) / result.suspiciousActivity.responseTimes.length).toFixed(2)
+      : 0;
+
+    const totalActivityCount = result.suspiciousActivity?.activityCounts
+      ? result.suspiciousActivity.activityCounts.reduce((sum, c) => sum + (c || 0), 0)
+      : 0;
+
+    // HTML-сторінка
     let html = `
       <!DOCTYPE html>
       <html lang="uk">
         <head>
           <meta charset="UTF-8">
+          <meta name="viewport" content="width=device-width, initial-scale=1.0">
           <title>Деталі результату</title>
           <style>
-            body { font-family: Arial, sans-serif; padding: 20px; }
-            table { border-collapse: collapse; width: 100%; margin-top: 20px; }
-            th, td { border: 1px solid black; padding: 8px; text-align: left; }
-            th { background-color: #f2f2f2; }
-            .error { color: red; }
-            .nav-btn { padding: 10px 20px; margin: 5px; cursor: pointer; border: none; border-radius: 5px; background-color: #007bff; color: white; }
-            .answers { white-space: pre-wrap; max-width: 300px; overflow-wrap: break-word; line-height: 1.8; }
+            body { font-family: Arial, sans-serif; padding: 20px; background: #f5f5f5; }
+            .container { max-width: 1200px; margin: 0 auto; background: white; padding: 25px; border-radius: 8px; box-shadow: 0 2px 15px rgba(0,0,0,0.1); }
+            h1 { text-align: center; color: #333; margin-bottom: 20px; }
+            table { border-collapse: collapse; width: 100%; margin: 20px 0; }
+            th, td { border: 1px solid #ddd; padding: 12px; text-align: left; }
+            th { background: #f2f2f2; font-weight: bold; }
+            .nav-btn { padding: 12px 24px; margin: 10px 5px; cursor: pointer; border: none; border-radius: 6px; background: #007bff; color: white; font-size: 16px; }
+            .nav-btn:hover { background: #0056b3; }
+            .details { white-space: pre-wrap; max-width: 400px; line-height: 1.6; }
+            .suspicious { color: #d32f2f; font-weight: bold; }
+            .summary { font-size: 18px; margin: 20px 0; padding: 15px; background: #f8f9fa; border-radius: 6px; }
           </style>
         </head>
         <body>
-          <h1>Деталі результату для користувача ${result.user}</h1>
-          <p>
-            Тест: ${testNames[result.testNumber]?.name.replace(/"/g, '\\"') || 'Невідомий тест'}<br>
-            Результат: ${Math.round(result.percentage)}%<br>
-            Кількість питань: ${result.totalQuestions}<br>
-            Правильних відповідей: ${result.correctClicks}<br>
-            Набрано балів: ${result.score}<br>
-            Максимально можлива кількість балів: ${result.totalPoints}<br>
-            Час поза вкладкою: ${result.suspiciousActivity?.timeAway ? Math.round((result.suspiciousActivity.timeAway / result.duration) * 100) : 0}%<br>
-            Переключення вкладок: ${result.suspiciousActivity?.switchCount || 0}<br>
-            Середній час відповіді: ${result.suspiciousActivity?.responseTimes
-              ? (result.suspiciousActivity.responseTimes.reduce((sum, time) => sum + (time || 0), 0) / result.suspiciousActivity.responseTimes.length).toFixed(2)
-              : 0} с<br>
-            Загальна активність: ${result.suspiciousActivity?.activityCounts
-              ? result.suspiciousActivity.activityCounts.reduce((sum, count) => sum + (count || 0), 0)
-              : 0}<br>
-            Дата завершення: ${new Date(result.endTime).toLocaleString('uk-UA')}<br>
-            Варіант: ${result.variant || 'Немає'}
-          </p>
-          <table>
-            <tr>
-              <th>Питання</th>
-              <th>Ваша відповідь</th>
-              <th>Бали</th>
-            </tr>
+          <div class="container">
+            <h1>Деталі результату для користувача ${result.user}</h1>
+
+            <div class="summary">
+              <strong>Тест:</strong> ${testNames[result.testNumber]?.name?.replace(/"/g, '\\"') || 'Невідомий тест'}<br>
+              <strong>Варіант:</strong> ${result.variant || 'Немає'}<br>
+              <strong>Загальний результат:</strong> ${roundedPercentage.toFixed(1)}% (${roundedScore.toFixed(1)} з ${totalPoints})<br>
+              <strong>Кількість питань:</strong> ${totalQuestions}<br>
+              <strong>Правильних відповідей:</strong> ${correctClicks}<br>
+              <strong>Дата завершення:</strong> ${new Date(result.endTime).toLocaleString('uk-UA')}<br><br>
+
+              <strong>Підозріла активність:</strong><br>
+              Час поза вкладкою: <span class="${timeAwayPercent > 50 ? 'suspicious' : ''}">${timeAwayPercent}%</span><br>
+              Переключення вкладок: ${switchCount}<br>
+              Середній час відповіді: ${avgResponseTime} с<br>
+              Загальна активність: ${totalActivityCount}
+            </div>
+
+            <table>
+              <tr>
+                <th>Питання</th>
+                <th>Ваша відповідь</th>
+                <th>Бали</th>
+              </tr>
     `;
-    // Перебираємо відфільтровані питання
+
+    // Виводимо відфільтровані питання з точними балами
     questions.forEach((question, index) => {
       const userAnswer = result.answers[index] !== undefined ? result.answers[index] : 'Не відповіли';
-      const questionScore = result.scoresPerQuestion[index] || 0;
-      let userAnswerDisplay;
-      if (question.type === 'matching' && Array.isArray(userAnswer)) {
-        userAnswerDisplay = userAnswer.map(pair => `${pair[0]} -> ${pair[1]}`).join(', ');
-      } else if (question.type === 'fillblank' && Array.isArray(userAnswer)) {
-        userAnswerDisplay = userAnswer.join(', ');
-      } else if (Array.isArray(userAnswer)) {
-        userAnswerDisplay = userAnswer.join(', ');
+      const questionScore = scoresPerQuestion[index]; // точне значення
+
+      let userAnswerDisplay = '—';
+      if (Array.isArray(userAnswer)) {
+        if (question.type === 'matching') {
+          userAnswerDisplay = userAnswer.map(pair => `${pair[0]} → ${pair[1]}`).join('<br>');
+        } else if (question.type === 'fillblank') {
+          userAnswerDisplay = userAnswer.join('<br>');
+        } else {
+          userAnswerDisplay = userAnswer.join(', ');
+        }
       } else {
         userAnswerDisplay = userAnswer;
       }
+
       html += `
         <tr>
-          <td>${question.text}</td>
-          <td class="answers">${userAnswerDisplay}</td>
-          <td>${questionScore}/${question.points}</td>
+          <td>${question.text.replace(/</g, '&lt;').replace(/>/g, '&gt;')}</td>
+          <td class="details">${userAnswerDisplay}</td>
+          <td>${questionScore.toFixed(3)} / ${question.points}</td>
         </tr>
       `;
     });
+
     html += `
-          </table>
-          <button class="nav-btn" onclick="window.location.href='/select-test'">Повернутися до вибору тесту</button>
+            </table>
+            <br>
+            <button class="nav-btn" onclick="window.location.href='/admin/results'">Назад до списку результатів</button>
+          </div>
         </body>
       </html>
     `;
+
     res.send(html);
   } catch (error) {
     logger.error('Помилка в /admin/view-result', { message: error.message, stack: error.stack });
-    res.status(500).send('Помилка при перегляді результату');
+    res.status(500).send('Помилка при перегляді результату: ' + error.message);
   } finally {
     const endTime = Date.now();
     logger.info('Маршрут /admin/view-result виконано', { duration: `${endTime - startTime} мс` });
-  }
-});
-
-// Маршрут для видалення результату
-app.post('/admin/delete-result', checkAuth, checkAdmin, async (req, res) => {
-  const startTime = Date.now();
-  try {
-    const { id } = req.body;
-    if (!id || !ObjectId.isValid(id)) {
-      return res.status(400).json({ success: false, message: 'Невірний ідентифікатор результату' });
-    }
-    await db.collection('test_results').deleteOne({ _id: new ObjectId(id) });
-    res.json({ success: true });
-  } catch (error) {
-    logger.error('Помилка видалення результату', { message: error.message, stack: error.stack });
-    res.status(500).json({ success: false, message: 'Помилка при видаленні результату' });
-  } finally {
-    const endTime = Date.now();
-    logger.info('Маршрут /admin/delete-result виконано', { duration: `${endTime - startTime} мс` });
   }
 });
 
