@@ -3285,25 +3285,6 @@ app.post('/answer', checkAuth, express.urlencoded({ extended: true }), async (re
 function calculateQuestionScore(question, userAnswer) {
   let score = 0;
 
-  // Визначаємо кількість елементів для розподілу балів
-  let numElements = 1;
-  switch (question.type) {
-    case 'multiple':
-    case 'fillblank':
-      numElements = question.correctAnswers?.length || 1;
-      break;
-    case 'matching':
-      numElements = question.correctPairs?.length || 1;
-      break;
-    case 'ordering':
-      numElements = question.correctAnswers?.length || 1;
-      break;
-    default:
-      numElements = 1;
-  }
-
-  const partial = question.points / numElements;
-
   const normalize = (val) => String(val || '')
     .trim()
     .toLowerCase()
@@ -3311,24 +3292,24 @@ function calculateQuestionScore(question, userAnswer) {
     .replace(/[^a-z0-9а-яіїєґ\s]/gi, '');
 
   switch (question.type) {
-    case 'multiple':
+    case 'multiple': {
       if (!Array.isArray(userAnswer)) return 0;
       const correctSet = new Set(question.correctAnswers.map(normalize));
       const userSet = new Set(userAnswer.map(normalize));
+      const partial = question.points / correctSet.size;
 
-      // + за кожну правильну
       correctSet.forEach(c => {
         if (userSet.has(c)) score += partial;
       });
-
-      // - за кожну зайву (повний штраф, як ти просив)
       userSet.forEach(u => {
-        if (!correctSet.has(u)) score -= partial;
+        if (!correctSet.has(u)) score -= partial; // штраф за зайве
       });
       break;
+    }
 
-    case 'fillblank':
+    case 'fillblank': {
       if (!Array.isArray(userAnswer) || userAnswer.length !== question.correctAnswers.length) return 0;
+      const partial = question.points / question.correctAnswers.length;
 
       question.correctAnswers.forEach((correct, i) => {
         const userVal = normalize(userAnswer[i]);
@@ -3343,17 +3324,28 @@ function calculateQuestionScore(question, userAnswer) {
         }
 
         if (isCorrect) score += partial;
-        else score -= partial; // повний штраф за неправильний пропуск
+        else score -= partial; // штраф за неправильний пропуск
       });
       break;
+    }
 
-    case 'matching':
-      if (!Array.isArray(userAnswer) || userAnswer.length !== question.correctPairs.length) return 0;
+    case 'matching': {
+      if (!Array.isArray(userAnswer) || userAnswer.length === 0) return 0;
 
-      question.correctPairs.forEach((correctPair, i) => {
-        const userPair = userAnswer[i];
-        if (!userPair || userPair.length !== 2) {
-          score -= partial; // повний штраф, якщо пара не зіставлена
+      let userPairs = userAnswer;
+      if (userAnswer[0] && typeof userAnswer[0] === 'object' && !Array.isArray(userAnswer[0])) {
+        userPairs = userAnswer.map(p => [p.left || '', p.right || '']);
+      }
+
+      const correctPairs = question.correctPairs || [];
+      const pairCount = correctPairs.length || 1;
+      const partial = question.points / pairCount;
+
+      correctPairs.forEach((correctPair, i) => {
+        const userPair = userPairs[i] || ['', ''];
+
+        if (!Array.isArray(userPair) || userPair.length !== 2) {
+          score -= partial;
           return;
         }
 
@@ -3365,30 +3357,33 @@ function calculateQuestionScore(question, userAnswer) {
         if (leftCorrect === leftUser && rightCorrect === rightUser) {
           score += partial;
         } else {
-          score -= partial; // повний штраф за неправильну пару
+          score -= partial;
         }
       });
       break;
+    }
 
-    case 'ordering':
+    case 'ordering': {
       if (!Array.isArray(userAnswer)) return 0;
       const correctOrder = question.correctAnswers.map(normalize);
       const userOrder    = userAnswer.map(normalize);
+      const partial = question.points / correctOrder.length;
 
       correctOrder.forEach((correct, i) => {
         if (userOrder[i] === correct) score += partial;
-        else score -= partial; // повний штраф за неправильну позицію
+        else score -= partial;
       });
       break;
+    }
 
-    default: // singlechoice, truefalse, input — все або нічого
+    default: // singlechoice, truefalse, input
       let isCorrect = false;
 
       if (question.type === 'singlechoice' || question.type === 'truefalse') {
         isCorrect = normalize(userAnswer) === normalize(question.correctAnswer || question.correctAnswers?.[0]);
       } else if (question.type === 'input') {
-        const correct = question.correctAnswers?.[0];
-        if (correct?.includes('-')) {
+        const correct = question.correctAnswers?.[0] || '';
+        if (correct.includes('-')) {
           const [min, max] = correct.split('-').map(Number);
           const val = Number(normalize(userAnswer));
           isCorrect = !isNaN(val) && val >= min && val <= max;
@@ -3401,7 +3396,7 @@ function calculateQuestionScore(question, userAnswer) {
       break;
   }
 
-  return Math.max(0, score); // не нижче нуля
+  return Math.max(0, score);
 }
 
 // Маршрут для відображення результатів тесту — фінальна стабільна версія (2026-03-17)
