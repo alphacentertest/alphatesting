@@ -3325,14 +3325,19 @@ app.get('/result', checkAuth, async (req, res) => {
       testData = userTest;
     }
 
-    // Безпечне отримання полів (щоб уникнути помилок "not defined")
+    // Безпечне отримання всіх потрібних полів
     const testNumber = testData.testNumber;
     const answers = testData.answers || {};
     const startTimeMs = testData.startTime || Date.now();
+    const timeLimit = testData.timeLimit || 3600000; // 1 година за замовчуванням
     const suspiciousActivity = testData.suspiciousActivity || {};
     const variant = testData.variant || '';
     const testSessionId = testData.testSessionId;
-    const timeLimit = testData.timeLimit || 3600000; // 1 година за замовчуванням
+
+    if (!testNumber) {
+      logger.error('testNumber не знайдено в testData', { testData });
+      return res.status(500).send('Помилка: не вдалося визначити номер тесту');
+    }
 
     // Завантажуємо питання з бази (обов’язково!)
     let questions = await db.collection('questions')
