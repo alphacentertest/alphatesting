@@ -3,7 +3,7 @@ const MongoClient = require('mongodb').MongoClient;
 const path = require('path');
 const fs = require('fs');
 
-const uri = process.env.MONGODB2_MONGODB_URI;
+const uri = process.env.MONGODB_URI;
 const client = new MongoClient(uri, { useUnifiedTopology: true });
 
 async function migrateUsers() {
