@@ -3325,16 +3325,9 @@ app.get('/result', checkAuth, async (req, res) => {
       testData = userTest;
     }
 
-    // Безпечне отримання testNumber
-    const testNumber = testData.testNumber || testData.testNumber;
-    if (!testNumber) {
-      logger.error('testNumber не знайдено в testData', { testData });
-      return res.status(500).send('Помилка: не вдалося визначити номер тесту');
-    }
-
-    // Завантажуємо питання з бази
+    // Завантажуємо питання з бази (обов’язково!)
     let questions = await db.collection('questions')
-      .find({ testNumber })
+      .find({ testNumber: testData.testNumber })
       .sort({ order: 1 })
       .toArray();
 
@@ -3401,23 +3394,23 @@ app.get('/result', checkAuth, async (req, res) => {
         );
         await saveResult(
           req.user,
-          testNumber,
+          testData.testNumber,
           score,
           totalPoints,
-          testStartTime,
+          testData.startTime,
           endTime,
           totalClicks,
           correctClicks,
           totalQuestions,
           percentage,
           { timeAway: correctedTimeAway, switchCount, responseTimes: suspiciousActivity?.responseTimes || [], activityCounts: suspiciousActivity?.activityCounts || [] },
-          answers,
+          testData.answers,
           scoresPerQuestion,
-          variant,
+          testData.variant,
           ipAddress,
-          testSessionId
+          testData.testSessionId
         );
-        logger.info(`Результат збережено для testSessionId: ${testSessionId}`);
+        logger.info(`Результат збережено для testSessionId: ${testData.testSessionId}`);
       }
     }
 
@@ -3433,9 +3426,9 @@ app.get('/result', checkAuth, async (req, res) => {
           totalQuestions,
           percentage,
           suspiciousActivity: { timeAway: correctedTimeAway, switchCount, responseTimes: suspiciousActivity?.responseTimes || [], activityCounts: suspiciousActivity?.activityCounts || [] },
-          answers,
+          answers: testData.answers,
           scoresPerQuestion,
-          variant,
+          variant: testData.variant,
           ipAddress
         } },
         { upsert: true }
@@ -3463,7 +3456,7 @@ app.get('/result', checkAuth, async (req, res) => {
       <html lang="uk">
         <head>
           <meta charset="UTF-8">
-          <title>Результати ${testNames[testNumber]?.name.replace(/"/g, '\\"') || 'Невідомий тест'}</title>
+          <title>Результати ${testNames[testData.testNumber]?.name.replace(/"/g, '\\"') || 'Невідомий тест'}</title>
           <style>
             body { font-family: Arial, sans-serif; text-align: center; padding: 20px; background-color: #f5f5f5; }
             .result-container { margin: 20px auto; width: 150px; height: 150px; position: relative; }
@@ -3504,7 +3497,7 @@ app.get('/result', checkAuth, async (req, res) => {
           </div>
           <script>
             const user = "${req.user.replace(/"/g, '\\"')}";
-            const testName = "${testNames[testNumber]?.name.replace(/"/g, '\\"') || 'Невідомий тест'}";
+            const testName = "${testNames[testData.testNumber]?.name.replace(/"/g, '\\"') || 'Невідомий тест'}";
             const totalQuestions = ${totalQuestions};
             const correctClicks = ${correctClicks};
             const score = ${score};
