@@ -3994,12 +3994,12 @@ app.get('/results', checkAuth, async (req, res) => {
 });
 
 // Маршрут для адмін-панелі
+// Маршрут для адмін-панелі
 app.get('/admin', checkAuth, checkAdmin, async (req, res) => {
   const startTime = Date.now();
   try {
     // Підрахунок непрочитаних повідомлень зворотного зв’язку
     const unreadFeedbackCount = await db.collection('feedback').countDocuments({ read: false });
-
     const html = `
       <!DOCTYPE html>
       <html lang="uk">
@@ -4008,15 +4008,53 @@ app.get('/admin', checkAuth, checkAdmin, async (req, res) => {
           <meta name="viewport" content="width=device-width, initial-scale=1.0">
           <title>Адмін-панель</title>
           <style>
-            body { font-family: Arial, sans-serif; text-align: center; padding: 50px; font-size: 24px; margin: 0; }
-            h1 { font-size: 36px; margin-bottom: 20px; }
-            button { padding: 15px 30px; margin: 10px; font-size: 24px; cursor: pointer; width: 300px; border: none; border-radius: 5px; background-color: #4CAF50; color: white; position: relative; }
-            button:hover { background-color: #45a049; }
-            #feedback-btn { 
-              background-color: ${unreadFeedbackCount > 0 ? '#ef5350' : '#4CAF50'}; /* Червоний, якщо є непрочитані */
+            body { 
+              font-family: Arial, sans-serif; 
+              text-align: center; 
+              padding: 50px; 
+              font-size: 24px; 
+              margin: 0; 
+              background-color: #f5f5f5;
+              min-height: 100vh;
+              position: relative;
             }
-            #feedback-btn:hover { 
-              background-color: ${unreadFeedbackCount > 0 ? '#d32f2f' : '#45a049'}; 
+            h1 { 
+              font-size: 36px; 
+              margin-bottom: 40px; 
+            }
+            .buttons-container {
+              display: flex;
+              flex-direction: column;
+              align-items: center;
+              gap: 20px;
+              max-width: 400px;
+              margin: 0 auto 100px; /* відступ знизу, щоб кнопка Вийти не перекривала */
+            }
+            button { 
+              padding: 15px 30px; 
+              margin: 10px 0; 
+              font-size: 24px; 
+              cursor: pointer; 
+              width: 100%;
+              max-width: 400px;
+              border: none; 
+              border-radius: 8px; 
+              background-color: #4CAF50; 
+              color: white; 
+              position: relative;
+              box-shadow: 0 4px 10px rgba(0,0,0,0.15);
+              transition: all 0.2s;
+            }
+            button:hover { 
+              background-color: #45a049; 
+              transform: translateY(-2px);
+              box-shadow: 0 6px 14px rgba(0,0,0,0.2);
+            }
+            #feedback-btn {
+              background-color: ${unreadFeedbackCount > 0 ? '#ef5350' : '#4CAF50'};
+            }
+            #feedback-btn:hover {
+              background-color: ${unreadFeedbackCount > 0 ? '#d32f2f' : '#45a049'};
             }
             .notification-badge {
               position: absolute;
@@ -4027,50 +4065,72 @@ app.get('/admin', checkAuth, checkAdmin, async (req, res) => {
               border-radius: 50%;
               padding: 5px 10px;
               font-size: 14px;
+              min-width: 24px;
+              height: 24px;
+              display: flex;
+              align-items: center;
+              justify-content: center;
             }
+            /* Кнопка Вийти — фіксована внизу по центру */
             #logout {
               position: fixed;
-              bottom: 20px;
+              bottom: 30px;
               left: 50%;
               transform: translateX(-50%);
               background: #ef5350;
               color: white;
-              padding: 16px 32px;
-              font-size: 18px;
+              padding: 16px 40px;
+              font-size: 20px;
               font-weight: bold;
               border: none;
               border-radius: 10px;
               cursor: pointer;
-              min-height: 60px;
-              min-width: 180px;
-              box-shadow: 0 4px 10px rgba(0,0,0,0.15);
-              z-index: 100;
+              min-height: 70px;
+              min-width: 220px;
+              box-shadow: 0 6px 15px rgba(0,0,0,0.2);
+              z-index: 1000;
+              transition: all 0.2s;
             }
-
             #logout:hover {
               background: #d32f2f;
-              transform: translateX(-50%) translateY(-2px);
+              transform: translateX(-50%) translateY(-3px);
+              box-shadow: 0 8px 20px rgba(0,0,0,0.25);
+            }
+            @media (max-width: 600px) {
+              h1 { font-size: 28px; }
+              button { font-size: 20px; padding: 14px 20px; }
+              #logout { 
+                padding: 14px 30px; 
+                font-size: 18px; 
+                min-height: 60px; 
+                min-width: 180px; 
+              }
             }
           </style>
         </head>
         <body>
           <h1>Адмін-панель</h1>
-          <button onclick="window.location.href='/admin/users'">Керування користувачами</button><br>
-          <button onclick="window.location.href='/admin/questions'">Керування питаннями</button><br>
-          <button onclick="window.location.href='/admin/import-users'">Імпорт користувачів</button><br>
-          <button onclick="window.location.href='/admin/import-questions'">Імпорт питань</button><br>
-          <button onclick="window.location.href='/admin/results'">Перегляд результатів</button><br>
-          <button onclick="window.location.href='/admin/edit-tests'">Редагувати назви тестів</button><br>
-          <button onclick="window.location.href='/admin/create-test'">Створити новий тест</button><br>
-          <button onclick="window.location.href='/admin/activity-log'">Журнал дій</button><br>
-          <button id="feedback-btn" onclick="window.location.href='/admin/feedback'">
-            Зворотний зв’язок
-            ${unreadFeedbackCount > 0 ? `<span class="notification-badge">${unreadFeedbackCount}</span>` : ''}
-          </button><br>
+          <div class="buttons-container">
+            <button onclick="window.location.href='/admin/users'">Керування користувачами</button>
+            <button onclick="window.location.href='/admin/questions'">Керування питаннями</button>
+            <button onclick="window.location.href='/admin/import-users'">Імпорт користувачів</button>
+            <button onclick="window.location.href='/admin/import-questions'">Імпорт питань</button>
+            <button onclick="window.location.href='/admin/results'">Перегляд результатів</button>
+            <button onclick="window.location.href='/admin/edit-tests'">Редагувати назви тестів</button>
+            <button onclick="window.location.href='/admin/create-test'">Створити новий тест</button>
+            <button onclick="window.location.href='/admin/activity-log'">Журнал дій</button>
+            <button id="feedback-btn" onclick="window.location.href='/admin/feedback'">
+              Зворотний зв’язок
+              ${unreadFeedbackCount > 0 ? `<span class="notification-badge">${unreadFeedbackCount}</span>` : ''}
+            </button>
+          </div>
+
+          <!-- Кнопка Вийти — фіксована внизу по центру -->
           <button id="logout" onclick="logout()">Вийти</button>
+
           <script>
             async function logout() {
-              console.log('Спроба виходу, CSRF-токен:', '${res.locals._csrf}');
+              console.log('Спроба виходу з адмін-панелі');
               const formData = new URLSearchParams();
               formData.append('_csrf', '${res.locals._csrf}');
               try {
@@ -4079,20 +4139,20 @@ app.get('/admin', checkAuth, checkAdmin, async (req, res) => {
                   headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
                   body: formData
                 });
-                console.log('Статус відповіді на вихід:', response.status);
+                console.log('Статус відповіді:', response.status);
                 if (!response.ok) {
-                  throw new Error('HTTP-помилка! статус: ' + response.status);
+                  throw new Error('HTTP помилка: ' + response.status);
                 }
                 const result = await response.json();
-                console.log('Відповідь на вихід:', result);
+                console.log('Відповідь сервера:', result);
                 if (result.success) {
                   window.location.href = '/';
                 } else {
-                  throw new Error('Вихід не вдався: ' + result.message);
+                  alert('Вихід не вдався: ' + (result.message || 'невідома помилка'));
                 }
               } catch (error) {
-                console.error('Помилка під час виходу:', error);
-                alert('Не вдалося вийти. Перевірте консоль браузера для деталей.');
+                console.error('Помилка при виході:', error);
+                alert('Не вдалося вийти. Перевірте консоль (F12) для деталей.');
               }
             }
           </script>
@@ -6059,6 +6119,9 @@ app.get('/admin/view-result', checkAuth, async (req, res) => {
             .nav-btn { padding: 12px 24px; margin: 10px 5px; cursor: pointer; border: none; border-radius: 8px; background: #007bff; color: white; }
             .nav-btn:hover { background: #0056b3; }
           </style>
+          <!-- Підключення pdfMake -->
+          <script src="/pdfmake/pdfmake.min.js"></script>
+          <script src="/pdfmake/vfs_fonts.js"></script>
         </head>
         <body>
           <div class="container">
@@ -6067,6 +6130,7 @@ app.get('/admin/view-result', checkAuth, async (req, res) => {
               <button class="nav-btn" onclick="window.location.href='/admin/results'">Назад до списку</button>
               <button id="exportPDF" style="margin-left: 15px;">Експортувати в PDF</button>
             </div>
+
             <script>
               // Передаємо всі потрібні дані з сервера в JavaScript
               const viewResultData = {
@@ -6083,7 +6147,6 @@ app.get('/admin/view-result', checkAuth, async (req, res) => {
                 switchCount: ${switchCount},
                 avgResponseTime: ${avgResponseTime},
                 totalActivityCount: ${totalActivityCount},
-                // Таблиця питань
                 questionsTable: ${JSON.stringify(questions.map((q, idx) => {
                   const userAns = result.answers[idx] !== undefined ? result.answers[idx] : 'Не відповіли';
                   let userDisplay = userAns;
@@ -6105,17 +6168,23 @@ app.get('/admin/view-result', checkAuth, async (req, res) => {
                 }))}
               };
 
-              document.getElementById('exportPDF')?.addEventListener('click', () => {
+              // Функція експорту PDF з перевіркою
+              function exportToPDF() {
+                if (typeof pdfMake === 'undefined' || typeof pdfMake.createPdf === 'undefined') {
+                  console.error('pdfMake не завантажився. Перевірте підключення скриптів:');
+                  console.log('pdfmake.min.js:', document.querySelector('script[src="/pdfmake/pdfmake.min.js"]')?.src || 'не знайдено');
+                  console.log('vfs_fonts.js:', document.querySelector('script[src="/pdfmake/vfs_fonts.js"]')?.src || 'не знайдено');
+                  alert('PDF-генератор не завантажився. Спробуйте оновити сторінку (Ctrl+F5) або зверніться до адміністратора.');
+                  return;
+                }
+
                 const docDefinition = {
                   pageSize: 'A4',
                   pageMargins: [40, 60, 40, 60],
                   content: [
-                    // Заголовок
                     { text: 'Деталі результату для користувача ' + viewResultData.user, style: 'mainHeader' },
                     { text: 'Тест: ' + viewResultData.testName, margin: [0, 10, 0, 5], style: 'subHeader' },
                     { text: 'Варіант: ' + viewResultData.variant, margin: [0, 0, 0, 15] },
-
-                    // Підсумок (таблиця)
                     {
                       table: {
                         widths: ['*', 'auto'],
@@ -6130,8 +6199,6 @@ app.get('/admin/view-result', checkAuth, async (req, res) => {
                       layout: 'lightHorizontalLines',
                       margin: [0, 0, 0, 20]
                     },
-
-                    // Підозріла активність
                     {
                       text: 'Підозріла активність:',
                       style: 'subHeader',
@@ -6146,8 +6213,6 @@ app.get('/admin/view-result', checkAuth, async (req, res) => {
                       ],
                       margin: [0, 0, 0, 20]
                     },
-
-                    // Таблиця питань
                     { text: 'Деталі відповідей:', style: 'subHeader', margin: [0, 0, 0, 10] },
                     {
                       table: {
@@ -6189,8 +6254,19 @@ app.get('/admin/view-result', checkAuth, async (req, res) => {
                 };
 
                 pdfMake.createPdf(docDefinition).download('деталі_результату_' + viewResultData.user + '.pdf');
+              }
+
+              // Додаємо обробник після повного завантаження сторінки
+              document.addEventListener('DOMContentLoaded', () => {
+                const exportBtn = document.getElementById('exportPDF');
+                if (exportBtn) {
+                  exportBtn.addEventListener('click', exportToPDF);
+                } else {
+                  console.error('Кнопка #exportPDF не знайдена на сторінці');
+                }
               });
             </script>
+
             <div class="summary">
               <strong>Тест:</strong> ${testNames[result.testNumber]?.name?.replace(/"/g, '\\"') || 'Невідомий тест'}<br>
               <strong>Варіант:</strong> ${result.variant || 'Немає'}<br>
@@ -6252,7 +6328,7 @@ app.get('/admin/view-result', checkAuth, async (req, res) => {
 
     res.send(html);
   } catch (error) {
-    logger.error('Помилка в /admin/view-result', error);
+    logger.error('Помилка в /admin/view-result', { message: error.message, stack: error.stack });
     res.status(500).send('Помилка перегляду результату');
   } finally {
     logger.info('Маршрут /admin/view-result виконано');
