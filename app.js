@@ -3391,18 +3391,18 @@ app.get('/result', checkAuth, async (req, res) => {
       !q.variant || q.variant === '' || q.variant === variant
     );
 
-    let score = testData.score || 0;
-    const totalPoints = testData.totalPoints || questions.reduce((sum, q) => sum + q.points, 0);
-    let scoresPerQuestion = testData.scoresPerQuestion || [];
+    // Підрахунок балів за допомогою функції
+    const scoresPerQuestion = questions.map((q, index) => {
+      const userAnswer = answers[index];
+      return calculateQuestionScore(q, userAnswer);
+    });
 
-    if (!scoresPerQuestion.length && questions.length > 0) {
-      scoresPerQuestion = questions.map((q, index) => {
-        const userAnswer = answers[index];
-        return calculateQuestionScore(q, userAnswer);
-      });
+    const score = scoresPerQuestion.reduce((sum, s) => sum + s, 0);
+    const totalPoints = questions.reduce((sum, q) => sum + q.points, 0); // завжди актуальні!
+    const percentage = totalPoints > 0 ? (score / totalPoints) * 100 : 0;
 
-      score = scoresPerQuestion.reduce((sum, s) => sum + s, 0);
-    }
+    const totalQuestions = questions.length; // завжди актуальні!
+    const correctClicks = scoresPerQuestion.filter(s => s > 0).length;
 
     let endTime = testData.endTime ? new Date(testData.endTime).getTime() : Date.now();
     const maxEndTime = startTimeMs + timeLimit;
@@ -3410,11 +3410,6 @@ app.get('/result', checkAuth, async (req, res) => {
       endTime = maxEndTime;
       logger.info(`Кориговано endTime до timeLimit для testSessionId: ${testSessionId}`);
     }
-
-    const percentage = testData.percentage || (totalPoints > 0 ? (score / totalPoints) * 100 : 0);
-    const totalClicks = testData.totalClicks || Object.keys(answers).length;
-    const correctClicks = testData.correctClicks || scoresPerQuestion.filter(s => s > 0).length;
-    const totalQuestions = testData.totalQuestions || questions.length;
 
     const duration = Math.round((endTime - startTimeMs) / 1000);
     const timeAway = suspiciousActivity.timeAway || 0;
@@ -3452,7 +3447,7 @@ app.get('/result', checkAuth, async (req, res) => {
           totalPoints,
           startTimeMs,
           endTime,
-          totalClicks,
+          Object.keys(answers).length,
           correctClicks,
           totalQuestions,
           percentage,
@@ -3474,7 +3469,7 @@ app.get('/result', checkAuth, async (req, res) => {
           score,
           totalPoints,
           endTime,
-          totalClicks,
+          totalClicks: Object.keys(answers).length,
           correctClicks,
           totalQuestions,
           percentage,
