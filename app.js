@@ -84,8 +84,12 @@ const config = {
 // Налаштування MongoDB
 const MONGODB_URI = process.env.MONGODB_URI;
 const client = new MongoClient(MONGODB_URI, {
-  connectTimeoutMS: 5000,
-  serverSelectionTimeoutMS: 5000
+  connectTimeoutMS: 30000,          // 30 секунд
+  serverSelectionTimeoutMS: 30000,  // 30 секунд
+  socketTimeoutMS: 60000,           // 60 секунд на сокет
+  retryWrites: true,
+  w: 'majority',
+  family: 4                         // примусово IPv4, іноді допомагає
 });
 let db;
 
@@ -1211,27 +1215,36 @@ app.get('/select-test', checkAuth, async (req, res) => {
 });
 
 // Обробка виходу користувача
-app.post('/logout', checkAuth, (req, res) => {
+app.post('/logout', checkAuth, async (req, res) => {
   const startTime = Date.now();
   try {
-    logger.info('Отримано CSRF-токен у /logout', { token: req.body._csrf });
+    logger.info('Отримано запит на вихід', { user: req.user });
+
     const ipAddress = req.headers['x-forwarded-for'] || req.socket.remoteAddress;
-    logActivity(req.user, 'покинув сайт', ipAddress);
+    await logActivity(req.user, 'покинув сайт', ipAddress);
+
+    // Очищаємо cookie
     res.clearCookie('token');
-    req.session.destroy(err => {
-      if (err) {
-        logger.error('Помилка знищення сесії', { message: err.message, stack: err.stack });
-        return res.status(500).json({ success: false, message: 'Помилка завершення сесії' });
-      }
-      logger.info('Сесію успішно знищено');
-      res.json({ success: true });
-    });
+    res.clearCookie('auth_token');
+
+    // Знищуємо сесію
+    if (req.session) {
+      req.session.destroy((err) => {
+        if (err) {
+          logger.error('Помилка знищення сесії', { error: err.message });
+        }
+      });
+    }
+
+    res.json({ success: true });
   } catch (error) {
-    logger.error('Помилка в /logout', { message: error.message, stack: error.stack });
-    res.status(500).json({ success: false, message: 'Помилка при виході' });
+    logger.error('Помилка при виході', { message: error.message, stack: error.stack });
+    // Навіть при помилці очищаємо cookie і повертаємо успіх клієнту
+    res.clearCookie('token');
+    res.clearCookie('auth_token');
+    res.json({ success: true, message: 'Вихід виконано з помилкою на сервері, але сесія очищена' });
   } finally {
-    const endTime = Date.now();
-    logger.info('Маршрут /logout виконано', { duration: `${endTime - startTime} мс` });
+    logger.info('Маршрут /logout виконано', { duration: `${Date.now() - startTime} мс` });
   }
 });
 
@@ -3669,13 +3682,10 @@ app.get('/result', checkAuth, async (req, res) => {
               animation: fillCircle 1.8s ease-out forwards;
             }
             .result-text {
-              position: absolute;
-              top: 50%;
-              left: 50%;
-              transform: translate(-50%, -50%);
               font-size: 48px;
               font-weight: bold;
-              color: #333;
+              fill: #333;          /* колір тексту */
+              pointer-events: none; /* щоб текст не заважав клікам */
             }
             .progress-circles {
               display: flex;
@@ -3741,11 +3751,13 @@ app.get('/result', checkAuth, async (req, res) => {
         <body>
           <h1>Результат тесту</h1>
           <div class="result-container">
-            <svg width="180" height="180">
+            <svg width="180" height="180" viewBox="0 0 180 180">
               <circle class="result-circle-bg" cx="90" cy="90" r="78" />
               <circle class="result-circle" cx="90" cy="90" r="78" />
+              <text x="90" y="90" class="result-text" text-anchor="middle" dominant-baseline="central">
+                ${Math.round(percentage)}%
+              </text>
             </svg>
-            <div class="result-text">${Math.round(percentage)}%</div>
           </div>
 
           <div class="progress-circles">
@@ -3784,6 +3796,7 @@ app.get('/result', checkAuth, async (req, res) => {
             document.getElementById('exportPDF').addEventListener('click', () => {
               const docDefinition = {
                 content: [
+                  imageBase64 ? { image: 'data:image/png;base64,' + imageBase64, width: 50, alignment: 'center', margin: [0, 0, 0, 20] } : { text: 'Логотип відсутній', alignment: 'center', margin: [0, 0, 0, 20] },
                   { text: 'Результат тесту користувача ' + user + ' з тесту ' + testName + ' складає ' + percentage + '%', style: 'header' },
                   { text: 'Кількість питань: ' + totalQuestions, margin: [0, 10, 0, 0] },
                   { text: 'Правильних відповідей: ' + correctClicks, margin: [0, 5, 0, 0] },
