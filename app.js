@@ -3325,7 +3325,7 @@ app.get('/result', checkAuth, async (req, res) => {
       testData = userTest;
     }
 
-    // Безпечне отримання всіх потрібних полів
+    // Безпечне отримання полів
     const testNumber = testData.testNumber;
     const answers = testData.answers || {};
     const startTimeMs = testData.startTime || Date.now();
