@@ -3404,7 +3404,7 @@ function calculateQuestionScore(question, userAnswer) {
   return Math.max(0, score); // не нижче нуля
 }
 
-// Маршрут для відображення результатів тесту — версія з посиленою діагностикою
+// Маршрут для відображення результатів тесту — фінальна стабільна версія (2026-03-17)
 app.get('/result', checkAuth, async (req, res) => {
   const startTime = Date.now();
   try {
@@ -3412,7 +3412,7 @@ app.get('/result', checkAuth, async (req, res) => {
 
     logger.info('[RESULT] Початок обробки результату', { user: req.user });
 
-    // 1. Спробуємо знайти активний тест або останній результат
+    // 1. Спробуємо знайти активний тест або останній збережений результат
     let userTest = await db.collection('active_tests').findOne({ user: req.user });
     let testData;
     let dataSource = 'невідомо';
@@ -3432,10 +3432,13 @@ app.get('/result', checkAuth, async (req, res) => {
       }
       testData = recentResult;
       dataSource = 'test_results (останній)';
-      logger.info('[RESULT] Використано останній збережений результат', { testSessionId: recentResult.testSessionId });
+      logger.info('[RESULT] Використано останній збережений результат', {
+        testSessionId: recentResult.testSessionId,
+        endTime: recentResult.endTime
+      });
     }
 
-    // 2. Витягуємо поля
+    // 2. Витягуємо ключові поля з захистом
     const testNumber     = testData.testNumber;
     const answers        = testData.answers || {};
     const startTimeMs    = testData.startTime || Date.now();
@@ -3449,7 +3452,7 @@ app.get('/result', checkAuth, async (req, res) => {
       return res.status(500).send('Помилка: не вдалося визначити номер тесту');
     }
 
-    // Нормалізація варіанту (щоб порівняння було нечутливим до регістру і пробілів)
+    // Нормалізація варіанту (гнучке порівняння)
     if (variant) {
       variant = String(variant).trim().toLowerCase().replace(/\s+/g, ' ');
       if (variant.startsWith('variant ')) variant = variant.replace('variant ', '');
@@ -3465,23 +3468,23 @@ app.get('/result', checkAuth, async (req, res) => {
       testSessionId
     });
 
-    // 3. Завантаження питань + гнучка фільтрація за варіантом
+    // 3. Завантаження питань + гнучка фільтрація
     let allQuestions = await db.collection('questions')
       .find({ testNumber })
       .sort({ order: 1 })
       .toArray();
 
     const questions = allQuestions.filter(q => {
-      if (!q.variant || q.variant === '') return true; // питання без варіанту — завжди включаємо
+      if (!q.variant || q.variant === '') return true;
 
       const qVar = String(q.variant).trim().toLowerCase().replace(/\s+/g, ' ');
-      const matches = (
+      return (
         qVar === variant ||
         qVar === `variant ${variant}` ||
         qVar === `варіант ${variant}` ||
-        qVar.includes(variant)
+        qVar.includes(variant) ||
+        variant.includes(qVar)
       );
-      return matches;
     });
 
     logger.info('[RESULT] Питання після фільтрації', {
@@ -3491,11 +3494,10 @@ app.get('/result', checkAuth, async (req, res) => {
       variantsInDB: [...new Set(allQuestions.map(q => q.variant || 'без варіанту'))]
     });
 
-    if (questions.length === 0) {
-      logger.error('[RESULT] Після фільтрації НЕМАЄ питань!', { variant, testNumber });
-      // Якщо питань немає — беремо всі (fallback)
+    // Fallback: якщо після фільтрації 0 питань — беремо всі
+    if (questions.length === 0 && allQuestions.length > 0) {
+      logger.warn('[RESULT] Фільтр за варіантом дав 0 питань — використовуємо всі');
       questions = allQuestions;
-      logger.warn('[RESULT] Fallback: взято всі питання без фільтрації');
     }
 
     // 4. Розрахунок балів
@@ -3520,7 +3522,7 @@ app.get('/result', checkAuth, async (req, res) => {
       answered: Object.keys(answers).length
     });
 
-    // 5. Час та підозріла активність (без змін)
+    // 5. Час та підозріла активність
     let endTime = testData.endTime ? new Date(testData.endTime).getTime() : Date.now();
     const maxEndTime = startTimeMs + timeLimit;
     if (endTime > maxEndTime) endTime = maxEndTime;
@@ -3533,11 +3535,18 @@ app.get('/result', checkAuth, async (req, res) => {
 
     const ipAddress = req.headers['x-forwarded-for'] || req.socket.remoteAddress;
 
-    // 6. Збереження (якщо ще не збережено)
+    // 6. Збереження результату (якщо ще не збережено)
     const existingResult = await db.collection('test_results').findOne({ testSessionId });
 
     if (!existingResult) {
-      logger.info('[RESULT] Збереження результату (бо не знайдено за testSessionId)', { testSessionId });
+      logger.info('[RESULT] Результат ще не збережений — запускаємо saveResult', { testSessionId });
+
+      if (userTest && !testData.isSaved) {
+        await db.collection('active_tests').updateOne(
+          { user: req.user },
+          { $set: { isSavingResult: true } }
+        );
+      }
 
       await saveResult(
         req.user,
@@ -3557,6 +3566,8 @@ app.get('/result', checkAuth, async (req, res) => {
         ipAddress,
         testSessionId
       );
+
+      logger.info('[RESULT] Результат збережено успішно');
     } else {
       logger.info('[RESULT] Результат уже існує — пропускаємо збереження', { testSessionId });
     }
@@ -3567,7 +3578,7 @@ app.get('/result', checkAuth, async (req, res) => {
       logger.info('[RESULT] Активний тест видалено');
     }
 
-    // 8. Форматування
+    // 8. Форматування дати/часу
     const endDateTime = new Date(endTime);
     const formattedTime = endDateTime.toLocaleTimeString('uk-UA', { hour12: false });
     const formattedDate = endDateTime.toLocaleDateString('uk-UA');
@@ -3582,7 +3593,7 @@ app.get('/result', checkAuth, async (req, res) => {
       logger.error('[RESULT] Помилка читання A.png', { message: error.message });
     }
 
-    // 10. HTML (без змін)
+    // 10. HTML-результат
     const resultHtml = `
       <!DOCTYPE html>
       <html lang="uk">
