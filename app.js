@@ -6253,7 +6253,7 @@ app.get('/admin/view-result', checkAuth, async (req, res) => {
                   }
                 };
 
-                pdfMake.createPdf(docDefinition).download('деталі_результату_' + viewResultData.user + '.pdf');
+                pdfMake.createPdf(docDefinition).download(viewResultData.user + 'деталі_результату_' + '.pdf');
               }
 
               // Додаємо обробник після повного завантаження сторінки
