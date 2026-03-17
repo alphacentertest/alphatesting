@@ -3370,7 +3370,7 @@ app.get('/result', checkAuth, async (req, res) => {
     const testNumber = testData.testNumber;
     const answers = testData.answers || {};
     const startTimeMs = testData.startTime || Date.now();
-    const timeLimit = testData.timeLimit || 3600000; // 1 година за замовчуванням
+    const timeLimit = testData.timeLimit || 3600000;
     const suspiciousActivity = testData.suspiciousActivity || {};
     const variant = testData.variant || '';
     const testSessionId = testData.testSessionId;
@@ -3380,7 +3380,7 @@ app.get('/result', checkAuth, async (req, res) => {
       return res.status(500).send('Помилка: не вдалося визначити номер тесту');
     }
 
-    // Завантажуємо питання з бази (обов’язково!)
+    // Завантажуємо питання з бази
     let questions = await db.collection('questions')
       .find({ testNumber })
       .sort({ order: 1 })
