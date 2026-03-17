@@ -6021,7 +6021,7 @@ app.get('/admin/view-result', checkAuth, async (req, res) => {
                 switchCount: ${switchCount},
                 avgResponseTime: ${avgResponseTime},
                 totalActivityCount: ${totalActivityCount},
-                // Таблиця питань — передаємо як масив об’єктів
+                // Таблиця питань
                 questionsTable: ${JSON.stringify(questions.map((q, idx) => {
                   const userAns = result.answers[idx] !== undefined ? result.answers[idx] : 'Не відповіли';
                   let userDisplay = userAns;
@@ -6049,17 +6049,17 @@ app.get('/admin/view-result', checkAuth, async (req, res) => {
                   pageMargins: [40, 60, 40, 60],
                   content: [
                     // Заголовок
-                    { text: `Деталі результату для користувача ${viewResultData.user}`, style: 'mainHeader' },
-                    { text: `Тест: ${viewResultData.testName}`, margin: [0, 10, 0, 5], style: 'subHeader' },
-                    { text: `Варіант: ${viewResultData.variant}`, margin: [0, 0, 0, 15] },
+                    { text: 'Деталі результату для користувача ' + viewResultData.user, style: 'mainHeader' },
+                    { text: 'Тест: ' + viewResultData.testName, margin: [0, 10, 0, 5], style: 'subHeader' },
+                    { text: 'Варіант: ' + viewResultData.variant, margin: [0, 0, 0, 15] },
 
                     // Підсумок (таблиця)
                     {
                       table: {
                         widths: ['*', 'auto'],
                         body: [
-                          [{ text: 'Бали:', bold: true }, `${viewResultData.roundedScore} з ${viewResultData.totalPoints}`],
-                          [{ text: 'Відсоток:', bold: true }, `${viewResultData.roundedPercentage}%`],
+                          [{ text: 'Бали:', bold: true }, viewResultData.roundedScore + ' з ' + viewResultData.totalPoints],
+                          [{ text: 'Відсоток:', bold: true }, viewResultData.roundedPercentage + '%'],
                           [{ text: 'Питань:', bold: true }, viewResultData.totalQuestions],
                           [{ text: 'Правильних:', bold: true }, viewResultData.correctClicks],
                           [{ text: 'Дата завершення:', bold: true }, viewResultData.endDateTime]
@@ -6077,10 +6077,10 @@ app.get('/admin/view-result', checkAuth, async (req, res) => {
                     },
                     {
                       ul: [
-                        `Час поза вкладкою: ${viewResultData.timeAwayPercent}%`,
-                        `Переключення вкладок: ${viewResultData.switchCount}`,
-                        `Середній час відповіді: ${viewResultData.avgResponseTime} с`,
-                        `Загальна активність: ${viewResultData.totalActivityCount}`
+                        'Час поза вкладкою: ' + viewResultData.timeAwayPercent + '%',
+                        'Переключення вкладок: ' + viewResultData.switchCount,
+                        'Середній час відповіді: ' + viewResultData.avgResponseTime + ' с',
+                        'Загальна активність: ' + viewResultData.totalActivityCount
                       ],
                       margin: [0, 0, 0, 20]
                     },
@@ -6100,7 +6100,7 @@ app.get('/admin/view-result', checkAuth, async (req, res) => {
                           ...viewResultData.questionsTable.map(row => [
                             row.text,
                             row.userAnswer,
-                            { text: `${row.score} / ${row.maxPoints}`, alignment: 'center' }
+                            { text: row.score + ' / ' + row.maxPoints, alignment: 'center' }
                           ])
                         ]
                       },
@@ -6126,7 +6126,7 @@ app.get('/admin/view-result', checkAuth, async (req, res) => {
                   }
                 };
 
-                pdfMake.createPdf(docDefinition).download(`деталі_результату_${viewResultData.user}.pdf`);
+                pdfMake.createPdf(docDefinition).download('деталі_результату_' + viewResultData.user + '.pdf');
               });
             </script>
             <div class="summary">
