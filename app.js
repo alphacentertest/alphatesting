@@ -3412,7 +3412,7 @@ app.get('/result', checkAuth, async (req, res) => {
 
     logger.info('[RESULT] Початок обробки результату', { user: req.user });
 
-    // 1. Спробуємо знайти активний тест
+    // 1. Спробуємо знайти активний тест або останній результат
     let userTest = await db.collection('active_tests').findOne({ user: req.user });
     let testData;
     let dataSource = 'невідомо';
@@ -3422,26 +3422,20 @@ app.get('/result', checkAuth, async (req, res) => {
       dataSource = 'active_tests';
       logger.info('[RESULT] Знайдено активний тест', { testSessionId: userTest.testSessionId });
     } else {
-      // Якщо активного немає — беремо найсвіжіший збережений результат
       const recentResult = await db.collection('test_results').findOne(
         { user: req.user },
         { sort: { endTime: -1 } }
       );
-
       if (!recentResult) {
         logger.warn('[RESULT] Немає ні активного тесту, ні збережених результатів');
         return res.status(400).send('Тест не розпочато або перерваний. Розпочніть новий тест.');
       }
-
       testData = recentResult;
-      dataSource = 'test_results (останній запис)';
-      logger.info('[RESULT] Використано останній збережений результат', {
-        testSessionId: recentResult.testSessionId,
-        endTime: recentResult.endTime
-      });
+      dataSource = 'test_results (останній)';
+      logger.info('[RESULT] Використано останній збережений результат', { testSessionId: recentResult.testSessionId });
     }
 
-    // 2. Витягуємо ключові поля з захистом
+    // 2. Витягуємо поля
     const testNumber     = testData.testNumber;
     const answers        = testData.answers || {};
     const startTimeMs    = testData.startTime || Date.now();
@@ -3451,11 +3445,19 @@ app.get('/result', checkAuth, async (req, res) => {
     const testSessionId  = testData.testSessionId || `fallback_${req.user}_${Date.now()}`;
 
     if (!testNumber) {
-      logger.error('[RESULT] testNumber відсутній у testData', { dataSource, testData });
+      logger.error('[RESULT] testNumber відсутній', { dataSource });
       return res.status(500).send('Помилка: не вдалося визначити номер тесту');
     }
 
-    logger.info('[RESULT] Основні дані отримано', {
+    // Нормалізація варіанту (щоб порівняння було нечутливим до регістру і пробілів)
+    if (variant) {
+      variant = String(variant).trim().toLowerCase().replace(/\s+/g, ' ');
+      if (variant.startsWith('variant ')) variant = variant.replace('variant ', '');
+      if (variant.startsWith('варіант ')) variant = variant.replace('варіант ', '');
+      logger.info('[RESULT] Нормалізований варіант', { original: testData.variant, normalized: variant });
+    }
+
+    logger.info('[RESULT] Основні дані', {
       dataSource,
       testNumber,
       variant: variant || '(немає)',
@@ -3463,24 +3465,37 @@ app.get('/result', checkAuth, async (req, res) => {
       testSessionId
     });
 
-    // 3. Завантажуємо питання + фільтрація за варіантом
+    // 3. Завантаження питань + гнучка фільтрація за варіантом
     let allQuestions = await db.collection('questions')
       .find({ testNumber })
       .sort({ order: 1 })
       .toArray();
 
-    const questions = allQuestions.filter(q =>
-      !q.variant || q.variant === '' || String(q.variant).trim() === String(variant).trim()
-    );
+    const questions = allQuestions.filter(q => {
+      if (!q.variant || q.variant === '') return true; // питання без варіанту — завжди включаємо
 
-    logger.info('[RESULT] Питання завантажено та відфільтровано', {
+      const qVar = String(q.variant).trim().toLowerCase().replace(/\s+/g, ' ');
+      const matches = (
+        qVar === variant ||
+        qVar === `variant ${variant}` ||
+        qVar === `варіант ${variant}` ||
+        qVar.includes(variant)
+      );
+      return matches;
+    });
+
+    logger.info('[RESULT] Питання після фільтрації', {
       allCount: allQuestions.length,
       filteredCount: questions.length,
-      variantUsed: variant || '(немає)'
+      variantUsed: variant || '(немає)',
+      variantsInDB: [...new Set(allQuestions.map(q => q.variant || 'без варіанту'))]
     });
 
     if (questions.length === 0) {
       logger.error('[RESULT] Після фільтрації НЕМАЄ питань!', { variant, testNumber });
+      // Якщо питань немає — беремо всі (fallback)
+      questions = allQuestions;
+      logger.warn('[RESULT] Fallback: взято всі питання без фільтрації');
     }
 
     // 4. Розрахунок балів
@@ -3501,10 +3516,11 @@ app.get('/result', checkAuth, async (req, res) => {
       totalPoints: totalPoints.toFixed(2),
       percentage: percentage.toFixed(1) + '%',
       totalQuestions,
-      correctClicks
+      correctClicks,
+      answered: Object.keys(answers).length
     });
 
-    // 5. Обробка часу та підозрілої активності
+    // 5. Час та підозріла активність (без змін)
     let endTime = testData.endTime ? new Date(testData.endTime).getTime() : Date.now();
     const maxEndTime = startTimeMs + timeLimit;
     if (endTime > maxEndTime) endTime = maxEndTime;
@@ -3517,11 +3533,11 @@ app.get('/result', checkAuth, async (req, res) => {
 
     const ipAddress = req.headers['x-forwarded-for'] || req.socket.remoteAddress;
 
-    // 6. ЗБЕРЕЖЕННЯ РЕЗУЛЬТАТУ — завжди перевіряємо, чи вже є запис
+    // 6. Збереження (якщо ще не збережено)
     const existingResult = await db.collection('test_results').findOne({ testSessionId });
 
     if (!existingResult) {
-      logger.info('[RESULT] Результата ще немає в базі — зберігаємо', { testSessionId });
+      logger.info('[RESULT] Збереження результату (бо не знайдено за testSessionId)', { testSessionId });
 
       await saveResult(
         req.user,
@@ -3541,19 +3557,17 @@ app.get('/result', checkAuth, async (req, res) => {
         ipAddress,
         testSessionId
       );
-
-      logger.info('[RESULT] Результат збережено успішно');
     } else {
-      logger.info('[RESULT] Результат уже існує в базі — пропускаємо збереження', { testSessionId });
+      logger.info('[RESULT] Результат уже існує — пропускаємо збереження', { testSessionId });
     }
 
-    // 7. Видаляємо активний тест, якщо він ще є
+    // 7. Видаляємо активний тест (якщо є)
     if (userTest) {
       await db.collection('active_tests').deleteOne({ user: req.user });
       logger.info('[RESULT] Активний тест видалено');
     }
 
-    // 8. Форматування дати/часу
+    // 8. Форматування
     const endDateTime = new Date(endTime);
     const formattedTime = endDateTime.toLocaleTimeString('uk-UA', { hour12: false });
     const formattedDate = endDateTime.toLocaleDateString('uk-UA');
@@ -3565,10 +3579,10 @@ app.get('/result', checkAuth, async (req, res) => {
       const imageBuffer = fs.readFileSync(imagePath);
       imageBase64 = imageBuffer.toString('base64');
     } catch (error) {
-      logger.error('[RESULT] Помилка читання зображення A.png', { message: error.message });
+      logger.error('[RESULT] Помилка читання A.png', { message: error.message });
     }
 
-    // 10. HTML-результат (той самий, що був раніше)
+    // 10. HTML (без змін)
     const resultHtml = `
       <!DOCTYPE html>
       <html lang="uk">
@@ -3653,11 +3667,7 @@ app.get('/result', checkAuth, async (req, res) => {
     res.send(resultHtml);
 
   } catch (error) {
-    logger.error('[RESULT] Критична помилка', {
-      message: error.message,
-      stack: error.stack,
-      user: req.user
-    });
+    logger.error('[RESULT] Критична помилка', { message: error.message, stack: error.stack, user: req.user });
     res.status(500).send('Помилка при відображенні результатів: ' + error.message);
   } finally {
     logger.info('Маршрут /result завершено', { duration: Date.now() - startTime });
