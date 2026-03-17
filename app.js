@@ -1129,20 +1129,19 @@ app.get('/select-test', checkAuth, async (req, res) => {
           <h1>Виберіть тест</h1>
           <div class="test-buttons">
             <a href="/instructions" class="instructions-btn">Інструкція до тестів</a>
-
             ${Object.entries(testNames).length > 0
               ? Object.entries(testNames).map(([num, data]) => `
                   <button class="test-btn" onclick="window.location.href='/test?test=${num}'">${data.name.replace(/"/g, '\\"')}</button>
                 `).join('')
               : '<p class="no-tests">Немає доступних тестів</p>'
             }
-
             ${req.userRole === 'instructor' ? `
               <button class="results-btn" onclick="window.location.href='/admin/results'">Переглянути результати</button>
             ` : ''}
-
             <a href="/feedback" class="feedback-btn">Зворотний зв’язок</a>
           </div>
+
+          <!-- Кнопка Вийти — фіксована внизу по центру -->
           <button id="logout" onclick="logout()">Вийти</button>
           <script>
             async function logout() {
@@ -2309,7 +2308,7 @@ app.get('/test/question', checkAuth, async (req, res) => {
           <meta name="viewport" content="width=device-width, initial-scale=1.0">
           <title>${testNames[testNumber]?.name.replace(/"/g, '\\"') || 'Невідомий тест'}</title>
           <script src="https://cdnjs.cloudflare.com/ajax/libs/Sortable/1.15.0/Sortable.min.js"></script>
-          <style>
+                    <style>
             body {
               font-family: Arial, sans-serif;
               margin: 0;
@@ -2331,23 +2330,23 @@ app.get('/test/question', checkAuth, async (req, res) => {
             .progress-bar {
               display: flex;
               flex-wrap: wrap;
-              gap: 6px;
-              margin: 0 auto 25px;
-              width: 90%;
-              max-width: 600px;
               justify-content: center;
-              align-items: center;
+              gap: 8px;
+              max-width: 95vw;
+              margin: 0 auto 30px;
+              padding: 0 10px;
             }
             .progress-circle {
-              width: 44px;
-              height: 44px;
+              width: 38px;
+              height: 38px;
               border-radius: 50%;
               display: flex;
               align-items: center;
               justify-content: center;
-              font-size: 16px;
+              font-size: 14px;
               font-weight: bold;
               flex-shrink: 0;
+              min-width: 38px;
               box-shadow: 0 2px 5px rgba(0,0,0,0.1);
             }
             .progress-circle.unanswered { background: #ff4d4d; color: white; }
@@ -2377,8 +2376,12 @@ app.get('/test/question', checkAuth, async (req, res) => {
               max-width: 1100px;
               margin: 0 auto;
             }
-            #answers {
-              margin-bottom: 30px;
+            #answers .option-box,
+            #answers .matching-item,
+            #answers input[type="text"],
+            #answers .blank-input {
+              background: white;
+              border: 2px solid #ddd;
             }
             .option-box {
               border: 2px solid #ddd;
@@ -2394,8 +2397,6 @@ app.get('/test/question', checkAuth, async (req, res) => {
             .option-box.selected { background: #d4edda; border-color: #28a745; }
             .option-box.draggable { cursor: move; }
             .option-box.dragging { opacity: 0.6; box-shadow: 0 4px 12px rgba(0,0,0,0.2); }
-
-            /* Matching — завжди 2 стовпці, однакова висота */
             .matching-container {
               display: grid;
               grid-template-columns: 1fr 1fr;
@@ -2413,7 +2414,10 @@ app.get('/test/question', checkAuth, async (req, res) => {
               border-radius: 8px;
               cursor: move;
               font-size: 17px;
-              min-height: 70px;           /* однакова висота по найбільшому */
+              min-height: 70px;
+              height: 70px;
+              overflow: hidden;
+              text-overflow: ellipsis;
               display: flex;
               align-items: center;
               justify-content: flex-start;
@@ -2424,8 +2428,6 @@ app.get('/test/question', checkAuth, async (req, res) => {
             }
             .matching-item:hover { background: #f8f9fa; }
             .matching-item.matched { background: #d4edda; border-color: #28a745; }
-
-            /* Кнопки — крупніші, однакової висоти */
             .button-container {
               position: fixed;
               bottom: 20px;
@@ -2435,6 +2437,21 @@ app.get('/test/question', checkAuth, async (req, res) => {
               justify-content: space-between;
               gap: 12px;
               z-index: 100;
+              flex-wrap: nowrap;
+            }
+            @media (max-width: 600px) {
+              .button-container {
+                gap: 8px;
+                padding: 0 10px;
+                flex-wrap: nowrap !important;
+                overflow-x: auto;
+                box-sizing: border-box;
+              }
+              button {
+                font-size: 15px;
+                padding: 12px 16px;
+                min-height: 55px;
+              }
             }
             button {
               flex: 1;
@@ -2461,8 +2478,6 @@ app.get('/test/question', checkAuth, async (req, res) => {
               transform: none;
               box-shadow: none;
             }
-
-            /* Таймери */
             #timer {
               font-size: 26px;
               font-weight: bold;
@@ -2489,8 +2504,6 @@ app.get('/test/question', checkAuth, async (req, res) => {
               font-weight: bold;
               color: #333;
             }
-
-            /* Модалка */
             #confirm-modal {
               display: none;
               position: fixed;
@@ -2506,17 +2519,20 @@ app.get('/test/question', checkAuth, async (req, res) => {
               max-width: 90%;
             }
             #confirm-modal h2 { margin: 0 0 25px; font-size: 24px; }
+            #confirm-modal .buttons {
+              display: flex;
+              justify-content: center;
+              gap: 20px;
+              margin-top: 20px;
+            }
             #confirm-modal button {
+              min-width: 120px;
               padding: 14px 30px;
               font-size: 18px;
-              margin: 0 10px;
-              min-width: 120px;
             }
-
-            /* Адаптивність */
             @media (max-width: 600px) {
               h1 { font-size: 24px; }
-              .progress-circle { width: 36px; height: 36px; font-size: 13px; }
+              .progress-circle { width: 28px; height: 28px; font-size: 11px; min-width: 28px; }
               .progress-line { width: 5px; height: 3px; }
               .question-box { padding: 15px; }
               .instruction { font-size: 15px; }
@@ -2524,6 +2540,7 @@ app.get('/test/question', checkAuth, async (req, res) => {
                 font-size: 15px;
                 padding: 12px 16px;
                 min-height: 55px;
+                height: 55px;
               }
               button {
                 font-size: 16px;
@@ -2533,13 +2550,10 @@ app.get('/test/question', checkAuth, async (req, res) => {
               #timer { font-size: 22px; }
               #question-timer { width: 80px; height: 80px; }
               #question-timer .timer-text { font-size: 24px; }
-              .button-container { flex-direction: column; gap: 12px; }
-              .button-container button { width: 100%; }
             }
-
             @media (min-width: 601px) {
               .matching-container { gap: 16px; }
-              .matching-item { padding: 16px 20px; font-size: 17px; min-height: 70px; }
+              .matching-item { padding: 16px 20px; font-size: 17px; min-height: 70px; height: 70px; }
             }
           </style>
         </head>
@@ -2683,8 +2697,10 @@ app.get('/test/question', checkAuth, async (req, res) => {
           </div>
           <div id="confirm-modal">
             <h2>Ви дійсно бажаєте завершити тест?</h2>
-            <button onclick="finishTest(${index})">Так</button>
-            <button onclick="hideConfirm()">Ні</button>
+            <div class="buttons">
+              <button onclick="finishTest(${index})">Так</button>
+              <button onclick="hideConfirm()">Ні</button>
+            </div>
           </div>
           <script>
             const startTime = ${testStartTime};
@@ -3616,9 +3632,10 @@ app.get('/result', checkAuth, async (req, res) => {
               display: flex;
               flex-wrap: wrap;
               justify-content: center;
-              gap: 10px;
-              max-width: 500px;
+              gap: 8px;
+              max-width: 95vw;
               margin: 0 auto 30px;
+              padding: 0 10px;
             }
             .progress-circle {
               width: 38px;
@@ -3631,6 +3648,8 @@ app.get('/result', checkAuth, async (req, res) => {
               font-weight: bold;
               color: white;
               box-shadow: 0 2px 6px rgba(0,0,0,0.15);
+              min-width: 38px;
+              flex-shrink: 0;
             }
             .correct   { background: #28a745; }
             .wrong     { background: #dc3545; }
@@ -3662,8 +3681,8 @@ app.get('/result', checkAuth, async (req, res) => {
               h1 { font-size: 26px; }
               .result-container { width: 140px; height: 140px; }
               .result-text { font-size: 38px; }
-              .progress-circle { width: 32px; height: 32px; font-size: 12px; }
-              .progress-circles { gap: 8px; }
+              .progress-circle { width: 28px; height: 28px; font-size: 11px; min-width: 28px; }
+              .progress-circles { gap: 6px; }
               button { padding: 12px 24px; font-size: 16px; min-width: 140px; }
             }
           </style>
@@ -3680,7 +3699,6 @@ app.get('/result', checkAuth, async (req, res) => {
             <div class="result-text">${Math.round(percentage)}%</div>
           </div>
 
-          <!-- Кружечки прогресу ПІД діаграмою -->
           <div class="progress-circles">
             ${scoresPerQuestion.map((s, i) => {
               let colorClass = 'wrong';
@@ -3690,7 +3708,6 @@ app.get('/result', checkAuth, async (req, res) => {
             }).join('')}
           </div>
 
-          <!-- Текст з результатами ПІСЛЯ кружечків -->
           <div class="summary-text">
             Кількість питань: ${totalQuestions}<br>
             Правильних відповідей: ${correctClicks}<br>
@@ -3718,18 +3735,19 @@ app.get('/result', checkAuth, async (req, res) => {
             document.getElementById('exportPDF').addEventListener('click', () => {
               const docDefinition = {
                 content: [
-                  imageBase64 ? { image: 'data:image/png;base64,' + imageBase64, width: 60, alignment: 'center', margin: [0, 0, 0, 20] } : {},
-                  { text: 'Результат тесту ' + testName, style: 'header' },
-                  { text: 'Користувач: ' + user, margin: [0, 5, 0, 0] },
-                  { text: 'Відсоток: ' + percentage + '%', margin: [0, 5, 0, 0] },
-                  { text: 'Бали: ' + score + ' з ' + totalPoints, margin: [0, 5, 0, 0] },
-                  { text: 'Питань: ' + totalQuestions + ', правильних: ' + correctClicks, margin: [0, 5, 0, 0] },
+                  { text: 'Результат тесту користувача ' + user + ' з тесту ' + testName + ' складає ' + percentage + '%', style: 'header' },
+                  { text: 'Кількість питань: ' + totalQuestions, margin: [0, 10, 0, 0] },
+                  { text: 'Правильних відповідей: ' + correctClicks, margin: [0, 5, 0, 0] },
+                  { text: 'Набрано балів: ' + score, margin: [0, 5, 0, 0] },
+                  { text: 'Максимально можлива кількість балів: ' + totalPoints, margin: [0, 5, 0, 0] },
                   { columns: [
                     { text: 'Час: ' + time, width: '50%', lineHeight: 1.8 },
                     { text: 'Дата: ' + date, width: '50%', alignment: 'right', lineHeight: 1.8 }
                   ], margin: [0, 20, 0, 0] }
                 ],
-                styles: { header: { fontSize: 18, bold: true, margin: [0, 0, 0, 10] } }
+                styles: {
+                  header: { fontSize: 18, bold: true, margin: [0, 0, 0, 10] }
+                }
               };
               pdfMake.createPdf(docDefinition).download('результат.pdf');
             });
@@ -3880,18 +3898,24 @@ app.get('/results', checkAuth, async (req, res) => {
 
           <script>
             document.getElementById('exportPDF').addEventListener('click', () => {
-              const doc = {
+              const docDefinition = {
                 content: [
-                  { text: 'Результати тесту — ' + ${roundedPercentage.toFixed(1)} + '%', style: 'header' },
-                  { text: 'Бали: ' + ${roundedScore.toFixed(1)} + ' з ' + ${totalPoints} },
-                  { text: 'Питань: ' + ${totalQuestions} + ', правильних: ' + ${correctClicks} }
+                  imageBase64 ? { image: 'data:image/png;base64,' + imageBase64, width: 60, alignment: 'center', margin: [0, 0, 0, 20] } : {},
+                  { text: 'Результат тесту користувача ' + user + ' з тесту ' + testName + ' складає ' + percentage + '%', style: 'header' },
+                  { text: 'Кількість питань: ' + totalQuestions, margin: [0, 10, 0, 0] },
+                  { text: 'Правильних відповідей: ' + correctClicks, margin: [0, 5, 0, 0] },
+                  { text: 'Набрано балів: ' + score, margin: [0, 5, 0, 0] },
+                  { text: 'Максимально можлива кількість балів: ' + totalPoints, margin: [0, 5, 0, 0] },
+                  { columns: [
+                    { text: 'Час: ' + time, width: '50%', lineHeight: 1.8 },
+                    { text: 'Дата: ' + date, width: '50%', alignment: 'right', lineHeight: 1.8 }
+                  ], margin: [0, 20, 0, 0] }
                 ],
-                styles: { header: { fontSize: 18, bold: true } }
+                styles: {
+                  header: { fontSize: 18, bold: true, margin: [0, 0, 0, 10] }
+                }
               };
-              pdfMake.createPdf(doc).download('результати.pdf');
-            });
-            document.getElementById('restart').addEventListener('click', () => {
-              window.location.href = '/select-test';
+              pdfMake.createPdf(docDefinition).download('результат.pdf');
             });
           </script>
         </body>
@@ -3942,13 +3966,28 @@ app.get('/admin', checkAuth, checkAdmin, async (req, res) => {
               padding: 5px 10px;
               font-size: 14px;
             }
-            #logout { background-color: #ef5350; color: white; }
-            @media (max-width: 600px) {
-              body { padding: 20px; padding-bottom: 80px; }
-              h1 { font-size: 32px; }
-              button { font-size: 20px; width: 90%; padding: 15px; }
-              #logout { position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%); width: 90%; }
-              .notification-badge { font-size: 12px; padding: 3px 8px; }
+            #logout {
+              position: fixed;
+              bottom: 20px;
+              left: 50%;
+              transform: translateX(-50%);
+              background: #ef5350;
+              color: white;
+              padding: 16px 32px;
+              font-size: 18px;
+              font-weight: bold;
+              border: none;
+              border-radius: 10px;
+              cursor: pointer;
+              min-height: 60px;
+              min-width: 180px;
+              box-shadow: 0 4px 10px rgba(0,0,0,0.15);
+              z-index: 100;
+            }
+
+            #logout:hover {
+              background: #d32f2f;
+              transform: translateX(-50%) translateY(-2px);
             }
           </style>
         </head>
@@ -5967,20 +6006,127 @@ app.get('/admin/view-result', checkAuth, async (req, res) => {
               <button id="exportPDF" style="margin-left: 15px;">Експортувати в PDF</button>
             </div>
             <script>
+              // Передаємо всі потрібні дані з сервера в JavaScript
+              const viewResultData = {
+                user: "${result.user.replace(/"/g, '\\"')}",
+                testName: "${testNames[result.testNumber]?.name?.replace(/"/g, '\\"') || 'Невідомий тест'}",
+                variant: "${result.variant || 'Немає'}",
+                roundedScore: ${roundedScore.toFixed(1)},
+                totalPoints: ${totalPoints.toFixed(1)},
+                roundedPercentage: ${roundedPercentage.toFixed(1)},
+                totalQuestions: ${totalQuestions},
+                correctClicks: ${correctClicks},
+                endDateTime: "${new Date(result.endTime).toLocaleString('uk-UA')}",
+                timeAwayPercent: ${timeAwayPercent},
+                switchCount: ${switchCount},
+                avgResponseTime: ${avgResponseTime},
+                totalActivityCount: ${totalActivityCount},
+                // Таблиця питань — передаємо як масив об’єктів
+                questionsTable: ${JSON.stringify(questions.map((q, idx) => {
+                  const userAns = result.answers[idx] !== undefined ? result.answers[idx] : 'Не відповіли';
+                  let userDisplay = userAns;
+                  if (Array.isArray(userAns)) {
+                    if (q.type === 'matching') {
+                      userDisplay = userAns.map(p => `${p[0]} → ${p[1]}`).join('<br>');
+                    } else if (q.type === 'fillblank') {
+                      userDisplay = userAns.join('<br>');
+                    } else {
+                      userDisplay = userAns.join(', ');
+                    }
+                  }
+                  return {
+                    text: q.text.replace(/"/g, '\\"').replace(/\n/g, '<br>'),
+                    userAnswer: userDisplay,
+                    score: scoresPerQuestion[idx].toFixed(3),
+                    maxPoints: q.points
+                  };
+                }))}
+              };
+
               document.getElementById('exportPDF')?.addEventListener('click', () => {
                 const docDefinition = {
+                  pageSize: 'A4',
+                  pageMargins: [40, 60, 40, 60],
                   content: [
-                    { text: 'Деталі результату для ' + '${result.user}', style: 'header' },
-                    { text: 'Тест: ' + '${testNames[result.testNumber]?.name || 'Невідомий'}', margin: [0, 10, 0, 0] },
-                    { text: 'Варіант: ' + '${result.variant || 'Немає'}', margin: [0, 5, 0, 0] },
-                    { text: 'Бали: ' + ${roundedScore.toFixed(1)} + ' з ' + ${totalPoints.toFixed(1)}, margin: [0, 5, 0, 0] },
-                    { text: 'Відсоток: ' + ${roundedPercentage.toFixed(1)} + '%', margin: [0, 5, 0, 0] },
-                    { text: 'Питань: ' + ${totalQuestions} + ', правильних: ' + ${correctClicks}, margin: [0, 5, 0, 0] },
-                    { text: 'Дата: ' + '${new Date(result.endTime).toLocaleString('uk-UA')}', margin: [0, 15, 0, 0] }
+                    // Заголовок
+                    { text: `Деталі результату для користувача ${viewResultData.user}`, style: 'mainHeader' },
+                    { text: `Тест: ${viewResultData.testName}`, margin: [0, 10, 0, 5], style: 'subHeader' },
+                    { text: `Варіант: ${viewResultData.variant}`, margin: [0, 0, 0, 15] },
+
+                    // Підсумок (таблиця)
+                    {
+                      table: {
+                        widths: ['*', 'auto'],
+                        body: [
+                          [{ text: 'Бали:', bold: true }, `${viewResultData.roundedScore} з ${viewResultData.totalPoints}`],
+                          [{ text: 'Відсоток:', bold: true }, `${viewResultData.roundedPercentage}%`],
+                          [{ text: 'Питань:', bold: true }, viewResultData.totalQuestions],
+                          [{ text: 'Правильних:', bold: true }, viewResultData.correctClicks],
+                          [{ text: 'Дата завершення:', bold: true }, viewResultData.endDateTime]
+                        ]
+                      },
+                      layout: 'lightHorizontalLines',
+                      margin: [0, 0, 0, 20]
+                    },
+
+                    // Підозріла активність
+                    {
+                      text: 'Підозріла активність:',
+                      style: 'subHeader',
+                      margin: [0, 0, 0, 5]
+                    },
+                    {
+                      ul: [
+                        `Час поза вкладкою: ${viewResultData.timeAwayPercent}%`,
+                        `Переключення вкладок: ${viewResultData.switchCount}`,
+                        `Середній час відповіді: ${viewResultData.avgResponseTime} с`,
+                        `Загальна активність: ${viewResultData.totalActivityCount}`
+                      ],
+                      margin: [0, 0, 0, 20]
+                    },
+
+                    // Таблиця питань
+                    { text: 'Деталі відповідей:', style: 'subHeader', margin: [0, 0, 0, 10] },
+                    {
+                      table: {
+                        headerRows: 1,
+                        widths: ['*', '*', 'auto'],
+                        body: [
+                          [
+                            { text: 'Питання', bold: true, fillColor: '#f2f2f2' },
+                            { text: 'Ваша відповідь', bold: true, fillColor: '#f2f2f2' },
+                            { text: 'Бали', bold: true, fillColor: '#f2f2f2', alignment: 'center' }
+                          ],
+                          ...viewResultData.questionsTable.map(row => [
+                            row.text,
+                            row.userAnswer,
+                            { text: `${row.score} / ${row.maxPoints}`, alignment: 'center' }
+                          ])
+                        ]
+                      },
+                      layout: {
+                        hLineWidth: () => 0.5,
+                        vLineWidth: () => 0.5,
+                        hLineColor: () => '#ddd',
+                        vLineColor: () => '#ddd',
+                        paddingLeft: () => 8,
+                        paddingRight: () => 8,
+                        paddingTop: () => 6,
+                        paddingBottom: () => 6
+                      }
+                    }
                   ],
-                  styles: { header: { fontSize: 18, bold: true, margin: [0, 0, 0, 10] } }
+                  styles: {
+                    mainHeader: { fontSize: 20, bold: true, alignment: 'center', margin: [0, 0, 0, 20] },
+                    subHeader: { fontSize: 14, bold: true, margin: [0, 15, 0, 5] }
+                  },
+                  defaultStyle: {
+                    fontSize: 11,
+                    lineHeight: 1.4
+                  }
                 };
-                pdfMake.createPdf(docDefinition).download('result_${result.user}.pdf');
+
+                pdfMake.createPdf(docDefinition).download(`деталі_результату_${viewResultData.user}.pdf`);
               });
             </script>
             <div class="summary">
