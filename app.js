@@ -3325,7 +3325,13 @@ app.get('/result', checkAuth, async (req, res) => {
       testData = userTest;
     }
 
-    const { questions: rawQuestions, testNumber, answers, startTime: testStartTime, suspiciousActivity, variant, testSessionId, timeLimit } = testData;
+    // Завантажуємо питання з бази (обов'язково!)
+    let rawQuestions = await db.collection('questions')
+      .find({ testNumber: testData.testNumber })
+      .sort({ order: 1 })
+      .toArray();
+
+    const { testNumber, answers, startTime: testStartTime, suspiciousActivity, variant, testSessionId, timeLimit } = testData;
 
     // Фільтруємо питання за варіантом
     let questions = rawQuestions.filter(q => 
@@ -3498,10 +3504,10 @@ app.get('/result', checkAuth, async (req, res) => {
 
     res.send(resultHtml);
   } catch (error) {
-    logger.error('Помилка в /result', error);
-    res.status(500).send('Помилка завантаження результатів');
+    logger.error('Помилка в /result', { message: error.message, stack: error.stack });
+    res.status(500).send('Помилка при завантаженні результатів');
   } finally {
-    logger.info('Маршрут /result виконано');
+    logger.info('Маршрут /result виконано', { duration: `${Date.now() - startTime} мс` });
   }
 });
 
