@@ -1064,77 +1064,63 @@ app.get('/select-test', checkAuth, async (req, res) => {
               margin-bottom: 20px; 
               color: #333;
             }
-            .test-buttons { 
-              display: flex; 
-              flex-direction: column; 
-              align-items: center; 
-              gap: 10px; 
+            .test-buttons {
+              display: grid;
+              grid-template-columns: 1fr;
+              gap: 12px;
+              max-width: 400px;
+              margin: 0 auto;
             }
-            button, .instructions-btn, .feedback-btn { 
-              padding: 10px; 
-              font-size: 18px; 
-              cursor: pointer; 
-              width: 200px; 
-              border: none; 
-              border-radius: 5px; 
-              color: white; 
+
+            @media (min-width: 900px) {
+              .test-buttons {
+                grid-template-columns: repeat(3, 1fr);
+                max-width: 1000px;
+              }
+            }
+
+            button, .instructions-btn, .feedback-btn, .results-btn {
+              padding: 16px 24px;
+              font-size: 18px;
+              font-weight: bold;
+              cursor: pointer;
+              border: none;
+              border-radius: 8px;
               text-align: center;
               text-decoration: none;
+              min-height: 70px;          /* однакова висота по найбільшій */
+              display: flex;
+              align-items: center;
+              justify-content: center;
+              box-sizing: border-box;
             }
-            button.test-btn { 
-              background-color: #4CAF50; 
+
+            .test-btn {
+              background-color: #4CAF50;
+              color: white;
             }
-            button.test-btn:hover { 
-              background-color: #45a049; 
+
+            .test-btn:hover { background-color: #45a049; }
+
+            .instructions-btn {
+              background-color: #ffeb3b;
+              color: #333;
             }
-            .instructions-btn { 
-              background-color: #ffeb3b; 
-              color: #333; 
+
+            .instructions-btn:hover { background-color: #ffd700; }
+
+            .feedback-btn, .results-btn {
+              background-color: #ffeb3b;
+              color: #333;
             }
-            .instructions-btn:hover { 
-              background-color: #ffd700; 
-            }
-            .feedback-btn { 
-              background-color: #ffeb3b; 
-              color: #333; 
-            }
-            .feedback-btn:hover { 
-              background-color: #ffd700; 
-            }
-            #logout { 
-              background-color: #ef5350; 
-              position: fixed; 
-              bottom: 20px; 
-              left: 50%; 
-              transform: translateX(-50%); 
-              width: 200px; 
-            }
-            #logout:hover { 
-              background-color: #d32f2f; 
-            }
-            .no-tests { 
-              color: red; 
-              font-size: 18px; 
-              margin-top: 20px; 
-            }
-            .results-btn { 
-              background-color: #007bff; 
-              margin-top: 20px; 
-            }
-            .results-btn:hover { 
-              background-color: #0056b3; 
-            }
+
+            .feedback-btn:hover, .results-btn:hover { background-color: #ffd700; }
+
             @media (max-width: 600px) {
-              h1 { 
-                font-size: 20px; 
-              }
-              button, .instructions-btn, .feedback-btn { 
-                font-size: 16px; 
-                width: 90%; 
-                padding: 15px; 
-              }
-              #logout { 
-                width: 90%; 
+              button, .instructions-btn, .feedback-btn, .results-btn {
+                font-size: 16px;
+                padding: 14px 20px;
+                min-height: 60px;
               }
             }
           </style>
@@ -1142,16 +1128,19 @@ app.get('/select-test', checkAuth, async (req, res) => {
         <body>
           <h1>Виберіть тест</h1>
           <div class="test-buttons">
+            <a href="/instructions" class="instructions-btn">Інструкція до тестів</a>
+
             ${Object.entries(testNames).length > 0
               ? Object.entries(testNames).map(([num, data]) => `
                   <button class="test-btn" onclick="window.location.href='/test?test=${num}'">${data.name.replace(/"/g, '\\"')}</button>
                 `).join('')
               : '<p class="no-tests">Немає доступних тестів</p>'
             }
+
             ${req.userRole === 'instructor' ? `
               <button class="results-btn" onclick="window.location.href='/admin/results'">Переглянути результати</button>
             ` : ''}
-            <a href="/instructions" class="instructions-btn">Інструкція до тестів</a>
+
             <a href="/feedback" class="feedback-btn">Зворотний зв’язок</a>
           </div>
           <button id="logout" onclick="logout()">Вийти</button>
@@ -2321,163 +2310,236 @@ app.get('/test/question', checkAuth, async (req, res) => {
           <title>${testNames[testNumber]?.name.replace(/"/g, '\\"') || 'Невідомий тест'}</title>
           <script src="https://cdnjs.cloudflare.com/ajax/libs/Sortable/1.15.0/Sortable.min.js"></script>
           <style>
-            body { font-family: Arial, sans-serif; margin: 0; padding: 20px; padding-bottom: 80px; background-color: #f0f0f0; }
-            h1 { font-size: 24px; text-align: center; }
-            img { max-width: 100%; margin-bottom: 10px; display: block; margin-left: auto; margin-right: auto; }
+            body {
+              font-family: Arial, sans-serif;
+              margin: 0;
+              padding: 20px;
+              padding-bottom: 100px;
+              background-color: #f0f0f0;
+            }
+            h1 {
+              font-size: 28px;
+              text-align: center;
+              margin-bottom: 15px;
+            }
+            img {
+              max-width: 100%;
+              margin: 15px auto;
+              display: block;
+              border-radius: 8px;
+            }
             .progress-bar {
               display: flex;
               flex-wrap: wrap;
-              gap: 5px;
-              margin-bottom: 20px;
-              width: calc(100% - 40px);
-              margin-left: auto;
-              margin-right: auto;
-              box-sizing: border-box;
+              gap: 6px;
+              margin: 0 auto 25px;
+              width: 90%;
+              max-width: 600px;
               justify-content: center;
               align-items: center;
             }
             .progress-circle {
-              width: 40px;
-              height: 40px;
+              width: 44px;
+              height: 44px;
               border-radius: 50%;
               display: flex;
               align-items: center;
               justify-content: center;
-              font-size: 14px;
+              font-size: 16px;
+              font-weight: bold;
               flex-shrink: 0;
+              box-shadow: 0 2px 5px rgba(0,0,0,0.1);
             }
-            .progress-circle.unanswered {
-              background-color: red;
-              color: white;
-            }
-            .progress-circle.answered {
-              background-color: green;
-              color: white;
-            }
+            .progress-circle.unanswered { background: #ff4d4d; color: white; }
+            .progress-circle.answered   { background: #4CAF50; color: white; }
             .progress-line {
-              width: 5px;
-              height: 2px;
-              background-color: #ccc;
-              margin: 0 2px;
+              width: 6px;
+              height: 3px;
+              background: #ccc;
               align-self: center;
               flex-shrink: 0;
             }
-            .progress-line.answered {
-              background-color: green;
+            .progress-line.answered { background: #4CAF50; }
+            .question-box {
+              background: white;
+              padding: 20px;
+              border-radius: 10px;
+              box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+              margin-bottom: 25px;
             }
-            .option-box { border: 2px solid #ccc; padding: 10px; margin: 5px 0; border-radius: 5px; cursor: pointer; font-size: 16px; user-select: none; }
-            .option-box.selected { background-color: #90ee90; }
-            .button-container { position: fixed; bottom: 20px; left: 20px; right: 20px; display: flex; justify-content: space-between; }
-            button { padding: 10px 20px; margin: 5px; border: none; cursor: pointer; border-radius: 5px; font-size: 16px; }
-            .back-btn { background-color: red; color: white; }
-            .next-btn { background-color: blue; color: white; }
-            .finish-btn { background-color: green; color: white; }
-            button:disabled { background-color: grey; cursor: not-allowed; }
-            #timer { font-size: 24px; margin-bottom: 20px; text-align: center; }
-            #question-timer { position: relative; width: 80px; height: 80px; margin: 0 auto 10px auto; }
-            #question-timer svg { width: 100%; height: 100%; transform: rotate(-90deg); }
-            #question-timer circle { fill: none; stroke-width: 8; }
-            #question-timer .timer-circle-bg { stroke: #e0e0e0; }
-            #question-timer .timer-circle { stroke: #ff4d4d; stroke-dasharray: 251; stroke-dashoffset: 0; transition: stroke-dashoffset 0.1s linear; }
-            #question-timer .timer-text { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); font-size: 20px; font-weight: bold; color: #333; }
-            #confirm-modal { display: none; position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%); background: white; padding: 20px; border: 2px solid black; z-index: 1000; }
-            #confirm-modal button { margin: 0 10px; }
-            .question-box { padding: 10px; margin: 5px 0; }
-            .instruction { font-style: italic; color: #555; margin-bottom: 10px; font-size: 18px; }
+            .instruction {
+              font-style: italic;
+              color: #555;
+              margin: 10px 0 20px;
+              font-size: 17px;
+            }
+            #question-container {
+              max-width: 1100px;
+              margin: 0 auto;
+            }
+            #answers {
+              margin-bottom: 30px;
+            }
+            .option-box {
+              border: 2px solid #ddd;
+              padding: 14px 18px;
+              margin: 8px 0;
+              border-radius: 8px;
+              cursor: pointer;
+              font-size: 17px;
+              user-select: none;
+              transition: all 0.2s;
+            }
+            .option-box:hover { background: #f8f9fa; }
+            .option-box.selected { background: #d4edda; border-color: #28a745; }
             .option-box.draggable { cursor: move; }
-            .option-box.dragging { opacity: 0.5; }
-            #question-container { background-color: white; padding: 20px; border-radius: 8px; box-shadow: 0 0 10px rgba(0, 0, 0, 0.1); width: calc(100% - 40px); margin: 0 auto 20px auto; box-sizing: border-box; }
-            #answers { margin-bottom: 20px; }
-            .matching-container { display: flex; justify-content: space-between; flex-wrap: wrap; gap: 10px; }
+            .option-box.dragging { opacity: 0.6; box-shadow: 0 4px 12px rgba(0,0,0,0.2); }
+
+            /* Matching — завжди 2 стовпці, однакова висота */
+            .matching-container {
+              display: grid;
+              grid-template-columns: 1fr 1fr;
+              gap: 12px;
+              margin: 20px 0;
+            }
             .matching-column {
-              width: 45%;
               display: flex;
               flex-direction: column;
-              gap: 5px;
-              box-sizing: border-box;
+              gap: 10px;
             }
             .matching-item {
-              border: 2px solid #ccc;
-              padding: 10px;
-              margin: 0;
-              border-radius: 5px;
+              border: 2px solid #ddd;
+              padding: 14px 18px;
+              border-radius: 8px;
               cursor: move;
-              font-family: Arial, sans-serif;
-              font-size: 16px;
-              line-height: 1.5;
-              min-height: 40px;
+              font-size: 17px;
+              min-height: 70px;           /* однакова висота по найбільшому */
               display: flex;
               align-items: center;
               justify-content: flex-start;
+              background: white;
+              transition: all 0.2s;
               box-sizing: border-box;
-              white-space: normal;
-              overflow-wrap: break-word;
+              word-break: break-word;
             }
-            .matching-item.matched { background-color: #90ee90; }
-            .blank-input { width: 100px; margin: 0 5px; padding: 5px; border: 1px solid #ccc; border-radius: 4px; display: inline-block; }
-            .question-text { display: inline; }
-            .image-error { color: red; font-style: italic; text-align: center; margin-bottom: 10px; }
-            @media (max-width: 400px) {
+            .matching-item:hover { background: #f8f9fa; }
+            .matching-item.matched { background: #d4edda; border-color: #28a745; }
+
+            /* Кнопки — крупніші, однакової висоти */
+            .button-container {
+              position: fixed;
+              bottom: 20px;
+              left: 20px;
+              right: 20px;
+              display: flex;
+              justify-content: space-between;
+              gap: 12px;
+              z-index: 100;
+            }
+            button {
+              flex: 1;
+              padding: 16px 24px;
+              font-size: 18px;
+              font-weight: bold;
+              border: none;
+              border-radius: 10px;
+              cursor: pointer;
+              min-height: 60px;
+              display: flex;
+              align-items: center;
+              justify-content: center;
+              box-shadow: 0 4px 10px rgba(0,0,0,0.15);
+              transition: all 0.2s;
+            }
+            button:hover { transform: translateY(-2px); box-shadow: 0 6px 14px rgba(0,0,0,0.2); }
+            .back-btn   { background: #dc3545; color: white; }
+            .next-btn   { background: #007bff; color: white; }
+            .finish-btn { background: #28a745; color: white; }
+            button:disabled {
+              background: #ccc !important;
+              cursor: not-allowed;
+              transform: none;
+              box-shadow: none;
+            }
+
+            /* Таймери */
+            #timer {
+              font-size: 26px;
+              font-weight: bold;
+              text-align: center;
+              margin: 15px 0 25px;
+              color: #333;
+            }
+            #question-timer {
+              position: relative;
+              width: 90px;
+              height: 90px;
+              margin: 0 auto 15px;
+            }
+            #question-timer svg { width: 100%; height: 100%; transform: rotate(-90deg); }
+            #question-timer circle { fill: none; stroke-width: 10; }
+            #question-timer .timer-circle-bg { stroke: #e0e0e0; }
+            #question-timer .timer-circle { stroke: #ff4d4d; stroke-dasharray: 280; transition: stroke-dashoffset 0.3s linear; }
+            #question-timer .timer-text {
+              position: absolute;
+              top: 50%;
+              left: 50%;
+              transform: translate(-50%, -50%);
+              font-size: 28px;
+              font-weight: bold;
+              color: #333;
+            }
+
+            /* Модалка */
+            #confirm-modal {
+              display: none;
+              position: fixed;
+              top: 50%;
+              left: 50%;
+              transform: translate(-50%, -50%);
+              background: white;
+              padding: 30px;
+              border-radius: 12px;
+              box-shadow: 0 10px 30px rgba(0,0,0,0.4);
+              z-index: 1000;
+              text-align: center;
+              max-width: 90%;
+            }
+            #confirm-modal h2 { margin: 0 0 25px; font-size: 24px; }
+            #confirm-modal button {
+              padding: 14px 30px;
+              font-size: 18px;
+              margin: 0 10px;
+              min-width: 120px;
+            }
+
+            /* Адаптивність */
+            @media (max-width: 600px) {
               h1 { font-size: 24px; }
-              .progress-bar { gap: 2px; }
-              .progress-circle { width: 20px; height: 20px; font-size: 8px; }
-              .progress-line { width: 3px; }
-              button { font-size: 16px; padding: 10px; }
-              #timer { font-size: 20px; }
-              .question-box h2 { font-size: 18px; }
-              .matching-container { flex-direction: column; }
-              .matching-column { width: 100%; }
-              .blank-input { width: 80px; }
-              .option-box, .matching-item { font-size: 14px; padding: 8px; min-height: 40px; line-height: 1.5; }
-            }
-            @media (min-width: 401px) and (max-width: 600px) {
-              h1 { font-size: 28px; }
-              .progress-bar { gap: 3px; }
-              .progress-circle { width: 25px; height: 25px; font-size: 10px; }
-              .progress-line { width: 4px; }
-              button { font-size: 18px; padding: 15px; }
-              #timer { font-size: 20px; }
-              .question-box h2 { font-size: 20px; }
-              .matching-container { flex-direction: column; }
-              .matching-column { width: 100%; }
-              .blank-input { width: 80px; }
-              .option-box, .matching-item { font-size: 18px; padding: 10px; min-height: 50px; line-height: 1.5; }
-            }
-            @media (min-width: 601px) and (max-width: 900px) {
-              h1 { font-size: 30px; }
-              .progress-bar { gap: 4px; }
-              .progress-circle { width: 30px; height: 30px; font-size: 12px; }
-              .progress-line { width: 5px; }
-              button { font-size: 18px; padding: 15px; }
+              .progress-circle { width: 36px; height: 36px; font-size: 13px; }
+              .progress-line { width: 5px; height: 3px; }
+              .question-box { padding: 15px; }
+              .instruction { font-size: 15px; }
+              .option-box, .matching-item {
+                font-size: 15px;
+                padding: 12px 16px;
+                min-height: 55px;
+              }
+              button {
+                font-size: 16px;
+                padding: 14px 20px;
+                min-height: 55px;
+              }
               #timer { font-size: 22px; }
-              .question-box h2 { font-size: 22px; }
-              .matching-column { width: 45%; }
-              .blank-input { width: 100px; }
-              .option-box, .matching-item { font-size: 18px; padding: 10px; min-height: 50px; line-height: 1.5; }
+              #question-timer { width: 80px; height: 80px; }
+              #question-timer .timer-text { font-size: 24px; }
+              .button-container { flex-direction: column; gap: 12px; }
+              .button-container button { width: 100%; }
             }
-            @media (min-width: 901px) and (max-width: 1200px) {
-              h1 { font-size: 32px; }
-              .progress-bar { gap: 5px; }
-              .progress-circle { width: 35px; height: 35px; font-size: 14px; }
-              .progress-line { width: 5px; }
-              button { font-size: 18px; padding: 15px; }
-              #timer { font-size: 24px; }
-              .question-box h2 { font-size: 24px; }
-              .matching-column { width: 45%; }
-              .blank-input { width: 100px; }
-              .option-box, .matching-item { font-size: 18px; padding: 10px; min-height: 50px; line-height: 1.5; }
-            }
-            @media (min-width: 1201px) {
-              h1 { font-size: 36px; }
-              .progress-bar { gap: 6px; }
-              .progress-circle { width: 40px; height: 40px; font-size: 16px; }
-              .progress-line { width: 6px; }
-              button { font-size: 20px; padding: 15px; }
-              #timer { font-size: 26px; }
-              .question-box h2 { font-size: 26px; }
-              .matching-column { width: 45%; }
-              .blank-input { width: 120px; }
-              .option-box, .matching-item { font-size: 20px; padding: 12px; min-height: 60px; line-height: 1.5; }
+
+            @media (min-width: 601px) {
+              .matching-container { gap: 16px; }
+              .matching-item { padding: 16px 20px; font-size: 17px; min-height: 70px; }
             }
           </style>
         </head>
@@ -3502,25 +3564,107 @@ app.get('/result', checkAuth, async (req, res) => {
       logger.error('[RESULT] Помилка читання A.png', { message: error.message });
     }
 
-    // 10. HTML-результат
+    // 10. HTML-результат з кружечками прогресу ПІД діаграмою і ПЕРЕД текстом
     const resultHtml = `
       <!DOCTYPE html>
       <html lang="uk">
         <head>
           <meta charset="UTF-8">
+          <meta name="viewport" content="width=device-width, initial-scale=1.0">
           <title>Результати ${testNames[testNumber]?.name?.replace(/"/g, '\\"') || 'Тест'}</title>
           <style>
-            body { font-family: Arial, sans-serif; text-align: center; padding: 20px; background-color: #f5f5f5; }
-            .result-container { margin: 20px auto; width: 150px; height: 150px; position: relative; }
-            .result-circle-bg { stroke: #e0e0e0; stroke-width: 10; fill: none; }
-            .result-circle { stroke: #4CAF50; stroke-width: 10; fill: none; stroke-dasharray: 440; stroke-dashoffset: 440; animation: fillCircle 1.5s ease-in-out forwards; }
-            .result-text { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); font-size: 24px; font-weight: bold; color: #333; }
-            .buttons { margin-top: 20px; }
-            button { padding: 10px 20px; margin: 5px; cursor: pointer; border: none; border-radius: 5px; font-size: 16px; }
-            #exportPDF { background-color: #ffeb3b; }
-            #restart { background-color: #ef5350; }
+            body {
+              font-family: Arial, sans-serif;
+              text-align: center;
+              padding: 30px 20px;
+              background-color: #f5f5f5;
+              margin: 0;
+            }
+            h1 {
+              color: #333;
+              margin-bottom: 25px;
+            }
+            .result-container {
+              margin: 0 auto 30px;
+              width: 180px;
+              height: 180px;
+              position: relative;
+            }
+            .result-circle-bg {
+              stroke: #e0e0e0;
+              stroke-width: 12;
+              fill: none;
+            }
+            .result-circle {
+              stroke: #4CAF50;
+              stroke-width: 12;
+              fill: none;
+              stroke-dasharray: 530;
+              stroke-dashoffset: 530;
+              animation: fillCircle 1.8s ease-out forwards;
+            }
+            .result-text {
+              position: absolute;
+              top: 50%;
+              left: 50%;
+              transform: translate(-50%, -50%);
+              font-size: 48px;
+              font-weight: bold;
+              color: #333;
+            }
+            .progress-circles {
+              display: flex;
+              flex-wrap: wrap;
+              justify-content: center;
+              gap: 10px;
+              max-width: 500px;
+              margin: 0 auto 30px;
+            }
+            .progress-circle {
+              width: 38px;
+              height: 38px;
+              border-radius: 50%;
+              display: flex;
+              align-items: center;
+              justify-content: center;
+              font-size: 14px;
+              font-weight: bold;
+              color: white;
+              box-shadow: 0 2px 6px rgba(0,0,0,0.15);
+            }
+            .correct   { background: #28a745; }
+            .wrong     { background: #dc3545; }
+            .partial   { background: #ffc107; }
+            .summary-text {
+              font-size: 20px;
+              line-height: 1.6;
+              margin-bottom: 30px;
+              color: #444;
+            }
+            .buttons {
+              margin-top: 20px;
+            }
+            button {
+              padding: 14px 32px;
+              margin: 10px;
+              font-size: 18px;
+              cursor: pointer;
+              border: none;
+              border-radius: 8px;
+              min-width: 180px;
+            }
+            #exportPDF { background: #ffeb3b; color: #333; }
+            #restart   { background: #ef5350; color: white; }
             @keyframes fillCircle {
-              to { stroke-dashoffset: ${(440 * (100 - percentage)) / 100}; }
+              to { stroke-dashoffset: ${(530 * (100 - percentage)) / 100}; }
+            }
+            @media (max-width: 600px) {
+              h1 { font-size: 26px; }
+              .result-container { width: 140px; height: 140px; }
+              .result-text { font-size: 38px; }
+              .progress-circle { width: 32px; height: 32px; font-size: 12px; }
+              .progress-circles { gap: 8px; }
+              button { padding: 12px 24px; font-size: 16px; min-width: 140px; }
             }
           </style>
           <script src="/pdfmake/pdfmake.min.js"></script>
@@ -3529,29 +3673,43 @@ app.get('/result', checkAuth, async (req, res) => {
         <body>
           <h1>Результат тесту</h1>
           <div class="result-container">
-            <svg width="150" height="150">
-              <circle class="result-circle-bg" cx="75" cy="75" r="70" />
-              <circle class="result-circle" cx="75" cy="75" r="70" />
+            <svg width="180" height="180">
+              <circle class="result-circle-bg" cx="90" cy="90" r="78" />
+              <circle class="result-circle" cx="90" cy="90" r="78" />
             </svg>
             <div class="result-text">${Math.round(percentage)}%</div>
           </div>
-          <p>
+
+          <!-- Кружечки прогресу ПІД діаграмою -->
+          <div class="progress-circles">
+            ${scoresPerQuestion.map((s, i) => {
+              let colorClass = 'wrong';
+              if (s === questions[i].points) colorClass = 'correct';
+              else if (s > 0) colorClass = 'partial';
+              return `<div class="progress-circle ${colorClass}">${i + 1}</div>`;
+            }).join('')}
+          </div>
+
+          <!-- Текст з результатами ПІСЛЯ кружечків -->
+          <div class="summary-text">
             Кількість питань: ${totalQuestions}<br>
             Правильних відповідей: ${correctClicks}<br>
-            Набрано балів: ${score.toFixed(1)}<br>
-            Максимально можлива кількість балів: ${totalPoints.toFixed(1)}<br>
-          </p>
+            Набрано балів: ${Math.round(score)}<br>
+            Максимально можлива кількість балів: ${Math.round(totalPoints)}<br>
+          </div>
+
           <div class="buttons">
             <button id="exportPDF">Експортувати в PDF</button>
             <button id="restart">Вихід</button>
           </div>
+
           <script>
             const user = "${req.user.replace(/"/g, '\\"')}";
             const testName = "${testNames[testNumber]?.name?.replace(/"/g, '\\"') || 'Невідомий тест'}";
             const totalQuestions = ${totalQuestions};
             const correctClicks = ${correctClicks};
-            const score = ${score.toFixed(1)};
-            const totalPoints = ${totalPoints.toFixed(1)};
+            const score = ${Math.round(score)};
+            const totalPoints = ${Math.round(totalPoints)};
             const percentage = ${Math.round(percentage)};
             const time = "${formattedTime.replace(/"/g, '\\"')}";
             const date = "${formattedDate.replace(/"/g, '\\"')}";
@@ -3560,20 +3718,20 @@ app.get('/result', checkAuth, async (req, res) => {
             document.getElementById('exportPDF').addEventListener('click', () => {
               const docDefinition = {
                 content: [
-                  imageBase64 ? { image: 'data:image/png;base64,' + imageBase64, width: 50, alignment: 'center', margin: [0, 0, 0, 20] } : { text: 'Логотип відсутній', alignment: 'center', margin: [0, 0, 0, 20] },
-                  { text: 'Результат тесту користувача ' + user + ' з тесту ' + testName + ' складає ' + percentage + '%', style: 'header' },
-                  { text: 'Кількість питань: ' + totalQuestions, lineHeight: 2 },
-                  { text: 'Правильних відповідей: ' + correctClicks, lineHeight: 2 },
-                  { text: 'Набрано балів: ' + score, lineHeight: 2 },
-                  { text: 'Максимально можлива кількість балів: ' + totalPoints, lineHeight: 2 },
+                  imageBase64 ? { image: 'data:image/png;base64,' + imageBase64, width: 60, alignment: 'center', margin: [0, 0, 0, 20] } : {},
+                  { text: 'Результат тесту ' + testName, style: 'header' },
+                  { text: 'Користувач: ' + user, margin: [0, 5, 0, 0] },
+                  { text: 'Відсоток: ' + percentage + '%', margin: [0, 5, 0, 0] },
+                  { text: 'Бали: ' + score + ' з ' + totalPoints, margin: [0, 5, 0, 0] },
+                  { text: 'Питань: ' + totalQuestions + ', правильних: ' + correctClicks, margin: [0, 5, 0, 0] },
                   { columns: [
-                    { text: 'Час: ' + time, width: '50%', lineHeight: 2 },
-                    { text: 'Дата: ' + date, width: '50%', alignment: 'right', lineHeight: 2 }
-                  ], margin: [0, 10, 0, 0] }
+                    { text: 'Час: ' + time, width: '50%', lineHeight: 1.8 },
+                    { text: 'Дата: ' + date, width: '50%', alignment: 'right', lineHeight: 1.8 }
+                  ], margin: [0, 20, 0, 0] }
                 ],
-                styles: { header: { fontSize: 14, bold: true, margin: [0, 0, 0, 10], lineHeight: 2 } }
+                styles: { header: { fontSize: 18, bold: true, margin: [0, 0, 0, 10] } }
               };
-              pdfMake.createPdf(docDefinition).download('result.pdf');
+              pdfMake.createPdf(docDefinition).download('результат.pdf');
             });
 
             document.getElementById('restart').addEventListener('click', () => {
@@ -5690,15 +5848,19 @@ app.get('/admin/results', checkAuth, async (req, res) => {
                   const formData = new URLSearchParams();
                   formData.append('id', id);
                   formData.append('_csrf', '${res.locals._csrf}');
-                  const response = await fetch('/admin/delete-result', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-                    body: formData
-                  });
-                  if (response.ok) {
-                    location.reload();
-                  } else {
-                    alert('Помилка видалення');
+                  try {
+                    const response = await fetch('/admin/delete-result', {
+                      method: 'POST',
+                      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                      body: formData
+                    });
+                    if (response.ok) {
+                      location.reload();
+                    } else {
+                      alert('Помилка видалення: ' + response.status);
+                    }
+                  } catch (error) {
+                    alert('Не вдалося видалити');
                   }
                 }
               }
@@ -5800,7 +5962,27 @@ app.get('/admin/view-result', checkAuth, async (req, res) => {
         <body>
           <div class="container">
             <h1>Деталі результату для користувача ${result.user}</h1>
-
+            <div style="text-align: center; margin-bottom: 20px;">
+              <button class="nav-btn" onclick="window.location.href='/admin/results'">Назад до списку</button>
+              <button id="exportPDF" style="margin-left: 15px;">Експортувати в PDF</button>
+            </div>
+            <script>
+              document.getElementById('exportPDF')?.addEventListener('click', () => {
+                const docDefinition = {
+                  content: [
+                    { text: 'Деталі результату для ' + '${result.user}', style: 'header' },
+                    { text: 'Тест: ' + '${testNames[result.testNumber]?.name || 'Невідомий'}', margin: [0, 10, 0, 0] },
+                    { text: 'Варіант: ' + '${result.variant || 'Немає'}', margin: [0, 5, 0, 0] },
+                    { text: 'Бали: ' + ${roundedScore.toFixed(1)} + ' з ' + ${totalPoints.toFixed(1)}, margin: [0, 5, 0, 0] },
+                    { text: 'Відсоток: ' + ${roundedPercentage.toFixed(1)} + '%', margin: [0, 5, 0, 0] },
+                    { text: 'Питань: ' + ${totalQuestions} + ', правильних: ' + ${correctClicks}, margin: [0, 5, 0, 0] },
+                    { text: 'Дата: ' + '${new Date(result.endTime).toLocaleString('uk-UA')}', margin: [0, 15, 0, 0] }
+                  ],
+                  styles: { header: { fontSize: 18, bold: true, margin: [0, 0, 0, 10] } }
+                };
+                pdfMake.createPdf(docDefinition).download('result_${result.user}.pdf');
+              });
+            </script>
             <div class="summary">
               <strong>Тест:</strong> ${testNames[result.testNumber]?.name?.replace(/"/g, '\\"') || 'Невідомий тест'}<br>
               <strong>Варіант:</strong> ${result.variant || 'Немає'}<br>
@@ -6353,6 +6535,27 @@ app.post('/admin/create-test', checkAuth, checkAdmin, [
   } finally {
     const endTime = Date.now();
     logger.info('Маршрут /admin/create-test (POST) виконано', { duration: `${endTime - startTime} мс` });
+  }
+});
+
+// Видалення результатів
+app.post('/admin/delete-result', checkAuth, checkAdmin, async (req, res) => {
+  try {
+    const { id } = req.body;
+    if (!id || !ObjectId.isValid(id)) {
+      return res.status(400).json({ success: false, message: 'Невірний ID' });
+    }
+
+    const result = await db.collection('test_results').deleteOne({ _id: new ObjectId(id) });
+    if (result.deletedCount === 0) {
+      return res.status(404).json({ success: false, message: 'Результат не знайдено' });
+    }
+
+    logger.info('Видалено результат', { id, user: req.user });
+    res.json({ success: true });
+  } catch (error) {
+    logger.error('Помилка видалення результату', { error: error.message, stack: error.stack });
+    res.status(500).json({ success: false, message: 'Помилка сервера' });
   }
 });
 
