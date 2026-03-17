@@ -3344,7 +3344,7 @@ function calculateQuestionScore(question, userAnswer) {
   return Math.max(0, score); // не нижче нуля
 }
 
-// Маршрут для відображення результатів тесту
+// Маршрут для відображення результатів тесту (виправлений)
 app.get('/result', checkAuth, async (req, res) => {
   const startTime = Date.now();
   try {
@@ -3370,7 +3370,7 @@ app.get('/result', checkAuth, async (req, res) => {
     const testNumber = testData.testNumber;
     const answers = testData.answers || {};
     const startTimeMs = testData.startTime || Date.now();
-    const timeLimit = testData.timeLimit || 3600000; // 1 година за замовчуванням
+    const timeLimit = testData.timeLimit || 3600000;
     const suspiciousActivity = testData.suspiciousActivity || {};
     const variant = testData.variant || '';
     const testSessionId = testData.testSessionId;
@@ -3380,16 +3380,26 @@ app.get('/result', checkAuth, async (req, res) => {
       return res.status(500).send('Помилка: не вдалося визначити номер тесту');
     }
 
-    // Завантажуємо питання з бази
-    let questions = await db.collection('questions')
+    // ==================== ВИПРАВЛЕНО ====================
+    // Завантажуємо ВСІ питання тесту, потім фільтруємо за варіантом (як в адмінці)
+    let allQuestions = await db.collection('questions')
       .find({ testNumber })
       .sort({ order: 1 })
       .toArray();
 
-    // Фільтруємо за варіантом
-    questions = questions.filter(q => 
+    const questions = allQuestions.filter(q => 
       !q.variant || q.variant === '' || q.variant === variant
     );
+    // ====================================================
+
+    // Лог для перевірки (можна видалити після тестування)
+    logger.info('Результати /result — фільтрація питань', {
+      user: req.user,
+      testNumber,
+      variant: variant || '—',
+      totalQuestionsInDB: allQuestions.length,
+      questionsAfterFilter: questions.length
+    });
 
     // Підрахунок балів за допомогою функції
     const scoresPerQuestion = questions.map((q, index) => {
@@ -3490,6 +3500,7 @@ app.get('/result', checkAuth, async (req, res) => {
     const endDateTime = new Date(endTime);
     const formattedTime = endDateTime.toLocaleTimeString('uk-UA', { hour12: false });
     const formattedDate = endDateTime.toLocaleDateString('uk-UA');
+
     const imagePath = path.join(__dirname, 'public', 'images', 'A.png');
     let imageBase64 = '';
     try {
@@ -3516,9 +3527,7 @@ app.get('/result', checkAuth, async (req, res) => {
             #exportPDF { background-color: #ffeb3b; }
             #restart { background-color: #ef5350; }
             @keyframes fillCircle {
-              to {
-                stroke-dashoffset: ${(440 * (100 - percentage)) / 100};
-              }
+              to { stroke-dashoffset: ${(440 * (100 - percentage)) / 100}; }
             }
           </style>
           <script src="/pdfmake/pdfmake.min.js"></script>
@@ -3555,77 +3564,38 @@ app.get('/result', checkAuth, async (req, res) => {
             const date = "${formattedDate.replace(/"/g, '\\"')}";
             const imageBase64 = "${imageBase64.replace(/"/g, '\\"')}";
 
-            console.log('Сторінка результатів завантажена з даними:', {
-              user: user,
-              testName: testName,
-              totalQuestions: totalQuestions,
-              correctClicks: correctClicks,
-              score: score,
-              totalPoints: totalPoints,
-              percentage: percentage,
-              time: time,
-              date: date,
-              imageBase64Length: imageBase64.length
-            });
-
             const exportPDFButton = document.getElementById('exportPDF');
             const restartButton = document.getElementById('restart');
 
-            if (!exportPDFButton) {
-              console.error('Кнопка експорту PDF не знайдена!');
-            } else {
-              console.log('Кнопка експорту PDF знайдена, додаємо обробник події.');
-              exportPDFButton.addEventListener('click', () => {
-                try {
-                  console.log('Натискання кнопки експорту PDF, генерація PDF...');
-                  const docDefinition = {
-                    content: [
-                      imageBase64 ? {
-                        image: 'data:image/png;base64,' + imageBase64,
-                        width: 50,
-                        alignment: 'center',
-                        margin: [0, 0, 0, 20]
-                      } : { text: 'Логотип відсутній', alignment: 'center', margin: [0, 0, 0, 20], lineHeight: 2 },
-                      { text: 'Результат тесту користувача ' + user + ' з тесту ' + testName + ' складає ' + percentage + '%', style: 'header' },
-                      { text: 'Кількість питань: ' + totalQuestions, lineHeight: 2 },
-                      { text: 'Правильних відповідей: ' + correctClicks, lineHeight: 2 },
-                      { text: 'Набрано балів: ' + score, lineHeight: 2 },
-                      { text: 'Максимально можлива кількість балів: ' + totalPoints, lineHeight: 2 },
-                      {
-                        columns: [
-                          { text: 'Час: ' + time, width: '50%', lineHeight: 2 },
-                          { text: 'Дата: ' + date, width: '50%', alignment: 'right', lineHeight: 2 }
-                        ],
-                        margin: [0, 10, 0, 0]
-                      }
-                    ],
-                    styles: {
-                      header: { fontSize: 14, bold: true, margin: [0, 0, 0, 10], lineHeight: 2 }
-                    }
-                  };
-                  pdfMake.createPdf(docDefinition).download('result.pdf');
-                  console.log('PDF згенеровано успішно.');
-                } catch (error) {
-                  console.error('Помилка генерації PDF:', error);
-                  alert('Не вдалося згенерувати PDF. Перевірте консоль браузера для деталей.');
-                }
-              });
-            }
+            exportPDFButton.addEventListener('click', () => {
+              const docDefinition = {
+                content: [
+                  imageBase64 ? { image: 'data:image/png;base64,' + imageBase64, width: 50, alignment: 'center', margin: [0, 0, 0, 20] } : { text: 'Логотип відсутній', alignment: 'center', margin: [0, 0, 0, 20] },
+                  { text: 'Результат тесту користувача ' + user + ' з тесту ' + testName + ' складає ' + percentage + '%', style: 'header' },
+                  { text: 'Кількість питань: ' + totalQuestions, lineHeight: 2 },
+                  { text: 'Правильних відповідей: ' + correctClicks, lineHeight: 2 },
+                  { text: 'Набрано балів: ' + score, lineHeight: 2 },
+                  { text: 'Максимально можлива кількість балів: ' + totalPoints, lineHeight: 2 },
+                  { columns: [
+                    { text: 'Час: ' + time, width: '50%', lineHeight: 2 },
+                    { text: 'Дата: ' + date, width: '50%', alignment: 'right', lineHeight: 2 }
+                  ], margin: [0, 10, 0, 0] }
+                ],
+                styles: { header: { fontSize: 14, bold: true, margin: [0, 0, 0, 10], lineHeight: 2 } }
+              };
+              pdfMake.createPdf(docDefinition).download('result.pdf');
+            });
 
-            if (!restartButton) {
-              console.error('Кнопка повернення не знайдена!');
-            } else {
-              console.log('Кнопка повернення знайдена, додаємо обробник події.');
-              restartButton.addEventListener('click', () => {
-                console.log('Натискання кнопки повернення, перенаправлення на /select-test');
-                window.location.href = '/select-test';
-              });
-            }
+            restartButton.addEventListener('click', () => {
+              window.location.href = '/select-test';
+            });
           </script>
         </body>
       </html>
     `;
+
     res.send(resultHtml);
+
   } catch (error) {
     logger.error('Помилка в /result', { message: error.message, stack: error.stack });
     res.status(500).send('Помилка при завантаженні результатів: ' + (error.message || 'Невідома помилка'));
