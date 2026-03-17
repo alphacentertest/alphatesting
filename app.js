@@ -3303,13 +3303,13 @@ function calculateQuestionScore(question, userAnswer) {
   return Math.max(0, score); // не нижче нуля
 }
 
-// Маршрут для відображення результатів тесту (для користувача після завершення)
+// Маршрут для відображення результатів тесту
 app.get('/result', checkAuth, async (req, res) => {
   const startTime = Date.now();
   try {
     if (req.user === 'admin') return res.redirect('/admin');
 
-    let userTest = await db.collection('active_tests').findOne({ user: req.user });
+    const userTest = await db.collection('active_tests').findOne({ user: req.user });
     let testData;
 
     if (!userTest) {
@@ -3325,78 +3325,81 @@ app.get('/result', checkAuth, async (req, res) => {
       testData = userTest;
     }
 
-    // Завантажуємо питання з бази (обов'язково!)
-    let rawQuestions = await db.collection('questions')
+    // Завантажуємо питання з бази (обов’язково, бо в test_results їх немає)
+    let questions = await db.collection('questions')
       .find({ testNumber: testData.testNumber })
       .sort({ order: 1 })
       .toArray();
 
-    const { testNumber, answers, startTime: testStartTime, suspiciousActivity, variant, testSessionId, timeLimit } = testData;
-
-    // Фільтруємо питання за варіантом
-    let questions = rawQuestions.filter(q => 
-      !q.variant || q.variant === '' || q.variant === variant
+    // Фільтруємо за варіантом користувача
+    questions = questions.filter(q => 
+      !q.variant || q.variant === '' || q.variant === testData.variant
     );
 
-    // Підрахунок балів за допомогою функції
-    const scoresPerQuestion = questions.map((q, displayIndex) => {
-      const userAnswer = answers[displayIndex];
-      return calculateQuestionScore(q, userAnswer);
-    });
+    let score = testData.score || 0;
+    const totalPoints = testData.totalPoints || questions.reduce((sum, q) => sum + q.points, 0);
+    let scoresPerQuestion = testData.scoresPerQuestion || [];
 
-    const exactScore = scoresPerQuestion.reduce((sum, s) => sum + s, 0);
-    const roundedScore = Math.round(exactScore * 10) / 10;
-    const totalPoints = questions.reduce((sum, q) => sum + q.points, 0);
-    const percentage = totalPoints > 0 ? (exactScore / totalPoints) * 100 : 0;
-    const roundedPercentage = Math.round(percentage * 10) / 10;
+    if (!scoresPerQuestion.length && questions.length > 0) {
+      scoresPerQuestion = questions.map((q, index) => {
+        const userAnswer = testData.answers[index];
+        return calculateQuestionScore(q, userAnswer);
+      });
 
-    const totalQuestions = questions.length;
-    const correctClicks = scoresPerQuestion.filter(s => s > 0).length;
+      score = scoresPerQuestion.reduce((sum, s) => sum + s, 0);
+    }
 
     let endTime = testData.endTime ? new Date(testData.endTime).getTime() : Date.now();
-    const maxEndTime = testStartTime + timeLimit;
-    if (endTime > maxEndTime) endTime = maxEndTime;
+    const maxEndTime = testData.startTime + testData.timeLimit;
+    if (endTime > maxEndTime) {
+      endTime = maxEndTime;
+      logger.info(`Кориговано endTime до timeLimit для testSessionId: ${testData.testSessionId}`);
+    }
 
-    const duration = Math.round((endTime - testStartTime) / 1000);
-    const timeAway = testData.timeAway || suspiciousActivity?.timeAway || 0;
+    const percentage = testData.percentage || (totalPoints > 0 ? (score / totalPoints) * 100 : 0);
+    const totalClicks = testData.totalClicks || Object.keys(testData.answers || {}).length;
+    const correctClicks = testData.correctClicks || scoresPerQuestion.filter(s => s > 0).length;
+    const totalQuestions = testData.totalQuestions || questions.length;
+
+    const duration = Math.round((endTime - testData.startTime) / 1000);
+    const timeAway = testData.timeAway || (testData.suspiciousActivity ? testData.suspiciousActivity.timeAway || 0 : 0);
     const correctedTimeAway = Math.min(timeAway, duration);
-    const timeAwayPercent = duration > 0 ? Math.round((correctedTimeAway / duration) * 100) : 0;
+    const timeAwayPercent = Math.round((correctedTimeAway / duration) * 100);
+    const switchCount = testData.switchCount || (testData.suspiciousActivity ? testData.suspiciousActivity.switchCount || 0 : 0);
+    const avgResponseTime = testData.avgResponseTime || (testData.suspiciousActivity && testData.suspiciousActivity.responseTimes
+      ? (testData.suspiciousActivity.responseTimes.reduce((sum, time) => sum + (time || 0), 0) / testData.suspiciousActivity.responseTimes.length).toFixed(2)
+      : 0);
+    const totalActivityCount = testData.totalActivityCount || (testData.suspiciousActivity && testData.suspiciousActivity.activityCounts
+      ? testData.suspiciousActivity.activityCounts.reduce((sum, count) => sum + (count || 0), 0)
+      : 0);
 
-    const switchCount = suspiciousActivity?.switchCount || 0;
-    const avgResponseTime = suspiciousActivity?.responseTimes?.length
-      ? (suspiciousActivity.responseTimes.reduce((sum, t) => sum + (t || 0), 0) / suspiciousActivity.responseTimes.length).toFixed(2)
-      : 0;
-
-    const totalActivityCount = suspiciousActivity?.activityCounts?.reduce((sum, c) => sum + (c || 0), 0) || 0;
-
-    if (timeAwayPercent > config.suspiciousActivity.timeAwayThreshold || switchCount > config.suspiciousActivity.switchCountThreshold) {
-      await sendSuspiciousActivityEmail(req.user, {
+    if (!testData.suspiciousActivity && (timeAwayPercent > config.suspiciousActivity.timeAwayThreshold || switchCount > config.suspiciousActivity.switchCountThreshold)) {
+      const activityDetails = {
         timeAwayPercent,
         switchCount,
         avgResponseTime,
         totalActivityCount
-      });
+      };
+      await sendSuspiciousActivityEmail(req.user, activityDetails);
     }
 
     const ipAddress = req.headers['x-forwarded-for'] || req.socket.remoteAddress;
 
-    // Збереження результату з точними значеннями
     if (userTest && !testData.isSaved) {
-      const existing = await db.collection('test_results').findOne({ testSessionId });
-      if (!existing && !userTest.isSavingResult) {
+      const existingResult = await db.collection('test_results').findOne({ testSessionId: testData.testSessionId });
+      if (!existingResult && !userTest.isSavingResult) {
         await db.collection('active_tests').updateOne(
           { user: req.user },
           { $set: { isSavingResult: true } }
         );
-
         await saveResult(
           req.user,
           testNumber,
-          exactScore,
+          score,
           totalPoints,
           testStartTime,
           endTime,
-          Object.keys(answers).length,
+          totalClicks,
           correctClicks,
           totalQuestions,
           percentage,
@@ -3407,7 +3410,29 @@ app.get('/result', checkAuth, async (req, res) => {
           ipAddress,
           testSessionId
         );
+        logger.info(`Результат збережено для testSessionId: ${testSessionId}`);
       }
+    }
+
+    if (userTest && testData.isSaved) {
+      await db.collection('test_results').updateOne(
+        { testSessionId: testData.testSessionId },
+        { $set: {
+          score,
+          totalPoints,
+          endTime,
+          totalClicks,
+          correctClicks,
+          totalQuestions,
+          percentage,
+          suspiciousActivity: { timeAway: correctedTimeAway, switchCount, responseTimes: suspiciousActivity?.responseTimes || [], activityCounts: suspiciousActivity?.activityCounts || [] },
+          answers,
+          scoresPerQuestion,
+          variant,
+          ipAddress
+        } },
+        { upsert: true }
+      );
     }
 
     if (userTest) {
@@ -3417,13 +3442,13 @@ app.get('/result', checkAuth, async (req, res) => {
     const endDateTime = new Date(endTime);
     const formattedTime = endDateTime.toLocaleTimeString('uk-UA', { hour12: false });
     const formattedDate = endDateTime.toLocaleDateString('uk-UA');
-
     const imagePath = path.join(__dirname, 'public', 'images', 'A.png');
     let imageBase64 = '';
     try {
-      imageBase64 = fs.readFileSync(imagePath).toString('base64');
-    } catch (err) {
-      logger.error('Помилка читання A.png', err);
+      const imageBuffer = fs.readFileSync(imagePath);
+      imageBase64 = imageBuffer.toString('base64');
+    } catch (error) {
+      logger.error('Помилка читання зображення A.png', { message: error.message, stack: error.stack });
     }
 
     const resultHtml = `
@@ -3431,83 +3456,134 @@ app.get('/result', checkAuth, async (req, res) => {
       <html lang="uk">
         <head>
           <meta charset="UTF-8">
-          <title>Ваш результат</title>
+          <title>Результати ${testNames[testNumber]?.name.replace(/"/g, '\\"') || 'Невідомий тест'}</title>
           <style>
-            body { font-family: Arial, sans-serif; text-align: center; padding: 30px 20px; background: #f5f5f5; margin: 0; }
-            .container { max-width: 700px; margin: 0 auto; background: white; padding: 30px; border-radius: 12px; box-shadow: 0 4px 20px rgba(0,0,0,0.1); }
-            h1 { color: #333; margin-bottom: 25px; }
-            .circle-container { position: relative; width: 180px; height: 180px; margin: 0 auto 30px; }
-            .circle-bg { stroke: #e0e0e0; stroke-width: 12; fill: none; }
-            .circle { stroke: #4CAF50; stroke-width: 12; fill: none; stroke-dasharray: 530; animation: fill 1.8s forwards; }
-            .percentage { position: absolute; top: 50%; left: 50%; transform: translate(-50%,-50%); font-size: 42px; font-weight: bold; color: #333; }
-            .summary { font-size: 20px; line-height: 1.6; margin: 20px 0 40px; text-align: left; }
-            .buttons { margin-top: 30px; }
-            button { padding: 14px 28px; margin: 10px; border: none; border-radius: 8px; font-size: 18px; cursor: pointer; }
-            #exportPDF { background: #ffeb3b; color: #333; }
-            #exportPDF:hover { background: #ffe082; }
-            #restart { background: #ef5350; color: white; }
-            #restart:hover { background: #e53935; }
-            @keyframes fill { to { stroke-dashoffset: ${(530 * (100 - roundedPercentage)) / 100}; } }
+            body { font-family: Arial, sans-serif; text-align: center; padding: 20px; background-color: #f5f5f5; }
+            .result-container { margin: 20px auto; width: 150px; height: 150px; position: relative; }
+            .result-circle-bg { stroke: #e0e0e0; stroke-width: 10; fill: none; }
+            .result-circle { stroke: #4CAF50; stroke-width: 10; fill: none; stroke-dasharray: 440; stroke-dashoffset: 440; animation: fillCircle 1.5s ease-in-out forwards; }
+            .result-text { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); font-size: 24px; font-weight: bold; color: #333; }
+            .buttons { margin-top: 20px; }
+            button { padding: 10px 20px; margin: 5px; cursor: pointer; border: none; border-radius: 5px; font-size: 16px; }
+            #exportPDF { background-color: #ffeb3b; }
+            #restart { background-color: #ef5350; }
+            @keyframes fillCircle {
+              to {
+                stroke-dashoffset: ${(440 * (100 - percentage)) / 100};
+              }
+            }
           </style>
           <script src="/pdfmake/pdfmake.min.js"></script>
           <script src="/pdfmake/vfs_fonts.js"></script>
         </head>
         <body>
-          <div class="container">
-            <h1>Ваш результат</h1>
-
-            <div class="circle-container">
-              <svg width="180" height="180">
-                <circle class="circle-bg" cx="90" cy="90" r="79"/>
-                <circle class="circle" cx="90" cy="90" r="79" stroke-dashoffset="530"/>
-              </svg>
-              <div class="percentage">${roundedPercentage.toFixed(1)}%</div>
-            </div>
-
-            <div class="summary">
-              <strong>Тест:</strong> ${testNames[testNumber]?.name?.replace(/"/g, '\\"') || 'Тест'}<br>
-              <strong>Варіант:</strong> ${variant || 'Немає'}<br>
-              <strong>Бали:</strong> ${roundedScore.toFixed(1)} з ${totalPoints}<br>
-              <strong>Відсоток:</strong> ${roundedPercentage.toFixed(1)}%<br>
-              <strong>Питань:</strong> ${totalQuestions}<br>
-              <strong>Правильних:</strong> ${correctClicks}<br>
-              <strong>Завершено:</strong> ${formattedDate} ${formattedTime}
-            </div>
-
-            <div class="buttons">
-              <button id="exportPDF">Експортувати в PDF</button>
-              <button id="restart">Повернутися до тестів</button>
-            </div>
+          <h1>Результат тесту</h1>
+          <div class="result-container">
+            <svg width="150" height="150">
+              <circle class="result-circle-bg" cx="75" cy="75" r="70" />
+              <circle class="result-circle" cx="75" cy="75" r="70" />
+            </svg>
+            <div class="result-text">${Math.round(percentage)}%</div>
           </div>
-
+          <p>
+            Кількість питань: ${totalQuestions}<br>
+            Правильних відповідей: ${correctClicks}<br>
+            Набрано балів: ${score}<br>
+            Максимально можлива кількість балів: ${totalPoints}<br>
+          </p>
+          <div class="buttons">
+            <button id="exportPDF">Експортувати в PDF</button>
+            <button id="restart">Вихід</button>
+          </div>
           <script>
-            const imageBase64 = "${imageBase64}";
-            document.getElementById('exportPDF').addEventListener('click', () => {
-              const doc = {
-                content: [
-                  imageBase64 ? { image: 'data:image/png;base64,' + imageBase64, width: 60, alignment: 'center' } : {},
-                  { text: 'Результат тесту — ' + ${roundedPercentage.toFixed(1)} + '%', style: 'header' },
-                  { text: 'Бали: ' + ${roundedScore.toFixed(1)} + ' з ' + ${totalPoints} },
-                  { text: 'Питань: ' + ${totalQuestions} + ', правильних: ' + ${correctClicks} }
-                ],
-                styles: { header: { fontSize: 18, bold: true } }
-              };
-              pdfMake.createPdf(doc).download('результат.pdf');
+            const user = "${req.user.replace(/"/g, '\\"')}";
+            const testName = "${testNames[testNumber]?.name.replace(/"/g, '\\"') || 'Невідомий тест'}";
+            const totalQuestions = ${totalQuestions};
+            const correctClicks = ${correctClicks};
+            const score = ${score};
+            const totalPoints = ${totalPoints};
+            const percentage = ${Math.round(percentage)};
+            const time = "${formattedTime.replace(/"/g, '\\"')}";
+            const date = "${formattedDate.replace(/"/g, '\\"')}";
+            const imageBase64 = "${imageBase64.replace(/"/g, '\\"')}";
+
+            console.log('Сторінка результатів завантажена з даними:', {
+              user: user,
+              testName: testName,
+              totalQuestions: totalQuestions,
+              correctClicks: correctClicks,
+              score: score,
+              totalPoints: totalPoints,
+              percentage: percentage,
+              time: time,
+              date: date,
+              imageBase64Length: imageBase64.length
             });
-            document.getElementById('restart').addEventListener('click', () => {
-              window.location.href = '/select-test';
-            });
+
+            const exportPDFButton = document.getElementById('exportPDF');
+            const restartButton = document.getElementById('restart');
+
+            if (!exportPDFButton) {
+              console.error('Кнопка експорту PDF не знайдена!');
+            } else {
+              console.log('Кнопка експорту PDF знайдена, додаємо обробник події.');
+              exportPDFButton.addEventListener('click', () => {
+                try {
+                  console.log('Натискання кнопки експорту PDF, генерація PDF...');
+                  const docDefinition = {
+                    content: [
+                      imageBase64 ? {
+                        image: 'data:image/png;base64,' + imageBase64,
+                        width: 50,
+                        alignment: 'center',
+                        margin: [0, 0, 0, 20]
+                      } : { text: 'Логотип відсутній', alignment: 'center', margin: [0, 0, 0, 20], lineHeight: 2 },
+                      { text: 'Результат тесту користувача ' + user + ' з тесту ' + testName + ' складає ' + percentage + '%', style: 'header' },
+                      { text: 'Кількість питань: ' + totalQuestions, lineHeight: 2 },
+                      { text: 'Правильних відповідей: ' + correctClicks, lineHeight: 2 },
+                      { text: 'Набрано балів: ' + score, lineHeight: 2 },
+                      { text: 'Максимально можлива кількість балів: ' + totalPoints, lineHeight: 2 },
+                      {
+                        columns: [
+                          { text: 'Час: ' + time, width: '50%', lineHeight: 2 },
+                          { text: 'Дата: ' + date, width: '50%', alignment: 'right', lineHeight: 2 }
+                        ],
+                        margin: [0, 10, 0, 0]
+                      }
+                    ],
+                    styles: {
+                      header: { fontSize: 14, bold: true, margin: [0, 0, 0, 10], lineHeight: 2 }
+                    }
+                  };
+                  pdfMake.createPdf(docDefinition).download('result.pdf');
+                  console.log('PDF згенеровано успішно.');
+                } catch (error) {
+                  console.error('Помилка генерації PDF:', error);
+                  alert('Не вдалося згенерувати PDF. Перевірте консоль браузера для деталей.');
+                }
+              });
+            }
+
+            if (!restartButton) {
+              console.error('Кнопка повернення не знайдена!');
+            } else {
+              console.log('Кнопка повернення знайдена, додаємо обробник події.');
+              restartButton.addEventListener('click', () => {
+                console.log('Натискання кнопки повернення, перенаправлення на /select-test');
+                window.location.href = '/select-test';
+              });
+            }
           </script>
         </body>
       </html>
     `;
-
     res.send(resultHtml);
   } catch (error) {
     logger.error('Помилка в /result', { message: error.message, stack: error.stack });
-    res.status(500).send('Помилка при завантаженні результатів');
+    res.status(500).send('Помилка при завантаженні результатів: ' + (error.message || 'Невідома помилка'));
   } finally {
-    logger.info('Маршрут /result виконано', { duration: `${Date.now() - startTime} мс` });
+    const endTime = Date.now();
+    logger.info('Маршрут /result виконано', { duration: `${endTime - startTime} мс` });
   }
 });
 
