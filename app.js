@@ -2777,7 +2777,7 @@ app.get('/test/question', checkAuth, async (req, res) => {
                 const responseTime = (Date.now() - questionStartTime) / 1000;
                 const formData = new URLSearchParams();
                 formData.append('index', index);
-                const safeAnswer = JSON.stringify(answers);  // ЧИСТИЙ JSON без зайвого екранування
+                const safeAnswer = JSON.stringify(answers);
                 formData.append('answer', safeAnswer);
                 formData.append('timeAway', timeAway);
                 formData.append('switchCount', switchCount);
@@ -2823,7 +2823,7 @@ app.get('/test/question', checkAuth, async (req, res) => {
                 const responseTime = (Date.now() - questionStartTime) / 1000;
                 const formData = new URLSearchParams();
                 formData.append('index', index);
-                const safeAnswer = JSON.stringify(answers);  // ЧИСТИЙ JSON
+                const safeAnswer = JSON.stringify(answers);
                 formData.append('answer', safeAnswer);
                 formData.append('timeAway', timeAway);
                 formData.append('switchCount', switchCount);
@@ -2886,7 +2886,7 @@ app.get('/test/question', checkAuth, async (req, res) => {
                 const responseTime = (Date.now() - questionStartTime) / 1000;
                 const formData = new URLSearchParams();
                 formData.append('index', index);
-                const safeAnswer = JSON.stringify(answers);  // ЧИСТИЙ JSON
+                const safeAnswer = JSON.stringify(answers);
                 formData.append('answer', safeAnswer);
                 formData.append('timeAway', timeAway);
                 formData.append('switchCount', switchCount);
@@ -3024,15 +3024,19 @@ app.get('/test/question', checkAuth, async (req, res) => {
             document.addEventListener('mousemove', debounceMouseMove);
             document.addEventListener('keydown', debounceKeydown);
 
-            // Обробка кліків по варіантах (для multiple/single/truefalse)
+            // Обробка кліків по варіантах — покращена версія
             document.querySelectorAll('.option-box:not(.draggable)').forEach(box => {
-              box.addEventListener('click', () => {
+              box.addEventListener('click', (e) => {
+                e.preventDefault(); // запобігаємо будь-яким дефолтним діям
+                e.stopPropagation(); // зупиняємо спливання події
                 const questionType = '${q.type}';
                 const option = box.getAttribute('data-value');
+                console.log('Клік по варіанту:', { type: questionType, option, currentSelected: selectedOptions });
+
                 if (questionType === 'truefalse' || questionType === 'multiple' || questionType === 'singlechoice') {
                   if (questionType === 'truefalse' || questionType === 'singlechoice') {
                     selectedOptions = [option];
-                    document.querySelectorAll('.option-box').forEach(b => b.classList.remove('selected'));
+                    document.querySelectorAll('.option-box:not(.draggable)').forEach(b => b.classList.remove('selected'));
                   } else {
                     const idx = selectedOptions.indexOf(option);
                     if (idx === -1) {
@@ -3042,6 +3046,7 @@ app.get('/test/question', checkAuth, async (req, res) => {
                     }
                   }
                   box.classList.toggle('selected');
+                  console.log('Оновлено selectedOptions:', selectedOptions);
                 }
               });
             });
