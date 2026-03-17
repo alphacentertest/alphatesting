@@ -3325,13 +3325,20 @@ app.get('/result', checkAuth, async (req, res) => {
       testData = userTest;
     }
 
-    // Завантажуємо питання з бази (обов’язково, бо в test_results їх немає)
+    // Безпечне отримання testNumber
+    const testNumber = testData.testNumber || testData.testNumber;
+    if (!testNumber) {
+      logger.error('testNumber не знайдено в testData', { testData });
+      return res.status(500).send('Помилка: не вдалося визначити номер тесту');
+    }
+
+    // Завантажуємо питання з бази
     let questions = await db.collection('questions')
-      .find({ testNumber: testData.testNumber })
+      .find({ testNumber })
       .sort({ order: 1 })
       .toArray();
 
-    // Фільтруємо за варіантом користувача
+    // Фільтруємо за варіантом
     questions = questions.filter(q => 
       !q.variant || q.variant === '' || q.variant === testData.variant
     );
