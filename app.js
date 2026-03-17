@@ -1224,25 +1224,39 @@ app.post('/logout', checkAuth, (req, res) => {
 // Збереження результатів тесту (оновлено: перераховуємо все перед збереженням)
 const saveResult = async (user, testNumber, score, totalPoints, startTime, endTime, totalClicks, correctClicks, totalQuestions, percentage, suspiciousActivity, answers, scoresPerQuestion, variant, ipAddress, testSessionId) => {
   const startTimeLog = Date.now();
+  logger.info('[SAVE-RESULT] Початок збереження результату', {
+    user,
+    testNumber,
+    testSessionId,
+    score,
+    percentage: percentage.toFixed(1) + '%',
+    totalQuestions,
+    answersCount: Object.keys(answers).length
+  });
+
   const session = client.startSession();
   try {
+    logger.info('[SAVE-RESULT] Починаємо транзакцію');
+
     await session.withTransaction(async () => {
-      // Завантажуємо актуальні питання з бази
+      logger.info('[SAVE-RESULT] Всередині транзакції — завантажуємо питання');
+
       let questions = await db.collection('questions')
         .find({ testNumber })
         .sort({ order: 1 })
         .toArray();
 
-      // Фільтруємо за варіантом (точно як показувалося користувачу)
-      questions = questions.filter(q => 
+      logger.info('[SAVE-RESULT] Знайдено питань', { count: questions.length });
+
+      questions = questions.filter(q =>
         !q.variant || q.variant === '' || q.variant === variant
       );
 
-      // Перераховуємо totalPoints і totalQuestions з актуальних питань
+      logger.info('[SAVE-RESULT] Після фільтрації питань', { count: questions.length });
+
       const actualTotalPoints = questions.reduce((sum, q) => sum + q.points, 0);
       const actualTotalQuestions = questions.length;
 
-      // Перераховуємо score і percentage заново (на випадок, якщо передані значення застарілі)
       const actualScoresPerQuestion = questions.map((q, index) => {
         const userAnswer = answers[index];
         return calculateQuestionScore(q, userAnswer);
@@ -1256,51 +1270,47 @@ const saveResult = async (user, testNumber, score, totalPoints, startTime, endTi
       const result = {
         user,
         testNumber,
-        score: actualScore,                  // актуальний
-        totalPoints: actualTotalPoints,      // актуальний
+        score: actualScore,
+        totalPoints: actualTotalPoints,
         totalClicks,
         correctClicks,
-        totalQuestions: actualTotalQuestions,// актуальний
-        percentage: actualPercentage,        // актуальний
+        totalQuestions: actualTotalQuestions,
+        percentage: actualPercentage,
         startTime: new Date(startTime).toISOString(),
         endTime: new Date(endTime).toISOString(),
         duration,
         answers: Object.fromEntries(Object.entries(answers).sort((a, b) => parseInt(a[0]) - parseInt(b[0]))),
-        scoresPerQuestion: actualScoresPerQuestion, // актуальні
+        scoresPerQuestion: actualScoresPerQuestion,
         suspiciousActivity,
         variant: `Variant ${variant}`,
-        testSessionId
+        testSessionId,
+        createdAt: new Date()
       };
 
-      logger.info('Збереження результату в MongoDB із перерахованими значеннями', {
-        actualScore,
-        actualTotalPoints,
-        actualPercentage,
-        actualTotalQuestions,
-        answersCount: Object.keys(result.answers).length
+      logger.info('[SAVE-RESULT] Готовий документ для вставки', {
+        testSessionId,
+        score: actualScore,
+        percentage: actualPercentage.toFixed(1),
+        questions: actualTotalQuestions
       });
-
-      if (!db) {
-        throw new Error('Підключення до MongoDB не встановлено');
-      }
 
       await db.collection('test_results').insertOne(result, { session });
 
-      await logActivity(
-        user,
-        `завершив тест ${testNames[testNumber]?.name?.replace(/"/g, '\\"') || 'Тест'} з результатом ${Math.round(actualPercentage)}%`,
-        ipAddress,
-        { percentage: Math.round(actualPercentage) },
-        session
-      );
+      logger.info('[SAVE-RESULT] Документ успішно вставлено в test_results');
     });
+
+    logger.info('[SAVE-RESULT] Транзакція успішно завершена');
   } catch (error) {
-    logger.error('Помилка збереження результату та логу активності', { message: error.message, stack: error.stack });
+    logger.error('[SAVE-RESULT] Помилка під час збереження результату', {
+      message: error.message,
+      stack: error.stack,
+      testSessionId
+    });
     throw error;
   } finally {
     await session.endSession();
-    const endTimeLog = Date.now();
-    logger.info('saveResult виконано', { duration: `${endTimeLog - startTimeLog} мс` });
+    const duration = Date.now() - startTimeLog;
+    logger.info('[SAVE-RESULT] Завершено', { duration: `${duration} мс` });
   }
 };
 

@@ -22,7 +22,7 @@ async function migrateUsers() {
   });
 
   await client.connect();
-  const db = client.db();
+  const db = client.db('alpha');
   const usersCollection = db.collection('users');
   await usersCollection.deleteMany({}); // Очищаємо колекцію перед міграцією
   await usersCollection.insertMany(users);
