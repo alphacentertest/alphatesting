@@ -87,6 +87,11 @@ const client = new MongoClient(MONGODB_URI, {
   connectTimeoutMS: 5000,
   serverSelectionTimeoutMS: 5000
 });
+logger.info('Підключено до бази даних', {
+  databaseName: db.databaseName,
+  cluster: MONGODB_URI.split('@')[1]?.split('.')[0] || 'невідомо',
+  uriSnippet: MONGODB_URI.substring(0, 50) + '...'
+});
 let db;
 
 // Клас CacheManager
