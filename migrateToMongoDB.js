@@ -68,7 +68,8 @@ async function migrateQuestions() {
           correctAnswers,
           type,
           points,
-          variant
+          variant,
+          order: rowNumber - 1
         };
 
         if (type === 'matching') {

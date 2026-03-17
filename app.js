@@ -1224,91 +1224,110 @@ app.post('/logout', checkAuth, (req, res) => {
 // Збереження результатів тесту (оновлено: перераховуємо все перед збереженням)
 const saveResult = async (user, testNumber, score, totalPoints, startTime, endTime, totalClicks, correctClicks, totalQuestions, percentage, suspiciousActivity, answers, scoresPerQuestion, variant, ipAddress, testSessionId) => {
   const startTimeLog = Date.now();
-  logger.info('[SAVE-RESULT] Початок збереження результату', {
+
+  logger.info('[SAVE-RESULT] Початок збереження (спрощена версія без транзакції)', {
     user,
     testNumber,
     testSessionId,
     score,
     percentage: percentage.toFixed(1) + '%',
     totalQuestions,
-    answersCount: Object.keys(answers).length
+    answersCount: Object.keys(answers).length,
+    variant: variant || '(немає)'
   });
 
-  const session = client.startSession();
   try {
-    logger.info('[SAVE-RESULT] Починаємо транзакцію');
+    // Завантажуємо питання
+    let questions = await db.collection('questions')
+      .find({ testNumber })
+      .sort({ order: 1 })
+      .toArray();
 
-    await session.withTransaction(async () => {
-      logger.info('[SAVE-RESULT] Всередині транзакції — завантажуємо питання');
+    logger.info('[SAVE-RESULT] Знайдено питань у базі', { count: questions.length });
 
-      let questions = await db.collection('questions')
-        .find({ testNumber })
-        .sort({ order: 1 })
-        .toArray();
+    questions = questions.filter(q =>
+      !q.variant || q.variant === '' || q.variant === variant
+    );
 
-      logger.info('[SAVE-RESULT] Знайдено питань', { count: questions.length });
+    logger.info('[SAVE-RESULT] Після фільтрації за варіантом', { count: questions.length });
 
-      questions = questions.filter(q =>
-        !q.variant || q.variant === '' || q.variant === variant
-      );
+    if (questions.length === 0) {
+      logger.warn('[SAVE-RESULT] Немає питань після фільтрації — пропускаємо перерахунок');
+    }
 
-      logger.info('[SAVE-RESULT] Після фільтрації питань', { count: questions.length });
+    // Перерахунок (якщо питань немає — використовуємо передані значення)
+    let actualScore = score;
+    let actualTotalPoints = totalPoints;
+    let actualPercentage = percentage;
+    let actualTotalQuestions = totalQuestions;
 
-      const actualTotalPoints = questions.reduce((sum, q) => sum + q.points, 0);
-      const actualTotalQuestions = questions.length;
-
+    if (questions.length > 0) {
       const actualScoresPerQuestion = questions.map((q, index) => {
         const userAnswer = answers[index];
         return calculateQuestionScore(q, userAnswer);
       });
 
-      const actualScore = actualScoresPerQuestion.reduce((sum, s) => sum + s, 0);
-      const actualPercentage = actualTotalPoints > 0 ? (actualScore / actualTotalPoints) * 100 : 0;
+      actualScore = actualScoresPerQuestion.reduce((sum, s) => sum + s, 0);
+      actualTotalPoints = questions.reduce((sum, q) => sum + (q.points || 0), 0);
+      actualPercentage = actualTotalPoints > 0 ? (actualScore / actualTotalPoints) * 100 : 0;
+      actualTotalQuestions = questions.length;
 
-      const duration = Math.round((endTime - startTime) / 1000);
-
-      const result = {
-        user,
-        testNumber,
-        score: actualScore,
-        totalPoints: actualTotalPoints,
-        totalClicks,
-        correctClicks,
-        totalQuestions: actualTotalQuestions,
-        percentage: actualPercentage,
-        startTime: new Date(startTime).toISOString(),
-        endTime: new Date(endTime).toISOString(),
-        duration,
-        answers: Object.fromEntries(Object.entries(answers).sort((a, b) => parseInt(a[0]) - parseInt(b[0]))),
-        scoresPerQuestion: actualScoresPerQuestion,
-        suspiciousActivity,
-        variant: `Variant ${variant}`,
-        testSessionId,
-        createdAt: new Date()
-      };
-
-      logger.info('[SAVE-RESULT] Готовий документ для вставки', {
-        testSessionId,
-        score: actualScore,
-        percentage: actualPercentage.toFixed(1),
-        questions: actualTotalQuestions
+      logger.info('[SAVE-RESULT] Перераховано значення', {
+        actualScore: actualScore.toFixed(2),
+        actualTotalPoints: actualTotalPoints.toFixed(2),
+        actualPercentage: actualPercentage.toFixed(1) + '%',
+        actualTotalQuestions
       });
+    } else {
+      logger.warn('[SAVE-RESULT] Використовуємо передані значення (питань не знайдено)');
+    }
 
-      await db.collection('test_results').insertOne(result, { session });
+    const duration = Math.round((endTime - startTime) / 1000);
 
-      logger.info('[SAVE-RESULT] Документ успішно вставлено в test_results');
+    const result = {
+      user,
+      testNumber,
+      score: actualScore,
+      totalPoints: actualTotalPoints,
+      totalClicks,
+      correctClicks,
+      totalQuestions: actualTotalQuestions,
+      percentage: actualPercentage,
+      startTime: new Date(startTime).toISOString(),
+      endTime: new Date(endTime).toISOString(),
+      duration,
+      answers: Object.fromEntries(Object.entries(answers).sort((a, b) => parseInt(a[0]) - parseInt(b[0]))),
+      suspiciousActivity,
+      variant: variant ? `Variant ${variant}` : 'Немає',
+      testSessionId,
+      createdAt: new Date(),
+      ipAddress
+    };
+
+    logger.info('[SAVE-RESULT] Готовий документ для вставки', { testSessionId, size: JSON.stringify(result).length });
+
+    const insertResult = await db.collection('test_results').insertOne(result);
+
+    logger.info('[SAVE-RESULT] Успішно вставлено документ', {
+      insertedId: insertResult.insertedId.toString(),
+      testSessionId
     });
 
-    logger.info('[SAVE-RESULT] Транзакція успішно завершена');
+    await logActivity(
+      user,
+      `завершив тест ${testNames[testNumber]?.name || 'Тест'} з результатом ${Math.round(actualPercentage)}%`,
+      ipAddress,
+      { percentage: Math.round(actualPercentage), testSessionId }
+    );
+
   } catch (error) {
-    logger.error('[SAVE-RESULT] Помилка під час збереження результату', {
+    logger.error('[SAVE-RESULT] Критична помилка при збереженні', {
       message: error.message,
       stack: error.stack,
       testSessionId
     });
-    throw error;
+    throw error; // не ковтаємо помилку — нехай маршрут /result її побачить
   } finally {
-    await session.endSession();
     const duration = Date.now() - startTimeLog;
     logger.info('[SAVE-RESULT] Завершено', { duration: `${duration} мс` });
   }
