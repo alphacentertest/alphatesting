@@ -3325,15 +3325,24 @@ app.get('/result', checkAuth, async (req, res) => {
       testData = userTest;
     }
 
+    // Безпечне отримання полів (щоб уникнути помилок "not defined")
+    const testNumber = testData.testNumber;
+    const answers = testData.answers || {};
+    const startTimeMs = testData.startTime || Date.now();
+    const suspiciousActivity = testData.suspiciousActivity || {};
+    const variant = testData.variant || '';
+    const testSessionId = testData.testSessionId;
+    const timeLimit = testData.timeLimit || 3600000; // 1 година за замовчуванням
+
     // Завантажуємо питання з бази (обов’язково!)
     let questions = await db.collection('questions')
-      .find({ testNumber: testData.testNumber })
+      .find({ testNumber })
       .sort({ order: 1 })
       .toArray();
 
     // Фільтруємо за варіантом
     questions = questions.filter(q => 
-      !q.variant || q.variant === '' || q.variant === testData.variant
+      !q.variant || q.variant === '' || q.variant === variant
     );
 
     let score = testData.score || 0;
@@ -3342,7 +3351,7 @@ app.get('/result', checkAuth, async (req, res) => {
 
     if (!scoresPerQuestion.length && questions.length > 0) {
       scoresPerQuestion = questions.map((q, index) => {
-        const userAnswer = testData.answers[index];
+        const userAnswer = answers[index];
         return calculateQuestionScore(q, userAnswer);
       });
 
@@ -3350,30 +3359,28 @@ app.get('/result', checkAuth, async (req, res) => {
     }
 
     let endTime = testData.endTime ? new Date(testData.endTime).getTime() : Date.now();
-    const maxEndTime = testData.startTime + testData.timeLimit;
+    const maxEndTime = startTimeMs + timeLimit;
     if (endTime > maxEndTime) {
       endTime = maxEndTime;
-      logger.info(`Кориговано endTime до timeLimit для testSessionId: ${testData.testSessionId}`);
+      logger.info(`Кориговано endTime до timeLimit для testSessionId: ${testSessionId}`);
     }
 
     const percentage = testData.percentage || (totalPoints > 0 ? (score / totalPoints) * 100 : 0);
-    const totalClicks = testData.totalClicks || Object.keys(testData.answers || {}).length;
+    const totalClicks = testData.totalClicks || Object.keys(answers).length;
     const correctClicks = testData.correctClicks || scoresPerQuestion.filter(s => s > 0).length;
     const totalQuestions = testData.totalQuestions || questions.length;
 
-    const duration = Math.round((endTime - testData.startTime) / 1000);
-    const timeAway = testData.timeAway || (testData.suspiciousActivity ? testData.suspiciousActivity.timeAway || 0 : 0);
+    const duration = Math.round((endTime - startTimeMs) / 1000);
+    const timeAway = suspiciousActivity.timeAway || 0;
     const correctedTimeAway = Math.min(timeAway, duration);
-    const timeAwayPercent = Math.round((correctedTimeAway / duration) * 100);
-    const switchCount = testData.switchCount || (testData.suspiciousActivity ? testData.suspiciousActivity.switchCount || 0 : 0);
-    const avgResponseTime = testData.avgResponseTime || (testData.suspiciousActivity && testData.suspiciousActivity.responseTimes
-      ? (testData.suspiciousActivity.responseTimes.reduce((sum, time) => sum + (time || 0), 0) / testData.suspiciousActivity.responseTimes.length).toFixed(2)
-      : 0);
-    const totalActivityCount = testData.totalActivityCount || (testData.suspiciousActivity && testData.suspiciousActivity.activityCounts
-      ? testData.suspiciousActivity.activityCounts.reduce((sum, count) => sum + (count || 0), 0)
-      : 0);
+    const timeAwayPercent = duration > 0 ? Math.round((correctedTimeAway / duration) * 100) : 0;
+    const switchCount = suspiciousActivity.switchCount || 0;
+    const avgResponseTime = suspiciousActivity.responseTimes?.length
+      ? (suspiciousActivity.responseTimes.reduce((sum, time) => sum + (time || 0), 0) / suspiciousActivity.responseTimes.length).toFixed(2)
+      : 0;
+    const totalActivityCount = suspiciousActivity.activityCounts?.reduce((sum, count) => sum + (count || 0), 0) || 0;
 
-    if (!testData.suspiciousActivity && (timeAwayPercent > config.suspiciousActivity.timeAwayThreshold || switchCount > config.suspiciousActivity.switchCountThreshold)) {
+    if (timeAwayPercent > config.suspiciousActivity.timeAwayThreshold || switchCount > config.suspiciousActivity.switchCountThreshold) {
       const activityDetails = {
         timeAwayPercent,
         switchCount,
@@ -3386,7 +3393,7 @@ app.get('/result', checkAuth, async (req, res) => {
     const ipAddress = req.headers['x-forwarded-for'] || req.socket.remoteAddress;
 
     if (userTest && !testData.isSaved) {
-      const existingResult = await db.collection('test_results').findOne({ testSessionId: testData.testSessionId });
+      const existingResult = await db.collection('test_results').findOne({ testSessionId });
       if (!existingResult && !userTest.isSavingResult) {
         await db.collection('active_tests').updateOne(
           { user: req.user },
@@ -3394,29 +3401,29 @@ app.get('/result', checkAuth, async (req, res) => {
         );
         await saveResult(
           req.user,
-          testData.testNumber,
+          testNumber,
           score,
           totalPoints,
-          testData.startTime,
+          startTimeMs,
           endTime,
           totalClicks,
           correctClicks,
           totalQuestions,
           percentage,
-          { timeAway: correctedTimeAway, switchCount, responseTimes: suspiciousActivity?.responseTimes || [], activityCounts: suspiciousActivity?.activityCounts || [] },
-          testData.answers,
+          { timeAway: correctedTimeAway, switchCount, responseTimes: suspiciousActivity.responseTimes || [], activityCounts: suspiciousActivity.activityCounts || [] },
+          answers,
           scoresPerQuestion,
-          testData.variant,
+          variant,
           ipAddress,
-          testData.testSessionId
+          testSessionId
         );
-        logger.info(`Результат збережено для testSessionId: ${testData.testSessionId}`);
+        logger.info(`Результат збережено для testSessionId: ${testSessionId}`);
       }
     }
 
     if (userTest && testData.isSaved) {
       await db.collection('test_results').updateOne(
-        { testSessionId: testData.testSessionId },
+        { testSessionId },
         { $set: {
           score,
           totalPoints,
@@ -3425,10 +3432,10 @@ app.get('/result', checkAuth, async (req, res) => {
           correctClicks,
           totalQuestions,
           percentage,
-          suspiciousActivity: { timeAway: correctedTimeAway, switchCount, responseTimes: suspiciousActivity?.responseTimes || [], activityCounts: suspiciousActivity?.activityCounts || [] },
-          answers: testData.answers,
+          suspiciousActivity: { timeAway: correctedTimeAway, switchCount, responseTimes: suspiciousActivity.responseTimes || [], activityCounts: suspiciousActivity.activityCounts || [] },
+          answers,
           scoresPerQuestion,
-          variant: testData.variant,
+          variant,
           ipAddress
         } },
         { upsert: true }
@@ -3456,7 +3463,7 @@ app.get('/result', checkAuth, async (req, res) => {
       <html lang="uk">
         <head>
           <meta charset="UTF-8">
-          <title>Результати ${testNames[testData.testNumber]?.name.replace(/"/g, '\\"') || 'Невідомий тест'}</title>
+          <title>Результати ${testNames[testNumber]?.name.replace(/"/g, '\\"') || 'Невідомий тест'}</title>
           <style>
             body { font-family: Arial, sans-serif; text-align: center; padding: 20px; background-color: #f5f5f5; }
             .result-container { margin: 20px auto; width: 150px; height: 150px; position: relative; }
@@ -3497,7 +3504,7 @@ app.get('/result', checkAuth, async (req, res) => {
           </div>
           <script>
             const user = "${req.user.replace(/"/g, '\\"')}";
-            const testName = "${testNames[testData.testNumber]?.name.replace(/"/g, '\\"') || 'Невідомий тест'}";
+            const testName = "${testNames[testNumber]?.name.replace(/"/g, '\\"') || 'Невідомий тест'}";
             const totalQuestions = ${totalQuestions};
             const correctClicks = ${correctClicks};
             const score = ${score};
