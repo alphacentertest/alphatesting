@@ -3199,7 +3199,7 @@ app.get('/result', checkAuth, async (req, res) => {
 
     const { questions: rawQuestions, testNumber, answers, startTime: testStartTime, suspiciousActivity, variant, testSessionId, timeLimit } = testData;
 
-    // Фільтруємо питання за варіантом користувача
+    // Фільтруємо питання за варіантом
     let questions = rawQuestions.filter(q => 
       !q.variant || q.variant === '' || q.variant === variant
     );
@@ -3307,7 +3307,7 @@ app.get('/result', checkAuth, async (req, res) => {
           break;
       }
 
-      return Math.max(0, questionScore); // точне значення
+      return Math.max(0, questionScore);
     });
 
     const exactScore = scoresPerQuestion.reduce((sum, s) => sum + s, 0);
@@ -3392,15 +3392,14 @@ app.get('/result', checkAuth, async (req, res) => {
       logger.error('Помилка читання A.png', err);
     }
 
-    // HTML
     const resultHtml = `
       <!DOCTYPE html>
       <html lang="uk">
         <head>
           <meta charset="UTF-8">
-          <title>Результати тесту</title>
+          <title>Ваш результат</title>
           <style>
-            body { font-family: Arial, sans-serif; text-align: center; padding: 30px 20px; background: #f5f5f5; }
+            body { font-family: Arial, sans-serif; text-align: center; padding: 30px 20px; background: #f5f5f5; margin: 0; }
             .container { max-width: 700px; margin: 0 auto; background: white; padding: 30px; border-radius: 12px; box-shadow: 0 4px 20px rgba(0,0,0,0.1); }
             h1 { color: #333; margin-bottom: 25px; }
             .circle-container { position: relative; width: 180px; height: 180px; margin: 0 auto 30px; }
@@ -3474,11 +3473,11 @@ app.get('/result', checkAuth, async (req, res) => {
     logger.error('Помилка в /result', error);
     res.status(500).send('Помилка завантаження результатів');
   } finally {
-    logger.info('Маршрут /result виконано', { duration: Date.now() - startTime });
+    logger.info('Маршрут /result виконано');
   }
 });
 
-// Маршрут для перегляду результатів користувача (з таблицею)
+// Маршрут для перегляду результатів користувача (з таблицею питань)
 app.get('/results', checkAuth, async (req, res) => {
   const startTime = Date.now();
   try {
@@ -3632,7 +3631,8 @@ app.get('/results', checkAuth, async (req, res) => {
       <html lang="uk">
         <head>
           <meta charset="UTF-8">
-          <title>Результати</title>
+          <meta name="viewport" content="width=device-width, initial-scale=1.0">
+          <title>Ваші результати</title>
           <style>
             body { font-family: Arial, sans-serif; padding: 30px 20px; background: #f5f5f5; }
             .container { max-width: 1000px; margin: 0 auto; background: white; padding: 30px; border-radius: 12px; box-shadow: 0 4px 20px rgba(0,0,0,0.1); }
@@ -3653,7 +3653,7 @@ app.get('/results', checkAuth, async (req, res) => {
         </head>
         <body>
           <div class="container">
-            <h1>Результати тесту</h1>
+            <h1>Ваші результати</h1>
 
             <div class="summary">
               <strong>Тест:</strong> ${testNames[testNumber]?.name?.replace(/"/g, '\\"') || 'Тест'}<br>
@@ -5524,7 +5524,7 @@ app.post('/admin/import-questions', ensureInitialized, checkAuth, checkAdmin, up
   }
 });
 
-// Маршрут для перегляду результатів тестів
+// Маршрут для перегляду результатів тестів (адмін)
 app.get('/admin/results', checkAuth, async (req, res) => {
   const startTime = Date.now();
   try {
@@ -5533,8 +5533,8 @@ app.get('/admin/results', checkAuth, async (req, res) => {
     }
 
     const search = req.query.search || '';
-
     const query = search ? { user: { $regex: search, $options: 'i' } } : {};
+
     const results = await db.collection('test_results')
       .find(query)
       .sort({ endTime: -1 })
@@ -5547,99 +5547,226 @@ app.get('/admin/results', checkAuth, async (req, res) => {
           <meta charset="UTF-8">
           <title>Результати тестів</title>
           <style>
-            body { font-family: Arial, sans-serif; padding: 20px; }
+            body { font-family: Arial, sans-serif; padding: 20px; background: #f5f5f5; }
+            .container { max-width: 1400px; margin: 0 auto; background: white; padding: 25px; border-radius: 12px; box-shadow: 0 4px 20px rgba(0,0,0,0.1); }
+            h1 { text-align: center; color: #333; margin-bottom: 25px; }
             table { border-collapse: collapse; width: 100%; margin-top: 20px; }
-            th, td { border: 1px solid black; padding: 8px; text-align: left; }
-            th { background-color: #f2f2f2; }
-            .error { color: red; }
-            .nav-btn, .action-btn, .search-btn { padding: 10px 20px; margin: 5px; cursor: pointer; border: none; border-radius: 5px; }
-            .action-btn.view { background-color: #4CAF50; color: white; }
-            .action-btn.delete { background-color: #ff4d4d; color: white; }
-            .nav-btn { background-color: #007bff; color: white; }
-            .search-btn { background-color: #28a745; color: white; }
-            input[type="text"] { padding: 8px; margin: 5px; width: 200px; }
-            .suspicious { color: red; }
-            .details { white-space: pre-wrap; max-width: 300px; overflow-wrap: break-word; }
+            th, td { border: 1px solid #ddd; padding: 12px; text-align: left; }
+            th { background: #f2f2f2; font-weight: bold; }
+            .nav-btn, .action-btn, .search-btn { padding: 12px 24px; margin: 10px 5px; cursor: pointer; border: none; border-radius: 8px; font-size: 16px; }
+            .nav-btn { background: #007bff; color: white; }
+            .nav-btn:hover { background: #0056b3; }
+            .search-btn { background: #28a745; color: white; }
+            .action-btn.view { background: #4CAF50; color: white; }
+            .action-btn.delete { background: #ef5350; color: white; }
+            .suspicious { color: #d32f2f; font-weight: bold; }
+            input[type="text"] { padding: 10px; width: 250px; font-size: 16px; }
+            form { display: inline-block; margin: 10px 0; }
           </style>
         </head>
         <body>
-          <h1>Результати тестів</h1>
-          <button class="nav-btn" onclick="window.location.href='/select-test'">Повернутися до вибору тесту</button>
-          <div>
+          <div class="container">
+            <h1>Результати тестів</h1>
+
+            <button class="nav-btn" onclick="window.location.href='/select-test'">Повернутися до вибору тесту</button>
+
             <form id="search-form">
-              <input type="text" id="search" name="search" placeholder="Пошук за логіном" value="${search}">
+              <input type="text" name="search" placeholder="Пошук за логіном" value="${search}">
               <button type="submit" class="search-btn">Пошук</button>
             </form>
-          </div>
-          <table>
-            <tr>
-              <th>Користувач</th>
-              <th>Тест</th>
-              <th>Варіант</th>
-              <th>Очки/%</th>
-              <th>Максимум</th>
-              <th>Початок</th>
-              <th>Кінець</th>
-              <th>Тривалість (хв:сек)</th>
-              <th>Підозріла активність (%)</th>
-              <th>Деталі активності</th>
-              <th>Дія</th>
-            </tr>
+
+            <table>
+              <tr>
+                <th>Користувач</th>
+                <th>Тест</th>
+                <th>Варіант</th>
+                <th>Очки/%</th>
+                <th>Максимум</th>
+                <th>Початок</th>
+                <th>Кінець</th>
+                <th>Тривалість</th>
+                <th>Підозріла активність (%)</th>
+                <th>Дія</th>
+              </tr>
     `;
-    if (!results || results.length === 0) {
-      html += '<tr><td colspan="11">Немає результатів</td></tr>';
+
+    if (results.length === 0) {
+      html += '<tr><td colspan="10">Немає результатів</td></tr>';
     } else {
-      results.forEach(result => {
-        const startTime = new Date(result.startTime).toLocaleTimeString('uk-UA', { hour12: false }) + ' ' + new Date(result.startTime).toLocaleDateString('uk-UA');
-        const endTime = new Date(result.endTime).toLocaleTimeString('uk-UA', { hour12: false }) + ' ' + new Date(result.endTime).toLocaleDateString('uk-UA');
+      for (const result of results) {
+        // Завантажуємо питання для цього результату
+        let allQuestions = await db.collection('questions')
+          .find({ testNumber: result.testNumber })
+          .sort({ order: 1 })
+          .toArray();
+
+        // Фільтруємо за варіантом
+        const questions = allQuestions.filter(q => 
+          !q.variant || q.variant === '' || q.variant === result.variant
+        );
+
+        // Перерахунок балів за новою логікою
+        const scoresPerQuestion = questions.map((q, idx) => {
+          const userAnswer = result.answers[idx];
+          let questionScore = 0;
+
+          let numElements = 1;
+          switch (q.type) {
+            case 'multiple':
+            case 'fillblank':
+              numElements = q.correctAnswers?.length || 1;
+              break;
+            case 'matching':
+              numElements = q.correctPairs?.length || 1;
+              break;
+            case 'ordering':
+              numElements = q.correctAnswers?.length || 1;
+              break;
+            default:
+              numElements = 1;
+          }
+
+          const partial = q.points / numElements;
+
+          const normalize = (val) => String(val || '')
+            .trim()
+            .toLowerCase()
+            .replace(/\s+/g, ' ')
+            .replace(/[^a-z0-9а-яіїєґ\s]/gi, '');
+
+          switch (q.type) {
+            case 'multiple':
+              if (!Array.isArray(userAnswer)) break;
+              const correctSet = new Set(q.correctAnswers.map(normalize));
+              const userSet = new Set(userAnswer.map(normalize));
+              correctSet.forEach(c => { if (userSet.has(c)) questionScore += partial; });
+              userSet.forEach(u => { if (!correctSet.has(u)) questionScore -= partial / 2; });
+              break;
+
+            case 'fillblank':
+              if (!Array.isArray(userAnswer) || userAnswer.length !== q.correctAnswers.length) break;
+              q.correctAnswers.forEach((correct, i) => {
+                const userVal = normalize(userAnswer[i]);
+                let isCorrect = false;
+                if (correct.includes('-')) {
+                  const [min, max] = correct.split('-').map(Number);
+                  const val = Number(userVal);
+                  isCorrect = !isNaN(val) && val >= min && val <= max;
+                } else {
+                  isCorrect = userVal === normalize(correct);
+                }
+                if (isCorrect) questionScore += partial;
+                else questionScore -= partial / 2;
+              });
+              break;
+
+            case 'matching':
+              if (!Array.isArray(userAnswer) || userAnswer.length !== q.correctPairs.length) break;
+              q.correctPairs.forEach((correctPair, i) => {
+                const userPair = userAnswer[i];
+                if (!userPair || userPair.length !== 2) {
+                  questionScore -= partial / 2;
+                  return;
+                }
+                const leftCorrect  = normalize(correctPair[0]);
+                const rightCorrect = normalize(correctPair[1]);
+                const leftUser     = normalize(userPair[0]);
+                const rightUser    = normalize(userPair[1]);
+                if (leftCorrect === leftUser && rightCorrect === rightUser) {
+                  questionScore += partial;
+                } else {
+                  questionScore -= partial / 2;
+                }
+              });
+              break;
+
+            case 'ordering':
+              if (!Array.isArray(userAnswer)) break;
+              const correctOrder = q.correctAnswers.map(normalize);
+              const userOrder    = userAnswer.map(normalize);
+              correctOrder.forEach((correct, i) => {
+                if (userOrder[i] === correct) questionScore += partial;
+                else questionScore -= partial / 2;
+              });
+              break;
+
+            default:
+              let isCorrect = false;
+              if (q.type === 'singlechoice' || q.type === 'truefalse') {
+                isCorrect = normalize(userAnswer) === normalize(q.correctAnswer || q.correctAnswers?.[0]);
+              } else if (q.type === 'input') {
+                const correct = q.correctAnswers?.[0];
+                if (correct?.includes('-')) {
+                  const [min, max] = correct.split('-').map(Number);
+                  const val = Number(normalize(userAnswer));
+                  isCorrect = !isNaN(val) && val >= min && val <= max;
+                } else {
+                  isCorrect = normalize(userAnswer) === normalize(correct);
+                }
+              }
+              questionScore = isCorrect ? q.points : 0;
+              break;
+          }
+
+          return Math.max(0, questionScore);
+        });
+
+        const exactScore = scoresPerQuestion.reduce((sum, s) => sum + s, 0);
+        const roundedScore = Math.round(exactScore * 10) / 10;
+        const totalPoints = questions.reduce((sum, q) => sum + q.points, 0);
+        const percentage = totalPoints > 0 ? (exactScore / totalPoints) * 100 : 0;
+        const roundedPercentage = Math.round(percentage * 10) / 10;
+
+        const totalQuestions = questions.length;
+        const correctClicks = scoresPerQuestion.filter(s => s > 0).length;
+
+        const startTimeStr = new Date(result.startTime).toLocaleString('uk-UA');
+        const endTimeStr = new Date(result.endTime).toLocaleString('uk-UA');
+
         const durationSec = result.duration || Math.round((new Date(result.endTime) - new Date(result.startTime)) / 1000);
         const minutes = Math.floor(durationSec / 60).toString().padStart(2, '0');
         const seconds = (durationSec % 60).toString().padStart(2, '0');
-        const timeAwayPercent = result.suspiciousActivity?.timeAway
+
+        const timeAwayPercent = result.suspiciousActivity?.timeAway && result.duration
           ? Math.round((result.suspiciousActivity.timeAway / result.duration) * 100)
           : 0;
+
         const switchCount = result.suspiciousActivity?.switchCount || 0;
-        const avgResponseTime = result.suspiciousActivity?.responseTimes
-          ? (result.suspiciousActivity.responseTimes.reduce((sum, time) => sum + (time || 0), 0) / result.suspiciousActivity.responseTimes.length).toFixed(2)
+        const avgResponseTime = result.suspiciousActivity?.responseTimes?.length
+          ? (result.suspiciousActivity.responseTimes.reduce((sum, t) => sum + (t || 0), 0) / result.suspiciousActivity.responseTimes.length).toFixed(2)
           : 0;
 
         const isSuspicious = timeAwayPercent > config.suspiciousActivity.timeAwayThreshold ||
                             switchCount > config.suspiciousActivity.switchCountThreshold;
 
-        const activityDetails = `Час поза вкладкою: ${timeAwayPercent}%\n` +
-                               `Переключення вкладок: ${switchCount}\n` +
-                               `Середній час відповіді (сек): ${avgResponseTime}`;
-
         html += `
           <tr class="${isSuspicious ? 'suspicious' : ''}">
             <td>${result.user}</td>
-            <td>${testNames[result.testNumber]?.name.replace(/"/g, '\\"') || 'Невідомий тест'}</td>
+            <td>${testNames[result.testNumber]?.name?.replace(/"/g, '\\"') || 'Невідомий тест'}</td>
             <td>${result.variant || 'Немає'}</td>
-            <td>${result.score} / ${Math.round(result.percentage)}%</td>
-            <td>${result.totalPoints}</td>
-            <td>${startTime}</td>
-            <td>${endTime}</td>
+            <td>${roundedScore.toFixed(1)} / ${roundedPercentage.toFixed(1)}%</td>
+            <td>${totalPoints.toFixed(1)}</td>
+            <td>${startTimeStr}</td>
+            <td>${endTimeStr}</td>
             <td>${minutes} хв ${seconds} сек</td>
             <td>${timeAwayPercent}%</td>
-            <td class="details">${activityDetails}</td>
             <td>
               <button class="action-btn view" onclick="viewResult('${result._id}')">Перегляд</button>
               ${req.userRole === 'admin' ? '<button class="action-btn delete" onclick="deleteResult(\'' + result._id + '\')">🗑️ Видалити</button>' : ''}
             </td>
           </tr>
         `;
-      });
+      }
     }
-    html += `
-          </table>
-          <script>
-            async function viewResult(id) {
-              window.location.href = '/admin/view-result?id=' + id;
-            }
 
-            async function deleteResult(id) {
-              if (confirm('Ви впевнені, що хочете видалити цей результат?')) {
-                try {
+    html += `
+            </table>
+            <script>
+              async function viewResult(id) {
+                window.location.href = '/admin/view-result?id=' + id;
+              }
+              async function deleteResult(id) {
+                if (confirm('Видалити цей результат?')) {
                   const formData = new URLSearchParams();
                   formData.append('id', id);
                   formData.append('_csrf', '${res.locals._csrf}');
@@ -5648,37 +5775,30 @@ app.get('/admin/results', checkAuth, async (req, res) => {
                     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
                     body: formData
                   });
-                  if (!response.ok) {
-                    throw new Error('HTTP-помилка! статус: ' + response.status);
-                  }
-                  const result = await response.json();
-                  if (result.success) {
-                    window.location.reload();
+                  if (response.ok) {
+                    location.reload();
                   } else {
-                    alert('Помилка при видаленні результату: ' + result.message);
+                    alert('Помилка видалення');
                   }
-                } catch (error) {
-                  console.error('Помилка видалення результату:', error);
-                  alert('Не вдалося видалити результат. Перевірте ваше з’єднання з Інтернетом.');
                 }
               }
-            }
-
-            document.getElementById('search-form').addEventListener('submit', (e) => {
-              e.preventDefault();
-              const search = document.getElementById('search').value;
-              window.location.href = '/admin/results?search=' + encodeURIComponent(search);
-            });
-          </script>
+              document.getElementById('search-form')?.addEventListener('submit', e => {
+                e.preventDefault();
+                const search = e.target.search.value;
+                window.location.href = '/admin/results?search=' + encodeURIComponent(search);
+              });
+            </script>
+          </div>
         </body>
       </html>
     `;
+
     res.send(html);
   } catch (error) {
-    logger.error('Помилка в /admin/results', { message: error.message, stack: error.stack });
-    res.status(500).send('Помилка при завантаженні результатів');
+    logger.error('Помилка в /admin/results', error);
+    res.status(500).send('Помилка завантаження');
   } finally {
-    logger.info('Маршрут /admin/results виконано', { duration: `${Date.now() - startTime} мс` });
+    logger.info('Маршрут /admin/results виконано');
   }
 });
 
