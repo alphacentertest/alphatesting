@@ -3171,11 +3171,20 @@ app.post('/answer', checkAuth, express.urlencoded({ extended: true }), async (re
 function calculateQuestionScore(question, userAnswer) {
   let score = 0;
 
-  const normalize = (val) => String(val || '')
-    .trim()
-    .toLowerCase()
-    .replace(/\s+/g, ' ')
-    .replace(/[^a-z0-9а-яіїєґ\s]/gi, '');
+  const normalize = (val) => {
+    if (val === null || val === undefined) return '';
+    return String(val)
+      .trim()
+      .toLowerCase()
+      .replace(/\s+/g, ' ')
+      .replace(/[^a-z0-9а-яіїєґ\s.,-]/gi, '');
+  };
+
+  const normalizeNumber = (val) => {
+    if (val === null || val === undefined) return NaN;
+    let str = String(val).trim().replace(/,/g, '.').replace(/\s+/g, '');
+    return parseFloat(str);
+  };
 
   switch (question.type) {
     case 'multiple': {
@@ -3188,7 +3197,7 @@ function calculateQuestionScore(question, userAnswer) {
         if (userSet.has(c)) score += partial;
       });
       userSet.forEach(u => {
-        if (!correctSet.has(u)) score -= partial; // штраф за зайве
+        if (!correctSet.has(u)) score -= partial;
       });
       break;
     }
@@ -3198,32 +3207,34 @@ function calculateQuestionScore(question, userAnswer) {
       const partial = question.points / question.correctAnswers.length;
 
       question.correctAnswers.forEach((correct, i) => {
-        const userVal = normalize(userAnswer[i]);
+        const userVal = userAnswer[i];
         let isCorrect = false;
 
         if (correct.includes('-')) {
-          const [min, max] = correct.split('-').map(Number);
-          const val = Number(userVal);
-          isCorrect = !isNaN(val) && val >= min && val <= max;
+          const [minStr, maxStr] = correct.split('-').map(s => s.trim());
+          const min = normalizeNumber(minStr);
+          const max = normalizeNumber(maxStr);
+          const val = normalizeNumber(userVal);
+          isCorrect = !isNaN(val) && !isNaN(min) && !isNaN(max) && val >= min && val <= max;
         } else {
-          isCorrect = userVal === normalize(correct);
+          isCorrect = normalize(userVal) === normalize(correct);
         }
 
-        if (isCorrect) score += partial;
-        else score -= partial; // штраф за неправильний пропуск
+        if (isCorrect) {
+          score += partial;
+        } else {
+          score -= partial;
+        }
       });
       break;
     }
 
     case 'matching': {
-      if (!Array.isArray(userAnswer) || userAnswer.length === 0) {
-        logger.warn('[SCORE] Matching: відповідь не є масивом або порожня', { userAnswer });
-        return 0;
-      }
+      if (!Array.isArray(userAnswer) || userAnswer.length === 0) return 0;
 
+      // Конвертуємо у масив пар [left, right]
       let userPairs = userAnswer;
       if (userAnswer[0] && typeof userAnswer[0] === 'object' && !Array.isArray(userAnswer[0])) {
-        logger.warn('[SCORE] Matching: отримано об’єкти замість масивів — конвертуємо', { userAnswer });
         userPairs = userAnswer.map(p => [p.left || '', p.right || '']);
       }
 
@@ -3231,35 +3242,43 @@ function calculateQuestionScore(question, userAnswer) {
       const pairCount = correctPairs.length || 1;
       const partial = question.points / pairCount;
 
+      // Створюємо Set правильних пар (незалежно від порядку)
+      const correctSet = new Set(
+        correctPairs.map(pair => {
+          const left = normalize(pair[0]);
+          const right = normalize(pair[1]);
+          return `${left}|||${right}`;
+        })
+      );
+
       let correctCount = 0;
 
-      correctPairs.forEach((correctPair, i) => {
-        const userPair = userPairs[i] || ['', ''];
+      userPairs.forEach(userPair => {
         if (!Array.isArray(userPair) || userPair.length !== 2) {
-          logger.debug('[SCORE] Matching: пара не зіставлена або невалідна', { index: i });
+          score -= partial;
           return;
         }
 
-        const leftCorrect  = normalize(correctPair[0]);
-        const rightCorrect = normalize(correctPair[1]);
-        const leftUser     = normalize(userPair[0]);
-        const rightUser    = normalize(userPair[1]);
+        const leftUser = normalize(userPair[0]);
+        const rightUser = normalize(userPair[1]);
+        const pairKey = `${leftUser}|||${rightUser}`;
 
-        if (leftCorrect === leftUser && rightCorrect === rightUser) {
+        if (correctSet.has(pairKey)) {
           correctCount++;
+          score += partial;
+        } else {
+          score -= partial;
         }
       });
 
-      score = correctCount * partial;
-      logger.debug('[SCORE] Matching: правильних пар ' + correctCount + ' з ' + pairCount + ', балів: ' + score.toFixed(2));
-
-      return Math.max(0, score);
+      logger.debug(`[SCORE] Matching: ${correctCount} правильних з ${pairCount}, балів: ${score.toFixed(2)}`);
+      break;
     }
 
     case 'ordering': {
       if (!Array.isArray(userAnswer)) return 0;
       const correctOrder = question.correctAnswers.map(normalize);
-      const userOrder    = userAnswer.map(normalize);
+      const userOrder = userAnswer.map(normalize);
       const partial = question.points / correctOrder.length;
 
       correctOrder.forEach((correct, i) => {
@@ -3277,9 +3296,11 @@ function calculateQuestionScore(question, userAnswer) {
       } else if (question.type === 'input') {
         const correct = question.correctAnswers?.[0] || '';
         if (correct.includes('-')) {
-          const [min, max] = correct.split('-').map(Number);
-          const val = Number(normalize(userAnswer));
-          isCorrect = !isNaN(val) && val >= min && val <= max;
+          const [minStr, maxStr] = correct.split('-').map(s => s.trim());
+          const min = normalizeNumber(minStr);
+          const max = normalizeNumber(maxStr);
+          const val = normalizeNumber(userAnswer);
+          isCorrect = !isNaN(val) && !isNaN(min) && !isNaN(max) && val >= min && val <= max;
         } else {
           isCorrect = normalize(userAnswer) === normalize(correct);
         }
