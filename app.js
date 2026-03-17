@@ -1190,37 +1190,78 @@ app.post('/logout', checkAuth, (req, res) => {
   }
 });
 
-// Збереження результатів тесту
+// Збереження результатів тесту (оновлено: перераховуємо все перед збереженням)
 const saveResult = async (user, testNumber, score, totalPoints, startTime, endTime, totalClicks, correctClicks, totalQuestions, percentage, suspiciousActivity, answers, scoresPerQuestion, variant, ipAddress, testSessionId) => {
   const startTimeLog = Date.now();
   const session = client.startSession();
   try {
     await session.withTransaction(async () => {
+      // Завантажуємо актуальні питання з бази
+      let questions = await db.collection('questions')
+        .find({ testNumber })
+        .sort({ order: 1 })
+        .toArray();
+
+      // Фільтруємо за варіантом (точно як показувалося користувачу)
+      questions = questions.filter(q => 
+        !q.variant || q.variant === '' || q.variant === variant
+      );
+
+      // Перераховуємо totalPoints і totalQuestions з актуальних питань
+      const actualTotalPoints = questions.reduce((sum, q) => sum + q.points, 0);
+      const actualTotalQuestions = questions.length;
+
+      // Перераховуємо score і percentage заново (на випадок, якщо передані значення застарілі)
+      const actualScoresPerQuestion = questions.map((q, index) => {
+        const userAnswer = answers[index];
+        return calculateQuestionScore(q, userAnswer);
+      });
+
+      const actualScore = actualScoresPerQuestion.reduce((sum, s) => sum + s, 0);
+      const actualPercentage = actualTotalPoints > 0 ? (actualScore / actualTotalPoints) * 100 : 0;
+
       const duration = Math.round((endTime - startTime) / 1000);
+
       const result = {
         user,
         testNumber,
-        score,
-        totalPoints,
+        score: actualScore,                  // актуальний
+        totalPoints: actualTotalPoints,      // актуальний
         totalClicks,
         correctClicks,
-        totalQuestions,
-        percentage,
+        totalQuestions: actualTotalQuestions,// актуальний
+        percentage: actualPercentage,        // актуальний
         startTime: new Date(startTime).toISOString(),
         endTime: new Date(endTime).toISOString(),
         duration,
         answers: Object.fromEntries(Object.entries(answers).sort((a, b) => parseInt(a[0]) - parseInt(b[0]))),
-        scoresPerQuestion,
+        scoresPerQuestion: actualScoresPerQuestion, // актуальні
         suspiciousActivity,
         variant: `Variant ${variant}`,
         testSessionId
       };
-      logger.info('Збереження результату в MongoDB із відповідями', { answers: result.answers });
+
+      logger.info('Збереження результату в MongoDB із перерахованими значеннями', {
+        actualScore,
+        actualTotalPoints,
+        actualPercentage,
+        actualTotalQuestions,
+        answersCount: Object.keys(result.answers).length
+      });
+
       if (!db) {
         throw new Error('Підключення до MongoDB не встановлено');
       }
+
       await db.collection('test_results').insertOne(result, { session });
-      await logActivity(user, `завершив тест ${testNames[testNumber].name.replace(/"/g, '\\"')} з результатом ${Math.round(percentage)}%`, ipAddress, { percentage: Math.round(percentage) }, session);
+
+      await logActivity(
+        user,
+        `завершив тест ${testNames[testNumber]?.name?.replace(/"/g, '\\"') || 'Тест'} з результатом ${Math.round(actualPercentage)}%`,
+        ipAddress,
+        { percentage: Math.round(actualPercentage) },
+        session
+      );
     });
   } catch (error) {
     logger.error('Помилка збереження результату та логу активності', { message: error.message, stack: error.stack });
