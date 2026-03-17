@@ -2432,6 +2432,15 @@ app.get('/test/question', checkAuth, async (req, res) => {
               user-select: none;
               transition: all 0.2s;
               background: white;
+              min-height: 60px; /* мінімальна висота */
+              height: auto;     /* розширюється автоматично */
+              display: flex;
+              align-items: center;
+              justify-content: flex-start;
+              text-align: left;
+              box-sizing: border-box;
+              word-break: break-word; /* розбиває довгі слова */
+              overflow: hidden; /* ховає надлишок, але з height: auto не потрібно */
             }
             .option-box:hover {
               background: #f8f9fa !important;
@@ -2441,6 +2450,17 @@ app.get('/test/question', checkAuth, async (req, res) => {
               border-color: #28a745 !important;
               box-shadow: 0 0 0 3px rgba(40,167,69,0.3) !important;
             }
+
+            /* Для мобілок — ще більше свободи */
+            @media (max-width: 600px) {
+              .option-box {
+                font-size: 15px;
+                padding: 12px 16px;
+                min-height: 60px;
+                height: auto;
+              }
+            }
+
             .option-box.draggable { cursor: move; }
             .option-box.dragging { opacity: 0.6; box-shadow: 0 4px 12px rgba(0,0,0,0.2); }
             .matching-container {
@@ -3044,7 +3064,7 @@ app.get('/test/question', checkAuth, async (req, res) => {
             document.addEventListener('mousemove', debounceMouseMove);
             document.addEventListener('keydown', debounceKeydown);
 
-            // Обробка кліків по варіантах — покращена версія
+            // Обробка кліків по варіантах — точна логіка для всіх типів
             document.querySelectorAll('.option-box:not(.draggable)').forEach(box => {
               box.style.pointerEvents = 'auto';
               box.style.cursor = 'pointer';
@@ -3052,8 +3072,10 @@ app.get('/test/question', checkAuth, async (req, res) => {
               box.addEventListener('click', (e) => {
                 e.preventDefault();
                 e.stopPropagation();
+
                 const questionType = '${q.type}';
                 const option = box.getAttribute('data-value');
+
                 console.log('Клік по варіанту:', {
                   type: questionType,
                   option: option,
@@ -3062,22 +3084,32 @@ app.get('/test/question', checkAuth, async (req, res) => {
                 });
 
                 if (['truefalse', 'multiple', 'singlechoice'].includes(questionType)) {
-                  if (questionType === 'truefalse' || questionType === 'singlechoice') {
-                    selectedOptions = [option];
-                    document.querySelectorAll('.option-box:not(.draggable)').forEach(b => {
-                      b.classList.remove('selected');
-                    });
-                  } else {
+                  if (questionType === 'multiple') {
+                    // Для multiple — toggle (додавання/зняття)
                     const idx = selectedOptions.indexOf(option);
                     if (idx === -1) {
                       selectedOptions.push(option);
+                      box.classList.add('selected');
                     } else {
                       selectedOptions.splice(idx, 1);
+                      box.classList.remove('selected');
+                    }
+                  } else {
+                    // Для singlechoice та truefalse — вибір одного, повторний клік не знімає
+                    if (selectedOptions[0] === option) {
+                      // Повторний клік по тому ж — нічого не робимо (залишається вибраним)
+                      console.log('Повторний клік по вже вибраному — залишаємо');
+                    } else {
+                      // Клік по іншому — знімаємо з попереднього, додаємо до нового
+                      document.querySelectorAll('.option-box:not(.draggable)').forEach(b => {
+                        b.classList.remove('selected');
+                      });
+                      selectedOptions = [option];
+                      box.classList.add('selected');
                     }
                   }
-                  box.classList.add('selected'); // явне додавання класу
+
                   console.log('Оновлено selectedOptions:', selectedOptions);
-                  console.log('Клас selected після додавання:', box.classList.contains('selected'));
                 } else {
                   console.warn('Тип питання не підтримує клік:', questionType);
                 }
@@ -3642,7 +3674,7 @@ app.get('/result', checkAuth, async (req, res) => {
       logger.error('[RESULT] Помилка читання A.png', { message: error.message });
     }
 
-    // 10. HTML-результат з кружечками прогресу ПІД діаграмою і ПЕРЕД текстом
+        // 10. HTML-результат з кружечками прогресу ПІД діаграмою і ПЕРЕД текстом
     const resultHtml = `
       <!DOCTYPE html>
       <html lang="uk">
@@ -3660,12 +3692,17 @@ app.get('/result', checkAuth, async (req, res) => {
             }
             h1 {
               color: #333;
-              margin-bottom: 25px;
+              margin-bottom: 30px;
+              font-size: 32px;
+            }
+            .result-section {
+              margin: 0 auto 40px;
+              max-width: 300px;
             }
             .result-container {
-              margin: 0 auto 30px;
               width: 180px;
               height: 180px;
+              margin: 0 auto;
               position: relative;
             }
             .result-circle-bg {
@@ -3684,8 +3721,8 @@ app.get('/result', checkAuth, async (req, res) => {
             .result-text {
               font-size: 48px;
               font-weight: bold;
-              fill: #333;          /* колір тексту */
-              pointer-events: none; /* щоб текст не заважав клікам */
+              fill: #333;
+              pointer-events: none;
             }
             .progress-circles {
               display: flex;
@@ -3693,7 +3730,7 @@ app.get('/result', checkAuth, async (req, res) => {
               justify-content: center;
               gap: 8px;
               max-width: 95vw;
-              margin: 0 auto 30px;
+              margin: 0 auto 40px;
               padding: 0 10px;
             }
             .progress-circle {
@@ -3716,11 +3753,11 @@ app.get('/result', checkAuth, async (req, res) => {
             .summary-text {
               font-size: 20px;
               line-height: 1.6;
-              margin-bottom: 30px;
+              margin-bottom: 40px;
               color: #444;
             }
             .buttons {
-              margin-top: 20px;
+              margin-top: 30px;
             }
             button {
               padding: 14px 32px;
@@ -3730,6 +3767,11 @@ app.get('/result', checkAuth, async (req, res) => {
               border: none;
               border-radius: 8px;
               min-width: 180px;
+              transition: all 0.2s;
+            }
+            button:hover {
+              transform: translateY(-2px);
+              box-shadow: 0 6px 14px rgba(0,0,0,0.2);
             }
             #exportPDF { background: #ffeb3b; color: #333; }
             #restart   { background: #ef5350; color: white; }
@@ -3750,14 +3792,17 @@ app.get('/result', checkAuth, async (req, res) => {
         </head>
         <body>
           <h1>Результат тесту</h1>
-          <div class="result-container">
-            <svg width="180" height="180" viewBox="0 0 180 180">
-              <circle class="result-circle-bg" cx="90" cy="90" r="78" />
-              <circle class="result-circle" cx="90" cy="90" r="78" />
-              <text x="90" y="90" class="result-text" text-anchor="middle" dominant-baseline="central">
-                ${Math.round(percentage)}%
-              </text>
-            </svg>
+
+          <div class="result-section">
+            <div class="result-container">
+              <svg width="180" height="180" viewBox="0 0 180 180">
+                <circle class="result-circle-bg" cx="90" cy="90" r="78" />
+                <circle class="result-circle" cx="90" cy="90" r="78" />
+                <text x="90" y="90" class="result-text" text-anchor="middle" dominant-baseline="central">
+                  ${Math.round(percentage)}%
+                </text>
+              </svg>
+            </div>
           </div>
 
           <div class="progress-circles">
@@ -3794,23 +3839,40 @@ app.get('/result', checkAuth, async (req, res) => {
             const imageBase64 = "${imageBase64.replace(/"/g, '\\"')}";
 
             document.getElementById('exportPDF').addEventListener('click', () => {
+              if (typeof pdfMake === 'undefined') {
+                alert('PDF-генератор не завантажився. Спробуйте оновити сторінку.');
+                return;
+              }
+
               const docDefinition = {
                 content: [
-                  imageBase64 ? { image: 'data:image/png;base64,' + imageBase64, width: 50, alignment: 'center', margin: [0, 0, 0, 20] } : { text: 'Логотип відсутній', alignment: 'center', margin: [0, 0, 0, 20] },
-                  { text: 'Результат тесту користувача ' + user + ' з тесту ' + testName + ' складає ' + percentage + '%', style: 'header' },
+                  imageBase64 ? { 
+                    image: 'data:image/png;base64,' + imageBase64, 
+                    width: 50, 
+                    alignment: 'center', 
+                    margin: [0, 0, 0, 20] 
+                  } : {},
+                  { 
+                    text: 'Результат тесту користувача ' + user + ' з тесту ' + testName + ' складає ' + percentage + '%', 
+                    style: 'header' 
+                  },
                   { text: 'Кількість питань: ' + totalQuestions, margin: [0, 10, 0, 0] },
                   { text: 'Правильних відповідей: ' + correctClicks, margin: [0, 5, 0, 0] },
                   { text: 'Набрано балів: ' + score, margin: [0, 5, 0, 0] },
                   { text: 'Максимально можлива кількість балів: ' + totalPoints, margin: [0, 5, 0, 0] },
-                  { columns: [
-                    { text: 'Час: ' + time, width: '50%', lineHeight: 1.8 },
-                    { text: 'Дата: ' + date, width: '50%', alignment: 'right', lineHeight: 1.8 }
-                  ], margin: [0, 20, 0, 0] }
+                  { 
+                    columns: [
+                      { text: 'Час: ' + time, width: '50%', lineHeight: 1.8 },
+                      { text: 'Дата: ' + date, width: '50%', alignment: 'right', lineHeight: 1.8 }
+                    ], 
+                    margin: [0, 20, 0, 0] 
+                  }
                 ],
                 styles: {
-                  header: { fontSize: 18, bold: true, margin: [0, 0, 0, 10] }
+                  header: { fontSize: 18, bold: true, alignment: 'center', margin: [0, 0, 0, 10] }
                 }
               };
+
               pdfMake.createPdf(docDefinition).download('результат.pdf');
             });
 
