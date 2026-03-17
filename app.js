@@ -2131,7 +2131,6 @@ app.get('/test/question', checkAuth, async (req, res) => {
       const scoresPerQuestion = questions.map((q, index) => {
         const userAnswer = answers[index];
         let questionScore = 0;
-
         const normalizeAnswer = (answer) => {
           if (!answer) return '';
           return String(answer)
@@ -2142,7 +2141,6 @@ app.get('/test/question', checkAuth, async (req, res) => {
             .replace(/\\'/g, "'")
             .replace(/°/g, 'deg');
         };
-
         if (q.type === 'multiple' && userAnswer && Array.isArray(userAnswer)) {
           const correctAnswers = q.correctAnswers.map(val => normalizeAnswer(val));
           const userAnswers = userAnswer.map(val => normalizeAnswer(val));
@@ -2210,7 +2208,6 @@ app.get('/test/question', checkAuth, async (req, res) => {
         }
         return questionScore;
       });
-
       score = scoresPerQuestion.reduce((sum, s) => sum + s, 0);
       const endTime = Date.now();
       const percentage = (score / totalPoints) * 100;
@@ -2218,7 +2215,6 @@ app.get('/test/question', checkAuth, async (req, res) => {
       const correctClicks = scoresPerQuestion.filter(s => s > 0).length;
       const totalQuestions = questions.length;
       const ipAddress = req.headers['x-forwarded-for'] || req.socket.remoteAddress;
-
       const existingResult = await db.collection('test_results').findOne({ testSessionId });
       if (!existingResult && !userTest.isSavingResult) {
         await db.collection('active_tests').updateOne(
@@ -2245,9 +2241,7 @@ app.get('/test/question', checkAuth, async (req, res) => {
         );
         logger.info(`Результат збережено для testSessionId: ${testSessionId} через недоступність тесту`);
       }
-
       await db.collection('active_tests').deleteOne({ user: req.user });
-
       return res.send(`
         <!DOCTYPE html>
         <html lang="uk">
@@ -2271,7 +2265,6 @@ app.get('/test/question', checkAuth, async (req, res) => {
     }
 
     const index = parseInt(req.query.index) || 0;
-
     if (index < 0 || index >= questions.length) {
       return res.status(400).send('Невірний номер питання');
     }
@@ -2279,7 +2272,7 @@ app.get('/test/question', checkAuth, async (req, res) => {
     const updateData = {
       currentQuestion: index,
       answerTimestamps: userTest.answerTimestamps || {},
-      suspiciousActivity: { 
+      suspiciousActivity: {
         timeAway: userTest.suspiciousActivity?.timeAway || 0,
         switchCount: userTest.suspiciousActivity?.switchCount || 0,
         responseTimes: userTest.suspiciousActivity?.responseTimes || [],
@@ -2308,7 +2301,7 @@ app.get('/test/question', checkAuth, async (req, res) => {
     const seconds = (remainingTime % 60).toString().padStart(2, '0');
 
     const selectedOptions = answers[index] || [];
-    const selectedOptionsString = JSON.stringify(selectedOptions).replace(/'/g, "\\'");
+    const selectedOptionsString = JSON.stringify(selectedOptions);
 
     const questionStartTime = userTest.questionStartTime || {};
     if (!questionStartTime[index]) {
@@ -2331,46 +2324,46 @@ app.get('/test/question', checkAuth, async (req, res) => {
             body { font-family: Arial, sans-serif; margin: 0; padding: 20px; padding-bottom: 80px; background-color: #f0f0f0; }
             h1 { font-size: 24px; text-align: center; }
             img { max-width: 100%; margin-bottom: 10px; display: block; margin-left: auto; margin-right: auto; }
-            .progress-bar { 
-              display: flex; 
-              flex-wrap: wrap; 
-              gap: 5px; 
-              margin-bottom: 20px; 
-              width: calc(100% - 40px); 
-              margin-left: auto; 
-              margin-right: auto; 
-              box-sizing: border-box; 
-              justify-content: center; 
-              align-items: center; 
+            .progress-bar {
+              display: flex;
+              flex-wrap: wrap;
+              gap: 5px;
+              margin-bottom: 20px;
+              width: calc(100% - 40px);
+              margin-left: auto;
+              margin-right: auto;
+              box-sizing: border-box;
+              justify-content: center;
+              align-items: center;
             }
-            .progress-circle { 
-              width: 40px; 
-              height: 40px; 
-              border-radius: 50%; 
-              display: flex; 
-              align-items: center; 
-              justify-content: center; 
-              font-size: 14px; 
-              flex-shrink: 0; 
+            .progress-circle {
+              width: 40px;
+              height: 40px;
+              border-radius: 50%;
+              display: flex;
+              align-items: center;
+              justify-content: center;
+              font-size: 14px;
+              flex-shrink: 0;
             }
-            .progress-circle.unanswered { 
-              background-color: red; 
-              color: white; 
+            .progress-circle.unanswered {
+              background-color: red;
+              color: white;
             }
-            .progress-circle.answered { 
-              background-color: green; 
-              color: white; 
+            .progress-circle.answered {
+              background-color: green;
+              color: white;
             }
-            .progress-line { 
-              width: 5px; 
-              height: 2px; 
-              background-color: #ccc; 
-              margin: 0 2px; 
-              align-self: center; 
-              flex-shrink: 0; 
+            .progress-line {
+              width: 5px;
+              height: 2px;
+              background-color: #ccc;
+              margin: 0 2px;
+              align-self: center;
+              flex-shrink: 0;
             }
-            .progress-line.answered { 
-              background-color: green; 
+            .progress-line.answered {
+              background-color: green;
             }
             .option-box { border: 2px solid #ccc; padding: 10px; margin: 5px 0; border-radius: 5px; cursor: pointer; font-size: 16px; user-select: none; }
             .option-box.selected { background-color: #90ee90; }
@@ -2396,29 +2389,29 @@ app.get('/test/question', checkAuth, async (req, res) => {
             #question-container { background-color: white; padding: 20px; border-radius: 8px; box-shadow: 0 0 10px rgba(0, 0, 0, 0.1); width: calc(100% - 40px); margin: 0 auto 20px auto; box-sizing: border-box; }
             #answers { margin-bottom: 20px; }
             .matching-container { display: flex; justify-content: space-between; flex-wrap: wrap; gap: 10px; }
-            .matching-column { 
-              width: 45%; 
-              display: flex; 
-              flex-direction: column; 
-              gap: 5px; 
-              box-sizing: border-box; 
+            .matching-column {
+              width: 45%;
+              display: flex;
+              flex-direction: column;
+              gap: 5px;
+              box-sizing: border-box;
             }
-            .matching-item { 
-              border: 2px solid #ccc; 
-              padding: 10px; 
-              margin: 0; 
-              border-radius: 5px; 
-              cursor: move; 
-              font-family: Arial, sans-serif; 
-              font-size: 16px; 
-              line-height: 1.5; 
-              min-height: 40px; 
-              display: flex; 
-              align-items: center; 
-              justify-content: flex-start; 
-              box-sizing: border-box; 
-              white-space: normal; 
-              overflow-wrap: break-word; 
+            .matching-item {
+              border: 2px solid #ccc;
+              padding: 10px;
+              margin: 0;
+              border-radius: 5px;
+              cursor: move;
+              font-family: Arial, sans-serif;
+              font-size: 16px;
+              line-height: 1.5;
+              min-height: 40px;
+              display: flex;
+              align-items: center;
+              justify-content: flex-start;
+              box-sizing: border-box;
+              white-space: normal;
+              overflow-wrap: break-word;
             }
             .matching-item.matched { background-color: #90ee90; }
             .blank-input { width: 100px; margin: 0 5px; padding: 5px; border: 1px solid #ccc; border-radius: 4px; display: inline-block; }
@@ -2426,130 +2419,65 @@ app.get('/test/question', checkAuth, async (req, res) => {
             .image-error { color: red; font-style: italic; text-align: center; margin-bottom: 10px; }
             @media (max-width: 400px) {
               h1 { font-size: 24px; }
-              .progress-bar { 
-                gap: 2px; 
-              }
-              .progress-circle { 
-                width: 20px; 
-                height: 20px; 
-                font-size: 8px; 
-              }
-              .progress-line { 
-                width: 3px; 
-              }
+              .progress-bar { gap: 2px; }
+              .progress-circle { width: 20px; height: 20px; font-size: 8px; }
+              .progress-line { width: 3px; }
               button { font-size: 16px; padding: 10px; }
               #timer { font-size: 20px; }
               .question-box h2 { font-size: 18px; }
               .matching-container { flex-direction: column; }
               .matching-column { width: 100%; }
               .blank-input { width: 80px; }
-              .option-box, .matching-item { 
-                font-size: 14px; 
-                padding: 8px; 
-                min-height: 40px; 
-                line-height: 1.5; 
-              }
+              .option-box, .matching-item { font-size: 14px; padding: 8px; min-height: 40px; line-height: 1.5; }
             }
             @media (min-width: 401px) and (max-width: 600px) {
               h1 { font-size: 28px; }
-              .progress-bar { 
-                gap: 3px; 
-              }
-              .progress-circle { 
-                width: 25px; 
-                height: 25px; 
-                font-size: 10px; 
-              }
-              .progress-line { 
-                width: 4px; 
-              }
+              .progress-bar { gap: 3px; }
+              .progress-circle { width: 25px; height: 25px; font-size: 10px; }
+              .progress-line { width: 4px; }
               button { font-size: 18px; padding: 15px; }
               #timer { font-size: 20px; }
               .question-box h2 { font-size: 20px; }
               .matching-container { flex-direction: column; }
               .matching-column { width: 100%; }
               .blank-input { width: 80px; }
-              .option-box, .matching-item { 
-                font-size: 18px; 
-                padding: 10px; 
-                min-height: 50px; 
-                line-height: 1.5; 
-              }
+              .option-box, .matching-item { font-size: 18px; padding: 10px; min-height: 50px; line-height: 1.5; }
             }
             @media (min-width: 601px) and (max-width: 900px) {
               h1 { font-size: 30px; }
-              .progress-bar { 
-                gap: 4px; 
-              }
-              .progress-circle { 
-                width: 30px; 
-                height: 30px; 
-                font-size: 12px; 
-              }
-              .progress-line { 
-                width: 5px; 
-              }
+              .progress-bar { gap: 4px; }
+              .progress-circle { width: 30px; height: 30px; font-size: 12px; }
+              .progress-line { width: 5px; }
               button { font-size: 18px; padding: 15px; }
               #timer { font-size: 22px; }
               .question-box h2 { font-size: 22px; }
               .matching-column { width: 45%; }
               .blank-input { width: 100px; }
-              .option-box, .matching-item { 
-                font-size: 18px; 
-                padding: 10px; 
-                min-height: 50px; 
-                line-height: 1.5; 
-              }
+              .option-box, .matching-item { font-size: 18px; padding: 10px; min-height: 50px; line-height: 1.5; }
             }
             @media (min-width: 901px) and (max-width: 1200px) {
               h1 { font-size: 32px; }
-              .progress-bar { 
-                gap: 5px; 
-              }
-              .progress-circle { 
-                width: 35px; 
-                height: 35px; 
-                font-size: 14px; 
-              }
-              .progress-line { 
-                width: 5px; 
-              }
+              .progress-bar { gap: 5px; }
+              .progress-circle { width: 35px; height: 35px; font-size: 14px; }
+              .progress-line { width: 5px; }
               button { font-size: 18px; padding: 15px; }
               #timer { font-size: 24px; }
               .question-box h2 { font-size: 24px; }
               .matching-column { width: 45%; }
               .blank-input { width: 100px; }
-              .option-box, .matching-item { 
-                font-size: 18px; 
-                padding: 10px; 
-                min-height: 50px; 
-                line-height: 1.5; 
-              }
+              .option-box, .matching-item { font-size: 18px; padding: 10px; min-height: 50px; line-height: 1.5; }
             }
             @media (min-width: 1201px) {
               h1 { font-size: 36px; }
-              .progress-bar { 
-                gap: 6px; 
-              }
-              .progress-circle { 
-                width: 40px; 
-                height: 40px; 
-                font-size: 16px; 
-              }
-              .progress-line { 
-                width: 6px; 
-              }
+              .progress-bar { gap: 6px; }
+              .progress-circle { width: 40px; height: 40px; font-size: 16px; }
+              .progress-line { width: 6px; }
               button { font-size: 20px; padding: 15px; }
               #timer { font-size: 26px; }
               .question-box h2 { font-size: 26px; }
               .matching-column { width: 45%; }
               .blank-input { width: 120px; }
-              .option-box, .matching-item { 
-                font-size: 20px; 
-                padding: 12px; 
-                min-height: 60px; 
-                line-height: 1.5; 
-              }
+              .option-box, .matching-item { font-size: 20px; padding: 12px; min-height: 60px; line-height: 1.5; }
             }
           </style>
         </head>
@@ -2592,10 +2520,11 @@ app.get('/test/question', checkAuth, async (req, res) => {
                            q.type === 'matching' ? 'Складіть правильні пари, перетягуючи елементи' :
                            q.type === 'fillblank' ? 'Заповніть пропуски у реченні' :
                            q.type === 'singlechoice' ? 'Виберіть правильну відповідь' : '';
+
     html += `
             <div class="question-box">
               <h2 id="question-text">${index + 1}. `;
-    
+   
     if (q.type === 'fillblank') {
       const userAnswers = Array.isArray(answers[index]) ? answers[index] : [];
       logger.info(`Частини питання fillblank для індексу ${index}`, { parts: q.text.split('___') });
@@ -2711,7 +2640,7 @@ app.get('/test/question', checkAuth, async (req, res) => {
             let lastMouseMoveTime = 0;
             let lastKeydownTime = 0;
             const debounceDelay = 100;
-            const blurDebounceDelay = 200; // Затримка для дебаунсингу подій blur
+            const blurDebounceDelay = 200;
             let blurTimeout = null;
             let selectedOptions = ${selectedOptionsString};
             let matchingPairs = ${JSON.stringify(answers[index] || [])};
@@ -2722,7 +2651,7 @@ app.get('/test/question', checkAuth, async (req, res) => {
             let hasMovedToNext = false;
             let questionStartTime = ${questionStartTime[index]};
 
-            // Функція для автоматичного збереження відповіді
+            // Автозбереження відповіді
             async function saveCurrentAnswer(index) {
               if (isSaving) return;
               isSaving = true;
@@ -2742,42 +2671,32 @@ app.get('/test/question', checkAuth, async (req, res) => {
                   }
                 }
                 const responseTime = (Date.now() - questionStartTime) / 1000;
-
                 const formData = new URLSearchParams();
                 formData.append('index', index);
-                const safeAnswer = JSON.stringify(answers).replace(/'/g, "\\'").replace(/"/g, '\\"');
+                const safeAnswer = JSON.stringify(answers);  // ЧИСТИЙ JSON без зайвого екранування
                 formData.append('answer', safeAnswer);
                 formData.append('timeAway', timeAway);
                 formData.append('switchCount', switchCount);
                 formData.append('responseTime', responseTime);
                 formData.append('activityCount', activityCount);
                 formData.append('_csrf', '${res.locals._csrf}');
-
-                console.log('Автозбереження відповіді перед завершенням тесту:', { index, answers: safeAnswer, responseTime });
-
+                console.log('Автозбереження:', { index, type: '${q.type}', answer: safeAnswer });
                 const response = await fetch('/answer', {
                   method: 'POST',
                   headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
                   body: formData
                 });
-
-                if (!response.ok) {
-                  const errorText = await response.text();
-                  throw new Error('HTTP-помилка! статус: ' + response.status + ' - ' + errorText);
-                }
-
+                if (!response.ok) throw new Error('HTTP ' + response.status);
                 const result = await response.json();
-                if (!result.success) {
-                  console.error('Помилка автозбереження відповіді:', result.error);
-                }
+                if (!result.success) console.error('Помилка автозбереження:', result.error);
               } catch (error) {
-                console.error('Помилка в автозбереженні відповіді:', error);
+                console.error('Помилка автозбереження:', error);
               } finally {
                 isSaving = false;
               }
             }
 
-            // Функція для збереження відповіді та переходу до наступного питання
+            // Збереження + наступне питання
             async function saveAndNext(index) {
               if (isSaving) return;
               isSaving = true;
@@ -2798,29 +2717,22 @@ app.get('/test/question', checkAuth, async (req, res) => {
                   }
                 }
                 const responseTime = (Date.now() - questionStartTime) / 1000;
-
                 const formData = new URLSearchParams();
                 formData.append('index', index);
-                const safeAnswer = JSON.stringify(answers).replace(/'/g, "\\'").replace(/"/g, '\\"');
+                const safeAnswer = JSON.stringify(answers);  // ЧИСТИЙ JSON
                 formData.append('answer', safeAnswer);
                 formData.append('timeAway', timeAway);
                 formData.append('switchCount', switchCount);
                 formData.append('responseTime', responseTime);
                 formData.append('activityCount', activityCount);
                 formData.append('_csrf', '${res.locals._csrf}');
-
-                console.log('Збереження даних у saveAndNext:', { timeAway, switchCount, responseTime, answer: safeAnswer });
-
+                console.log('saveAndNext:', { index, type: '${q.type}', answer: safeAnswer });
                 const response = await fetch('/answer', {
                   method: 'POST',
                   headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
                   body: formData
                 });
-
-                if (!response.ok) {
-                  throw new Error('HTTP-помилка! статус: ' + response.status);
-                }
-
+                if (!response.ok) throw new Error('HTTP ' + response.status);
                 const result = await response.json();
                 if (result.success) {
                   const nextIndex = index + 1;
@@ -2832,31 +2744,19 @@ app.get('/test/question', checkAuth, async (req, res) => {
                     if (nextIndex < ${questions.length}) {
                       window.location.href = '/test/question?index=' + nextIndex;
                     } else {
-                      setTimeout(() => {
-                        window.location.href = '/result';
-                      }, 300);
+                      setTimeout(() => window.location.href = '/result', 300);
                     }
                   });
                 } else {
-                  console.error('Помилка збереження відповіді:', result.error);
-                  alert('Помилка збереження відповіді: ' + result.error);
+                  console.error('Помилка збереження:', result.error);
+                  alert('Помилка збереження відповіді');
                 }
               } catch (error) {
                 console.error('Помилка в saveAndNext:', error);
-                alert('Не вдалося зберегти відповідь: ' + error.message);
+                alert('Не вдалося зберегти відповідь');
               } finally {
                 isSaving = false;
               }
-            }
-
-            // Показ модального вікна підтвердження завершення тесту
-            function showConfirm(index) {
-              document.getElementById('confirm-modal').style.display = 'block';
-            }
-
-            // Приховування модального вікна
-            function hideConfirm() {
-              document.getElementById('confirm-modal').style.display = 'none';
             }
 
             // Завершення тесту
@@ -2880,44 +2780,45 @@ app.get('/test/question', checkAuth, async (req, res) => {
                   }
                 }
                 const responseTime = (Date.now() - questionStartTime) / 1000;
-
                 const formData = new URLSearchParams();
                 formData.append('index', index);
-                const safeAnswer = JSON.stringify(answers).replace(/'/g, "\\'").replace(/"/g, '\\"');
+                const safeAnswer = JSON.stringify(answers);  // ЧИСТИЙ JSON
                 formData.append('answer', safeAnswer);
                 formData.append('timeAway', timeAway);
                 formData.append('switchCount', switchCount);
                 formData.append('responseTime', responseTime);
                 formData.append('activityCount', activityCount);
                 formData.append('_csrf', '${res.locals._csrf}');
-
-                console.log('Збереження даних у finishTest:', { timeAway, switchCount, responseTime, answer: safeAnswer });
-
+                console.log('finishTest:', { index, type: '${q.type}', answer: safeAnswer });
                 const response = await fetch('/answer', {
                   method: 'POST',
                   headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
                   body: formData
                 });
-
-                if (!response.ok) {
-                  throw new Error('HTTP-помилка! статус: ' + response.status);
-                }
-
+                if (!response.ok) throw new Error('HTTP ' + response.status);
                 const result = await response.json();
                 if (result.success) {
-                  setTimeout(() => {
-                    window.location.href = '/result';
-                  }, 300);
+                  setTimeout(() => window.location.href = '/result', 300);
                 } else {
-                  console.error('Помилка завершення тесту:', result.error);
-                  alert('Помилка завершення тесту: ' + result.error);
+                  console.error('Помилка завершення:', result.error);
+                  alert('Помилка завершення тесту');
                 }
               } catch (error) {
                 console.error('Помилка в finishTest:', error);
-                alert('Не вдалося завершити тест: ' + error.message);
+                alert('Не вдалося завершити тест');
               } finally {
                 isSaving = false;
               }
+            }
+
+            // Показ модального вікна підтвердження
+            function showConfirm(index) {
+              document.getElementById('confirm-modal').style.display = 'block';
+            }
+
+            // Приховування модального вікна
+            function hideConfirm() {
+              document.getElementById('confirm-modal').style.display = 'none';
             }
 
             // Оновлення глобального таймера
@@ -2929,17 +2830,13 @@ app.get('/test/question', checkAuth, async (req, res) => {
               const seconds = (remainingTime % 60).toString().padStart(2, '0');
               timerElement.textContent = 'Залишилось часу: ' + minutes + ' хв ' + seconds + ' с';
               lastGlobalUpdateTime = now;
-
               if (remainingTime <= 0) {
-                console.log('Глобальний таймер закінчився, збереження відповіді та перенаправлення через 1.5с');
+                console.log('Глобальний таймер закінчився');
                 saveCurrentAnswer(currentQuestionIndex).then(() => {
-                  setTimeout(() => {
-                    window.location.href = '/result';
-                  }, 1500); // Затримка 1.5 секунди
+                  setTimeout(() => window.location.href = '/result', 1500);
                 });
               }
             }
-
             setInterval(updateGlobalTimer, 1000);
 
             // Таймер для швидкого тесту
@@ -2963,20 +2860,7 @@ app.get('/test/question', checkAuth, async (req, res) => {
                   });
                 }
               }
-
-              const questionTimerInterval = setInterval(() => {
-                updateQuestionTimer();
-                if (currentQuestionIndex >= totalQuestions - 1 && questionTimeRemaining <= 0 && !hasMovedToNext) {
-                  console.log('Таймер швидкого тесту закінчився, збереження відповіді та перенаправлення через 1.5с');
-                  clearInterval(questionTimerInterval);
-                  saveCurrentAnswer(currentQuestionIndex).then(() => {
-                    setTimeout(() => {
-                      window.location.href = '/result';
-                    }, 1500); // Затримка 1.5 секунди
-                  });
-                }
-              }, 50);
-
+              const questionTimerInterval = setInterval(updateQuestionTimer, 50);
               document.addEventListener('visibilitychange', () => {
                 if (!document.hidden) {
                   updateGlobalTimer();
@@ -2991,15 +2875,14 @@ app.get('/test/question', checkAuth, async (req, res) => {
                 blurTimeout = setTimeout(() => {
                   if (lastBlurTime === 0) {
                     lastBlurTime = performance.now();
-                    switchCount = Math.min(switchCount + 1, 1000); // Обмеження switchCount
-                    console.log('Вкладка втратила фокус, початок підрахунку часу:', lastBlurTime, 'Кількість переключень:', switchCount);
+                    switchCount = Math.min(switchCount + 1, 1000);
+                    console.log('Blur: switchCount =', switchCount);
                   }
                   blurTimeout = null;
                 }, blurDebounceDelay);
               }
             });
 
-            // Відстеження повернення фокусу вкладки
             window.addEventListener('focus', () => {
               if (blurTimeout) {
                 clearTimeout(blurTimeout);
@@ -3007,36 +2890,15 @@ app.get('/test/question', checkAuth, async (req, res) => {
               }
               if (lastBlurTime > 0) {
                 const now = performance.now();
-                const awayDuration = Math.min((now - lastBlurTime) / 1000, 60); // Обмеження до 60 секунд
+                const awayDuration = Math.min((now - lastBlurTime) / 1000, 60);
                 timeAway += awayDuration;
-                console.log('Вкладка отримала фокус, накопичено часу поза вкладкою:', awayDuration, 'Загальний timeAway:', timeAway);
+                console.log('Focus: +timeAway =', awayDuration, 'total =', timeAway);
                 lastBlurTime = 0;
                 saveCurrentAnswer(currentQuestionIndex);
               }
             });
 
-            // Скидання questionStartTime після тривалого простою
-            document.addEventListener('visibilitychange', () => {
-              if (!document.hidden) {
-                const now = Date.now();
-                const timeSinceLastActivity = (now - lastActivityTime) / 1000;
-                if (timeSinceLastActivity > 300) { // Якщо простій більше 5 хвилин
-                  questionStartTime = now;
-                  console.log('Виявлено тривалий простій, скидання questionStartTime:', questionStartTime);
-                  fetch('/set-question-start-time?index=' + currentQuestionIndex, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-                    body: new URLSearchParams({ '_csrf': '${res.locals._csrf}' })
-                  });
-                }
-                updateGlobalTimer();
-                if (isQuickTest) {
-                  updateQuestionTimer();
-                }
-              }
-            });
-
-            // Дебаунсинг для руху миші
+            // Дебаунсинг активності
             function debounceMouseMove() {
               const now = Date.now();
               if (now - lastMouseMoveTime >= debounceDelay) {
@@ -3046,7 +2908,6 @@ app.get('/test/question', checkAuth, async (req, res) => {
               }
             }
 
-            // Дебаунсинг для натискання клавіш
             function debounceKeydown() {
               const now = Date.now();
               if (now - lastKeydownTime >= debounceDelay) {
@@ -3059,7 +2920,7 @@ app.get('/test/question', checkAuth, async (req, res) => {
             document.addEventListener('mousemove', debounceMouseMove);
             document.addEventListener('keydown', debounceKeydown);
 
-            // Обробка кліків по варіантах відповідей
+            // Обробка кліків по варіантах (для multiple/single/truefalse)
             document.querySelectorAll('.option-box:not(.draggable)').forEach(box => {
               box.addEventListener('click', () => {
                 const questionType = '${q.type}';
@@ -3081,37 +2942,27 @@ app.get('/test/question', checkAuth, async (req, res) => {
               });
             });
 
-            // Ініціалізація sortable для ordering
+            // Sortable для ordering
             const sortable = document.getElementById('sortable-options');
             if (sortable) {
               new Sortable(sortable, { animation: 150 });
             }
 
-            // Ініціалізація sortable для matching
+            // Drag-and-drop для matching
             const leftColumn = document.getElementById('left-column');
             const rightColumn = document.getElementById('right-column');
             if (leftColumn && rightColumn && '${q.type}' === 'matching') {
               new Sortable(leftColumn, {
                 group: 'matching',
                 animation: 150,
-                onStart: function(evt) {
-                  evt.item.classList.add('dragging');
-                },
-                onEnd: function(evt) {
-                  evt.item.classList.remove('dragging');
-                  updateMatchingPairs();
-                }
+                onStart: function(evt) { evt.item.classList.add('dragging'); },
+                onEnd: function(evt) { evt.item.classList.remove('dragging'); updateMatchingPairs(); }
               });
               new Sortable(rightColumn, {
                 group: 'matching',
                 animation: 150,
-                onStart: function(evt) {
-                  evt.item.classList.add('dragging');
-                },
-                onEnd: function(evt) {
-                  evt.item.classList.remove('dragging');
-                  updateMatchingPairs();
-                }
+                onStart: function(evt) { evt.item.classList.add('dragging'); },
+                onEnd: function(evt) { evt.item.classList.remove('dragging'); updateMatchingPairs(); }
               });
 
               function updateMatchingPairs() {
@@ -3126,6 +2977,7 @@ app.get('/test/question', checkAuth, async (req, res) => {
                     matchingPairs.push([leftValue, rightValue]);
                   }
                 });
+                console.log('Оновлено matchingPairs:', matchingPairs);
               }
 
               function resetMatchingPairs() {
@@ -3135,48 +2987,78 @@ app.get('/test/question', checkAuth, async (req, res) => {
                   const rightValue = item.dataset.value || '';
                   item.innerHTML = rightValue;
                 });
+                console.log('Скинуто matchingPairs');
               }
 
               const droppableItems = document.querySelectorAll('.droppable');
-              if (droppableItems.length > 0) {
-                droppableItems.forEach(item => {
-                  item.addEventListener('dragover', (e) => e.preventDefault());
-                  item.addEventListener('drop', (e) => {
-                    e.preventDefault();
-                    const draggable = document.querySelector('.dragging');
-                    if (draggable && draggable.classList.contains('draggable')) {
-                      const leftValue = draggable.dataset.value || '';
-                      const rightValue = item.dataset.value || '';
-                      if (leftValue && rightValue) {
-                        item.innerHTML = rightValue + ' <span class="matched"> (Зіставлено: ' + leftValue + ')</span>';
-                        const leftColumn = document.getElementById('left-column');
-                        const rightColumn = document.getElementById('right-column');
-                        const leftItems = Array.from(leftColumn.children);
-                        const rightItems = Array.from(rightColumn.children);
-                        const rightIndex = rightItems.indexOf(item);
-                        if (leftItems[rightIndex]) {
-                          leftColumn.insertBefore(draggable, leftItems[rightIndex]);
-                        } else {
-                          leftColumn.appendChild(draggable);
-                        }
-                        updateMatchingPairs();
+              droppableItems.forEach(item => {
+                item.addEventListener('dragover', (e) => e.preventDefault());
+                item.addEventListener('drop', (e) => {
+                  e.preventDefault();
+                  const draggable = document.querySelector('.dragging');
+                  if (draggable && draggable.classList.contains('draggable')) {
+                    const leftValue = draggable.dataset.value || '';
+                    const rightValue = item.dataset.value || '';
+                    if (leftValue && rightValue) {
+                      item.innerHTML = rightValue + ' <span class="matched"> (Зіставлено: ' + leftValue + ')</span>';
+                      const leftColumn = document.getElementById('left-column');
+                      const rightColumn = document.getElementById('right-column');
+                      const leftItems = Array.from(leftColumn.children);
+                      const rightItems = Array.from(rightColumn.children);
+                      const rightIndex = rightItems.indexOf(item);
+                      if (leftItems[rightIndex]) {
+                        leftColumn.insertBefore(draggable, leftItems[rightIndex]);
+                      } else {
+                        leftColumn.appendChild(draggable);
                       }
+                      updateMatchingPairs();
                     }
-                  });
+                  }
                 });
-              }
+              });
             }
+
+            // Ініціалізація таймерів та подій
+            updateGlobalTimer();
+            if (isQuickTest) {
+              const questionTimerInterval = setInterval(() => {
+                const now = Date.now();
+                const elapsed = Math.floor((now - questionStartTime) / 1000);
+                questionTimeRemaining = Math.max(0, timePerQuestion - elapsed);
+                const timerText = document.getElementById('timer-text');
+                const timerCircle = document.querySelector('#question-timer .timer-circle');
+                if (timerText && timerCircle) {
+                  timerText.textContent = Math.round(questionTimeRemaining);
+                  const circumference = 251;
+                  const offset = (1 - questionTimeRemaining / timePerQuestion) * circumference;
+                  timerCircle.style.strokeDashoffset = offset;
+                }
+                if (questionTimeRemaining <= 0 && currentQuestionIndex < totalQuestions - 1 && !hasMovedToNext) {
+                  hasMovedToNext = true;
+                  saveCurrentAnswer(currentQuestionIndex).then(() => {
+                    saveAndNext(currentQuestionIndex);
+                  });
+                }
+              }, 50);
+            }
+
+            document.addEventListener('visibilitychange', () => {
+              if (!document.hidden) {
+                updateGlobalTimer();
+                if (isQuickTest) updateQuestionTimer();
+              }
+            });
           </script>
         </body>
       </html>
     `;
+
     res.send(html);
   } catch (error) {
-    logger.error('Помилка в /test/question', { message: error.message, stack: error.stack, testNumber, testNames: Object.keys(testNames) });
+    logger.error('Помилка в /test/question', { message: error.message, stack: error.stack });
     res.status(500).send('Внутрішня помилка сервера. Спробуйте ще раз або зверніться до адміністратора.');
   } finally {
-    const endTime = Date.now();
-    logger.info('Маршрут /test/question виконано', { duration: `${endTime - startTime} мс` });
+    logger.info('Маршрут /test/question виконано', { duration: `${Date.now() - startTime} мс` });
   }
 });
 
@@ -3216,11 +3098,11 @@ app.post('/answer', checkAuth, express.urlencoded({ extended: true }), async (re
   const startTime = Date.now();
   try {
     if (req.user === 'admin') return res.redirect('/admin');
-    const { index, answer, timeAway, switchCount, responseTime, activityCount } = req.body;
 
-    if (!index || !answer) {
-      logger.error('Відсутні необхідні параметри в /answer', { index, answer });
-      return res.status(400).json({ success: false, error: 'Необхідно надати index та answer' });
+    const { index, answer, timeAway, switchCount, responseTime, activityCount } = req.body;
+    if (!index || answer === undefined) {
+      logger.error('Відсутні параметри в /answer', { index, answer });
+      return res.status(400).json({ success: false, error: 'Необхідно index та answer' });
     }
 
     let parsedAnswer;
@@ -3229,29 +3111,32 @@ app.post('/answer', checkAuth, express.urlencoded({ extended: true }), async (re
         if (answer.trim() === '') {
           parsedAnswer = [];
         } else {
-          logger.info('Парсинг відповіді в /answer', { answer });
           parsedAnswer = JSON.parse(answer);
+          logger.info('[ANSWER] Успішно розпарсено рядок', { index, parsedType: typeof parsedAnswer, length: parsedAnswer.length });
         }
-      } else {
+      } else if (Array.isArray(answer)) {
         parsedAnswer = answer;
+      } else {
+        parsedAnswer = [];
+      }
+
+      // Додаткове виправлення для matching (якщо прийшли об’єкти)
+      const userTest = await db.collection('active_tests').findOne({ user: req.user });
+      if (userTest?.questions?.[index]?.type === 'matching') {
+        if (Array.isArray(parsedAnswer) && parsedAnswer.length > 0 && typeof parsedAnswer[0] === 'object' && !Array.isArray(parsedAnswer[0])) {
+          logger.warn('[ANSWER] Matching: конвертуємо об’єкти в масиви пар');
+          parsedAnswer = parsedAnswer.map(p => [p.left || '', p.right || '']);
+        }
       }
     } catch (error) {
-      logger.error('Помилка парсингу відповіді в /answer', { answer, message: error.message, stack: error.stack });
-      return res.status(400).json({ success: false, error: 'Невірний формат відповіді' });
+      logger.error('[ANSWER] Помилка парсингу відповіді', { answer, error: error.message });
+      parsedAnswer = [];
     }
 
     const userTest = await db.collection('active_tests').findOne({ user: req.user });
     if (!userTest) {
-      const recentResult = await db.collection('test_results').findOne(
-        { user: req.user },
-        { sort: { endTime: -1 } }
-      );
-      if (recentResult) {
-        return res.json({ success: true });
-      } else {
-        logger.error('Тест не розпочато в /answer', { user: req.user });
-        return res.status(400).json({ success: false, error: 'Тест не розпочато' });
-      }
+      logger.warn('[ANSWER] Активний тест не знайдено');
+      return res.json({ success: true }); // не падаємо, просто ігноруємо
     }
 
     userTest.answers[index] = parsedAnswer;
@@ -3266,13 +3151,14 @@ app.post('/answer', checkAuth, express.urlencoded({ extended: true }), async (re
       { $set: { answers: userTest.answers, suspiciousActivity: userTest.suspiciousActivity } }
     );
 
+    logger.info('[ANSWER] Відповідь збережена', { index, type: userTest.questions?.[index]?.type, parsedAnswerLength: parsedAnswer.length });
+
     res.json({ success: true });
   } catch (error) {
-    logger.error('Помилка в /answer', { message: error.message, stack: error.stack });
+    logger.error('[ANSWER] Критична помилка', { message: error.message, stack: error.stack });
     res.status(500).json({ success: false, error: 'Помилка сервера' });
   } finally {
-    const endTime = Date.now();
-    logger.info('Маршрут /answer виконано', { duration: `${endTime - startTime} мс` });
+    logger.info('Маршрут /answer виконано', { duration: Date.now() - startTime });
   }
 });
 
@@ -3330,10 +3216,14 @@ function calculateQuestionScore(question, userAnswer) {
     }
 
     case 'matching': {
-      if (!Array.isArray(userAnswer) || userAnswer.length === 0) return 0;
+      if (!Array.isArray(userAnswer) || userAnswer.length === 0) {
+        logger.warn('[SCORE] Matching: відповідь не є масивом або порожня', { userAnswer });
+        return 0;
+      }
 
       let userPairs = userAnswer;
       if (userAnswer[0] && typeof userAnswer[0] === 'object' && !Array.isArray(userAnswer[0])) {
+        logger.warn('[SCORE] Matching: отримано об’єкти замість масивів — конвертуємо', { userAnswer });
         userPairs = userAnswer.map(p => [p.left || '', p.right || '']);
       }
 
@@ -3341,11 +3231,12 @@ function calculateQuestionScore(question, userAnswer) {
       const pairCount = correctPairs.length || 1;
       const partial = question.points / pairCount;
 
+      let correctCount = 0;
+
       correctPairs.forEach((correctPair, i) => {
         const userPair = userPairs[i] || ['', ''];
-
         if (!Array.isArray(userPair) || userPair.length !== 2) {
-          score -= partial;
+          logger.debug('[SCORE] Matching: пара не зіставлена або невалідна', { index: i });
           return;
         }
 
@@ -3355,12 +3246,14 @@ function calculateQuestionScore(question, userAnswer) {
         const rightUser    = normalize(userPair[1]);
 
         if (leftCorrect === leftUser && rightCorrect === rightUser) {
-          score += partial;
-        } else {
-          score -= partial;
+          correctCount++;
         }
       });
-      break;
+
+      score = correctCount * partial;
+      logger.debug('[SCORE] Matching: правильних пар ' + correctCount + ' з ' + pairCount + ', балів: ' + score.toFixed(2));
+
+      return Math.max(0, score);
     }
 
     case 'ordering': {
