@@ -1055,7 +1055,7 @@ app.get('/select-test', checkAuth, async (req, res) => {
               font-family: Arial, sans-serif; 
               text-align: center; 
               padding: 20px; 
-              padding-bottom: 80px; 
+              padding-bottom: 120px; 
               margin: 0; 
               background-color: #f5f5f5;
             }
@@ -1123,6 +1123,31 @@ app.get('/select-test', checkAuth, async (req, res) => {
                 min-height: 60px;
               }
             }
+
+            /* Стилі для кнопки Вийти — червона, фіксована внизу по центру */
+            #logout {
+              position: fixed;
+              bottom: 20px;
+              left: 50%;
+              transform: translateX(-50%);
+              background: #ef5350;           /* червоний колір */
+              color: white;
+              padding: 16px 32px;
+              font-size: 18px;
+              font-weight: bold;
+              border: none;
+              border-radius: 10px;
+              cursor: pointer;
+              min-height: 60px;
+              min-width: 180px;
+              box-shadow: 0 4px 10px rgba(0,0,0,0.15);
+              z-index: 100;
+            }
+
+            #logout:hover {
+              background: #d32f2f;
+              transform: translateX(-50%) translateY(-2px);
+            }
           </style>
         </head>
         <body>
@@ -1143,6 +1168,7 @@ app.get('/select-test', checkAuth, async (req, res) => {
 
           <!-- Кнопка Вийти — фіксована внизу по центру -->
           <button id="logout" onclick="logout()">Вийти</button>
+
           <script>
             async function logout() {
               console.log('Спроба вийти, CSRF-токен:', '${res.locals._csrf}');
