@@ -87,11 +87,6 @@ const client = new MongoClient(MONGODB_URI, {
   connectTimeoutMS: 5000,
   serverSelectionTimeoutMS: 5000
 });
-logger.info('Підключено до бази даних', {
-  databaseName: db.databaseName,
-  cluster: MONGODB_URI.split('@')[1]?.split('.')[0] || 'невідомо',
-  uriSnippet: MONGODB_URI.substring(0, 50) + '...'
-});
 let db;
 
 // Клас CacheManager
@@ -142,17 +137,48 @@ let testNames = {};
 // Підключення до MongoDB
 const connectToMongoDB = async (attempt = 1, maxAttempts = 3) => {
   try {
-    logger.info(`Спроба підключення до MongoDB (${attempt}/${maxAttempts})`);
+    logger.info(`Спроба підключення до MongoDB (${attempt}/${maxAttempts})`, {
+      uriSnippet: MONGODB_URI.substring(0, 50) + '...', // без пароля
+      attempt
+    });
+
     const startTime = Date.now();
     await client.connect();
+
     db = client.db('alpha');
-    logger.info(`Підключено до MongoDB за ${Date.now() - startTime} мс`, { databaseName: db.databaseName });
+
+    // Перевірка, чи база дійсно існує і доступна
+    const dbName = db.databaseName;
+    const collections = await db.listCollections().toArray();
+    const collectionNames = collections.map(c => c.name);
+
+    logger.info(`Підключено до MongoDB за ${Date.now() - startTime} мс`, {
+      databaseName: dbName,
+      cluster: MONGODB_URI.split('@')[1]?.split('.')[0] || 'невідомо',
+      collectionsCount: collectionNames.length,
+      collections: collectionNames.slice(0, 10).join(', ') + (collectionNames.length > 10 ? '...' : ''),
+      hasTestResults: collectionNames.includes('test_results')
+    });
+
+    // Якщо колекції test_results немає — попереджаємо
+    if (!collectionNames.includes('test_results')) {
+      logger.warn('Колекція test_results відсутня в базі alpha — результати тестів не будуть відображатися!');
+    }
+
   } catch (error) {
-    logger.error('Помилка підключення', { message: error.message, stack: error.stack });
+    logger.error('Помилка підключення до MongoDB', {
+      message: error.message,
+      stack: error.stack,
+      attempt,
+      uriSnippet: MONGODB_URI.substring(0, 50) + '...'
+    });
+
     if (attempt < maxAttempts) {
+      logger.info(`Повторна спроба через 5 секунд...`);
       await new Promise(resolve => setTimeout(resolve, 5000));
       return connectToMongoDB(attempt + 1, maxAttempts);
     }
+
     throw error;
   }
 };
