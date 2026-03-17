@@ -3370,7 +3370,7 @@ app.get('/result', checkAuth, async (req, res) => {
     const testNumber = testData.testNumber;
     const answers = testData.answers || {};
     const startTimeMs = testData.startTime || Date.now();
-    const timeLimit = testData.timeLimit || 3600000;
+    const timeLimit = testData.timeLimit || 3600000; // 1 година за замовчуванням
     const suspiciousActivity = testData.suspiciousActivity || {};
     const variant = testData.variant || '';
     const testSessionId = testData.testSessionId;
@@ -3398,10 +3398,10 @@ app.get('/result', checkAuth, async (req, res) => {
     });
 
     const score = scoresPerQuestion.reduce((sum, s) => sum + s, 0);
-    const totalPoints = questions.reduce((sum, q) => sum + q.points, 0); // завжди актуальні!
+    const totalPoints = questions.reduce((sum, q) => sum + q.points, 0);
     const percentage = totalPoints > 0 ? (score / totalPoints) * 100 : 0;
 
-    const totalQuestions = questions.length; // завжди актуальні!
+    const totalQuestions = questions.length;
     const correctClicks = scoresPerQuestion.filter(s => s > 0).length;
 
     let endTime = testData.endTime ? new Date(testData.endTime).getTime() : Date.now();
