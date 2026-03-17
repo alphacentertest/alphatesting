@@ -3175,6 +3175,134 @@ app.post('/answer', checkAuth, express.urlencoded({ extended: true }), async (re
   }
 });
 
+/**
+ * Обчислює точний бал за одне питання з урахуванням часткових балів і штрафів
+ * @param {Object} question - об'єкт питання з бази (type, points, correctAnswers, correctPairs тощо)
+ * @param {any} userAnswer - відповідь користувача (масив або значення)
+ * @returns {number} точний бал за питання (може бути дробовим)
+ */
+function calculateQuestionScore(question, userAnswer) {
+  let score = 0;
+
+  // Визначаємо кількість елементів для розподілу балів
+  let numElements = 1;
+  switch (question.type) {
+    case 'multiple':
+    case 'fillblank':
+      numElements = question.correctAnswers?.length || 1;
+      break;
+    case 'matching':
+      numElements = question.correctPairs?.length || 1;
+      break;
+    case 'ordering':
+      numElements = question.correctAnswers?.length || 1;
+      break;
+    default:
+      numElements = 1;
+  }
+
+  const partial = question.points / numElements;
+
+  const normalize = (val) => String(val || '')
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, ' ')
+    .replace(/[^a-z0-9а-яіїєґ\s]/gi, '');
+
+  switch (question.type) {
+    case 'multiple':
+      if (!Array.isArray(userAnswer)) return 0;
+      const correctSet = new Set(question.correctAnswers.map(normalize));
+      const userSet = new Set(userAnswer.map(normalize));
+
+      // + за кожну правильну
+      correctSet.forEach(c => {
+        if (userSet.has(c)) score += partial;
+      });
+
+      // - за кожну зайву (повний штраф, як ти просив)
+      userSet.forEach(u => {
+        if (!correctSet.has(u)) score -= partial;
+      });
+      break;
+
+    case 'fillblank':
+      if (!Array.isArray(userAnswer) || userAnswer.length !== question.correctAnswers.length) return 0;
+
+      question.correctAnswers.forEach((correct, i) => {
+        const userVal = normalize(userAnswer[i]);
+        let isCorrect = false;
+
+        if (correct.includes('-')) {
+          const [min, max] = correct.split('-').map(Number);
+          const val = Number(userVal);
+          isCorrect = !isNaN(val) && val >= min && val <= max;
+        } else {
+          isCorrect = userVal === normalize(correct);
+        }
+
+        if (isCorrect) score += partial;
+        else score -= partial; // повний штраф за неправильний пропуск
+      });
+      break;
+
+    case 'matching':
+      if (!Array.isArray(userAnswer) || userAnswer.length !== question.correctPairs.length) return 0;
+
+      question.correctPairs.forEach((correctPair, i) => {
+        const userPair = userAnswer[i];
+        if (!userPair || userPair.length !== 2) {
+          score -= partial; // повний штраф, якщо пара не зіставлена
+          return;
+        }
+
+        const leftCorrect  = normalize(correctPair[0]);
+        const rightCorrect = normalize(correctPair[1]);
+        const leftUser     = normalize(userPair[0]);
+        const rightUser    = normalize(userPair[1]);
+
+        if (leftCorrect === leftUser && rightCorrect === rightUser) {
+          score += partial;
+        } else {
+          score -= partial; // повний штраф за неправильну пару
+        }
+      });
+      break;
+
+    case 'ordering':
+      if (!Array.isArray(userAnswer)) return 0;
+      const correctOrder = question.correctAnswers.map(normalize);
+      const userOrder    = userAnswer.map(normalize);
+
+      correctOrder.forEach((correct, i) => {
+        if (userOrder[i] === correct) score += partial;
+        else score -= partial; // повний штраф за неправильну позицію
+      });
+      break;
+
+    default: // singlechoice, truefalse, input — все або нічого
+      let isCorrect = false;
+
+      if (question.type === 'singlechoice' || question.type === 'truefalse') {
+        isCorrect = normalize(userAnswer) === normalize(question.correctAnswer || question.correctAnswers?.[0]);
+      } else if (question.type === 'input') {
+        const correct = question.correctAnswers?.[0];
+        if (correct?.includes('-')) {
+          const [min, max] = correct.split('-').map(Number);
+          const val = Number(normalize(userAnswer));
+          isCorrect = !isNaN(val) && val >= min && val <= max;
+        } else {
+          isCorrect = normalize(userAnswer) === normalize(correct);
+        }
+      }
+
+      score = isCorrect ? question.points : 0;
+      break;
+  }
+
+  return Math.max(0, score); // не нижче нуля
+}
+
 // Маршрут для відображення результатів тесту (для користувача після завершення)
 app.get('/result', checkAuth, async (req, res) => {
   const startTime = Date.now();
@@ -3204,110 +3332,10 @@ app.get('/result', checkAuth, async (req, res) => {
       !q.variant || q.variant === '' || q.variant === variant
     );
 
-    // Підрахунок точних часткових балів
+    // Підрахунок балів за допомогою функції
     const scoresPerQuestion = questions.map((q, displayIndex) => {
       const userAnswer = answers[displayIndex];
-      let questionScore = 0;
-
-      let numElements = 1;
-      switch (q.type) {
-        case 'multiple':
-        case 'fillblank':
-          numElements = q.correctAnswers?.length || 1;
-          break;
-        case 'matching':
-          numElements = q.correctPairs?.length || 1;
-          break;
-        case 'ordering':
-          numElements = q.correctAnswers?.length || 1;
-          break;
-        default:
-          numElements = 1;
-      }
-
-      const partial = q.points / numElements;
-
-      const normalize = (val) => String(val || '')
-        .trim()
-        .toLowerCase()
-        .replace(/\s+/g, ' ')
-        .replace(/[^a-z0-9а-яіїєґ\s]/gi, '');
-
-      switch (q.type) {
-        case 'multiple':
-          if (!Array.isArray(userAnswer)) break;
-          const correctSet = new Set(q.correctAnswers.map(normalize));
-          const userSet = new Set(userAnswer.map(normalize));
-          correctSet.forEach(c => { if (userSet.has(c)) questionScore += partial; });
-          userSet.forEach(u => { if (!correctSet.has(u)) questionScore -= partial / 2; });
-          break;
-
-        case 'fillblank':
-          if (!Array.isArray(userAnswer) || userAnswer.length !== q.correctAnswers.length) break;
-          q.correctAnswers.forEach((correct, i) => {
-            const userVal = normalize(userAnswer[i]);
-            let isCorrect = false;
-            if (correct.includes('-')) {
-              const [min, max] = correct.split('-').map(Number);
-              const val = Number(userVal);
-              isCorrect = !isNaN(val) && val >= min && val <= max;
-            } else {
-              isCorrect = userVal === normalize(correct);
-            }
-            if (isCorrect) questionScore += partial;
-            else questionScore -= partial / 2;
-          });
-          break;
-
-        case 'matching':
-          if (!Array.isArray(userAnswer) || userAnswer.length !== q.correctPairs.length) break;
-          q.correctPairs.forEach((correctPair, i) => {
-            const userPair = userAnswer[i];
-            if (!userPair || userPair.length !== 2) {
-              questionScore -= partial / 2;
-              return;
-            }
-            const leftCorrect  = normalize(correctPair[0]);
-            const rightCorrect = normalize(correctPair[1]);
-            const leftUser     = normalize(userPair[0]);
-            const rightUser    = normalize(userPair[1]);
-            if (leftCorrect === leftUser && rightCorrect === rightUser) {
-              questionScore += partial;
-            } else {
-              questionScore -= partial / 2;
-            }
-          });
-          break;
-
-        case 'ordering':
-          if (!Array.isArray(userAnswer)) break;
-          const correctOrder = q.correctAnswers.map(normalize);
-          const userOrder    = userAnswer.map(normalize);
-          correctOrder.forEach((correct, i) => {
-            if (userOrder[i] === correct) questionScore += partial;
-            else questionScore -= partial / 2;
-          });
-          break;
-
-        default:
-          let isCorrect = false;
-          if (q.type === 'singlechoice' || q.type === 'truefalse') {
-            isCorrect = normalize(userAnswer) === normalize(q.correctAnswer || q.correctAnswers?.[0]);
-          } else if (q.type === 'input') {
-            const correct = q.correctAnswers?.[0];
-            if (correct?.includes('-')) {
-              const [min, max] = correct.split('-').map(Number);
-              const val = Number(normalize(userAnswer));
-              isCorrect = !isNaN(val) && val >= min && val <= max;
-            } else {
-              isCorrect = normalize(userAnswer) === normalize(correct);
-            }
-          }
-          questionScore = isCorrect ? q.points : 0;
-          break;
-      }
-
-      return Math.max(0, questionScore);
+      return calculateQuestionScore(q, userAnswer);
     });
 
     const exactScore = scoresPerQuestion.reduce((sum, s) => sum + s, 0);
@@ -3405,7 +3433,7 @@ app.get('/result', checkAuth, async (req, res) => {
             .circle-container { position: relative; width: 180px; height: 180px; margin: 0 auto 30px; }
             .circle-bg { stroke: #e0e0e0; stroke-width: 12; fill: none; }
             .circle { stroke: #4CAF50; stroke-width: 12; fill: none; stroke-dasharray: 530; animation: fill 1.8s forwards; }
-            .percentage { position: absolute; top: 50%; left: 50%; transform: translate(-50%,-50%); font-size: 42px; font-weight: bold; }
+            .percentage { position: absolute; top: 50%; left: 50%; transform: translate(-50%,-50%); font-size: 42px; font-weight: bold; color: #333; }
             .summary { font-size: 20px; line-height: 1.6; margin: 20px 0 40px; text-align: left; }
             .buttons { margin-top: 30px; }
             button { padding: 14px 28px; margin: 10px; border: none; border-radius: 8px; font-size: 18px; cursor: pointer; }
@@ -3507,107 +3535,7 @@ app.get('/results', checkAuth, async (req, res) => {
 
     const scoresPerQuestion = questions.map((q, displayIndex) => {
       const userAnswer = answers[displayIndex];
-      let questionScore = 0;
-
-      let numElements = 1;
-      switch (q.type) {
-        case 'multiple':
-        case 'fillblank':
-          numElements = q.correctAnswers?.length || 1;
-          break;
-        case 'matching':
-          numElements = q.correctPairs?.length || 1;
-          break;
-        case 'ordering':
-          numElements = q.correctAnswers?.length || 1;
-          break;
-        default:
-          numElements = 1;
-      }
-
-      const partial = q.points / numElements;
-
-      const normalize = (val) => String(val || '')
-        .trim()
-        .toLowerCase()
-        .replace(/\s+/g, ' ')
-        .replace(/[^a-z0-9а-яіїєґ\s]/gi, '');
-
-      switch (q.type) {
-        case 'multiple':
-          if (!Array.isArray(userAnswer)) break;
-          const correctSet = new Set(q.correctAnswers.map(normalize));
-          const userSet = new Set(userAnswer.map(normalize));
-          correctSet.forEach(c => { if (userSet.has(c)) questionScore += partial; });
-          userSet.forEach(u => { if (!correctSet.has(u)) questionScore -= partial / 2; });
-          break;
-
-        case 'fillblank':
-          if (!Array.isArray(userAnswer) || userAnswer.length !== q.correctAnswers.length) break;
-          q.correctAnswers.forEach((correct, i) => {
-            const userVal = normalize(userAnswer[i]);
-            let isCorrect = false;
-            if (correct.includes('-')) {
-              const [min, max] = correct.split('-').map(Number);
-              const val = Number(userVal);
-              isCorrect = !isNaN(val) && val >= min && val <= max;
-            } else {
-              isCorrect = userVal === normalize(correct);
-            }
-            if (isCorrect) questionScore += partial;
-            else questionScore -= partial / 2;
-          });
-          break;
-
-        case 'matching':
-          if (!Array.isArray(userAnswer) || userAnswer.length !== q.correctPairs.length) break;
-          q.correctPairs.forEach((correctPair, i) => {
-            const userPair = userAnswer[i];
-            if (!userPair || userPair.length !== 2) {
-              questionScore -= partial / 2;
-              return;
-            }
-            const leftCorrect  = normalize(correctPair[0]);
-            const rightCorrect = normalize(correctPair[1]);
-            const leftUser     = normalize(userPair[0]);
-            const rightUser    = normalize(userPair[1]);
-            if (leftCorrect === leftUser && rightCorrect === rightUser) {
-              questionScore += partial;
-            } else {
-              questionScore -= partial / 2;
-            }
-          });
-          break;
-
-        case 'ordering':
-          if (!Array.isArray(userAnswer)) break;
-          const correctOrder = q.correctAnswers.map(normalize);
-          const userOrder    = userAnswer.map(normalize);
-          correctOrder.forEach((correct, i) => {
-            if (userOrder[i] === correct) questionScore += partial;
-            else questionScore -= partial / 2;
-          });
-          break;
-
-        default:
-          let isCorrect = false;
-          if (q.type === 'singlechoice' || q.type === 'truefalse') {
-            isCorrect = normalize(userAnswer) === normalize(q.correctAnswer || q.correctAnswers?.[0]);
-          } else if (q.type === 'input') {
-            const correct = q.correctAnswers?.[0];
-            if (correct?.includes('-')) {
-              const [min, max] = correct.split('-').map(Number);
-              const val = Number(normalize(userAnswer));
-              isCorrect = !isNaN(val) && val >= min && val <= max;
-            } else {
-              isCorrect = normalize(userAnswer) === normalize(correct);
-            }
-          }
-          questionScore = isCorrect ? q.points : 0;
-          break;
-      }
-
-      return Math.max(0, questionScore);
+      return calculateQuestionScore(q, userAnswer);
     });
 
     const exactScore = scoresPerQuestion.reduce((sum, s) => sum + s, 0);
@@ -5524,7 +5452,7 @@ app.post('/admin/import-questions', ensureInitialized, checkAuth, checkAdmin, up
   }
 });
 
-// Маршрут для перегляду результатів тестів (адмін)
+// Маршрут для перегляду результатів тестів (адмін/інструктор)
 app.get('/admin/results', checkAuth, async (req, res) => {
   const startTime = Date.now();
   try {
@@ -5545,10 +5473,11 @@ app.get('/admin/results', checkAuth, async (req, res) => {
       <html lang="uk">
         <head>
           <meta charset="UTF-8">
+          <meta name="viewport" content="width=device-width, initial-scale=1.0">
           <title>Результати тестів</title>
           <style>
-            body { font-family: Arial, sans-serif; padding: 20px; background: #f5f5f5; }
-            .container { max-width: 1400px; margin: 0 auto; background: white; padding: 25px; border-radius: 12px; box-shadow: 0 4px 20px rgba(0,0,0,0.1); }
+            body { font-family: Arial, sans-serif; padding: 30px 20px; background: #f5f5f5; margin: 0; }
+            .container { max-width: 1400px; margin: 0 auto; background: white; padding: 30px; border-radius: 12px; box-shadow: 0 4px 20px rgba(0,0,0,0.1); }
             h1 { text-align: center; color: #333; margin-bottom: 25px; }
             table { border-collapse: collapse; width: 100%; margin-top: 20px; }
             th, td { border: 1px solid #ddd; padding: 12px; text-align: left; }
@@ -5605,110 +5534,10 @@ app.get('/admin/results', checkAuth, async (req, res) => {
           !q.variant || q.variant === '' || q.variant === result.variant
         );
 
-        // Перерахунок балів за новою логікою
+        // Перерахунок балів за допомогою функції
         const scoresPerQuestion = questions.map((q, idx) => {
           const userAnswer = result.answers[idx];
-          let questionScore = 0;
-
-          let numElements = 1;
-          switch (q.type) {
-            case 'multiple':
-            case 'fillblank':
-              numElements = q.correctAnswers?.length || 1;
-              break;
-            case 'matching':
-              numElements = q.correctPairs?.length || 1;
-              break;
-            case 'ordering':
-              numElements = q.correctAnswers?.length || 1;
-              break;
-            default:
-              numElements = 1;
-          }
-
-          const partial = q.points / numElements;
-
-          const normalize = (val) => String(val || '')
-            .trim()
-            .toLowerCase()
-            .replace(/\s+/g, ' ')
-            .replace(/[^a-z0-9а-яіїєґ\s]/gi, '');
-
-          switch (q.type) {
-            case 'multiple':
-              if (!Array.isArray(userAnswer)) break;
-              const correctSet = new Set(q.correctAnswers.map(normalize));
-              const userSet = new Set(userAnswer.map(normalize));
-              correctSet.forEach(c => { if (userSet.has(c)) questionScore += partial; });
-              userSet.forEach(u => { if (!correctSet.has(u)) questionScore -= partial / 2; });
-              break;
-
-            case 'fillblank':
-              if (!Array.isArray(userAnswer) || userAnswer.length !== q.correctAnswers.length) break;
-              q.correctAnswers.forEach((correct, i) => {
-                const userVal = normalize(userAnswer[i]);
-                let isCorrect = false;
-                if (correct.includes('-')) {
-                  const [min, max] = correct.split('-').map(Number);
-                  const val = Number(userVal);
-                  isCorrect = !isNaN(val) && val >= min && val <= max;
-                } else {
-                  isCorrect = userVal === normalize(correct);
-                }
-                if (isCorrect) questionScore += partial;
-                else questionScore -= partial / 2;
-              });
-              break;
-
-            case 'matching':
-              if (!Array.isArray(userAnswer) || userAnswer.length !== q.correctPairs.length) break;
-              q.correctPairs.forEach((correctPair, i) => {
-                const userPair = userAnswer[i];
-                if (!userPair || userPair.length !== 2) {
-                  questionScore -= partial / 2;
-                  return;
-                }
-                const leftCorrect  = normalize(correctPair[0]);
-                const rightCorrect = normalize(correctPair[1]);
-                const leftUser     = normalize(userPair[0]);
-                const rightUser    = normalize(userPair[1]);
-                if (leftCorrect === leftUser && rightCorrect === rightUser) {
-                  questionScore += partial;
-                } else {
-                  questionScore -= partial / 2;
-                }
-              });
-              break;
-
-            case 'ordering':
-              if (!Array.isArray(userAnswer)) break;
-              const correctOrder = q.correctAnswers.map(normalize);
-              const userOrder    = userAnswer.map(normalize);
-              correctOrder.forEach((correct, i) => {
-                if (userOrder[i] === correct) questionScore += partial;
-                else questionScore -= partial / 2;
-              });
-              break;
-
-            default:
-              let isCorrect = false;
-              if (q.type === 'singlechoice' || q.type === 'truefalse') {
-                isCorrect = normalize(userAnswer) === normalize(q.correctAnswer || q.correctAnswers?.[0]);
-              } else if (q.type === 'input') {
-                const correct = q.correctAnswers?.[0];
-                if (correct?.includes('-')) {
-                  const [min, max] = correct.split('-').map(Number);
-                  const val = Number(normalize(userAnswer));
-                  isCorrect = !isNaN(val) && val >= min && val <= max;
-                } else {
-                  isCorrect = normalize(userAnswer) === normalize(correct);
-                }
-              }
-              questionScore = isCorrect ? q.points : 0;
-              break;
-          }
-
-          return Math.max(0, questionScore);
+          return calculateQuestionScore(q, userAnswer);
         });
 
         const exactScore = scoresPerQuestion.reduce((sum, s) => sum + s, 0);
@@ -5761,10 +5590,12 @@ app.get('/admin/results', checkAuth, async (req, res) => {
 
     html += `
             </table>
+
             <script>
               async function viewResult(id) {
                 window.location.href = '/admin/view-result?id=' + id;
               }
+
               async function deleteResult(id) {
                 if (confirm('Видалити цей результат?')) {
                   const formData = new URLSearchParams();
@@ -5782,6 +5613,7 @@ app.get('/admin/results', checkAuth, async (req, res) => {
                   }
                 }
               }
+
               document.getElementById('search-form')?.addEventListener('submit', e => {
                 e.preventDefault();
                 const search = e.target.search.value;
@@ -5795,10 +5627,10 @@ app.get('/admin/results', checkAuth, async (req, res) => {
 
     res.send(html);
   } catch (error) {
-    logger.error('Помилка в /admin/results', error);
-    res.status(500).send('Помилка завантаження');
+    logger.error('Помилка в /admin/results', { message: error.message, stack: error.stack });
+    res.status(500).send('Помилка при завантаженні результатів');
   } finally {
-    logger.info('Маршрут /admin/results виконано');
+    logger.info('Маршрут /admin/results виконано', { duration: `${Date.now() - startTime} мс` });
   }
 });
 
@@ -5820,126 +5652,23 @@ app.get('/admin/view-result', checkAuth, async (req, res) => {
       return res.status(404).send('Результат не знайдено');
     }
 
-    // Завантажуємо всі питання тесту
     let allQuestions = await db.collection('questions')
       .find({ testNumber: result.testNumber })
       .sort({ order: 1 })
       .toArray();
 
-    // Фільтруємо тільки ті, що показувалися користувачу за його варіантом
     const questions = allQuestions.filter(q => 
       !q.variant || q.variant === '' || q.variant === result.variant
     );
 
-    // Підрахунок точних (неокруглених) часткових балів
+    // Використовуємо функцію для підрахунку
     const scoresPerQuestion = questions.map((q, displayIndex) => {
       const userAnswer = result.answers[displayIndex];
-      let questionScore = 0;
-
-      let numElements = 1;
-      switch (q.type) {
-        case 'multiple':
-        case 'fillblank':
-          numElements = q.correctAnswers?.length || 1;
-          break;
-        case 'matching':
-          numElements = q.correctPairs?.length || 1;
-          break;
-        case 'ordering':
-          numElements = q.correctAnswers?.length || 1;
-          break;
-        default:
-          numElements = 1;
-      }
-
-      const partial = q.points / numElements;
-
-      const normalize = (val) => String(val || '')
-        .trim()
-        .toLowerCase()
-        .replace(/\s+/g, ' ')
-        .replace(/[^a-z0-9а-яіїєґ\s]/gi, '');
-
-      switch (q.type) {
-        case 'multiple':
-          if (!Array.isArray(userAnswer)) break;
-          const correctSet = new Set(q.correctAnswers.map(normalize));
-          const userSet = new Set(userAnswer.map(normalize));
-          correctSet.forEach(c => { if (userSet.has(c)) questionScore += partial; });
-          userSet.forEach(u => { if (!correctSet.has(u)) questionScore -= partial / 2; });
-          break;
-
-        case 'fillblank':
-          if (!Array.isArray(userAnswer) || userAnswer.length !== q.correctAnswers.length) break;
-          q.correctAnswers.forEach((correct, i) => {
-            const userVal = normalize(userAnswer[i]);
-            let isCorrect = false;
-            if (correct.includes('-')) {
-              const [min, max] = correct.split('-').map(Number);
-              const val = Number(userVal);
-              isCorrect = !isNaN(val) && val >= min && val <= max;
-            } else {
-              isCorrect = userVal === normalize(correct);
-            }
-            if (isCorrect) questionScore += partial;
-            else questionScore -= partial / 2;
-          });
-          break;
-
-        case 'matching':
-          if (!Array.isArray(userAnswer) || userAnswer.length !== q.correctPairs.length) break;
-          q.correctPairs.forEach((correctPair, i) => {
-            const userPair = userAnswer[i];
-            if (!userPair || userPair.length !== 2) {
-              questionScore -= partial / 2;
-              return;
-            }
-            const leftCorrect  = normalize(correctPair[0]);
-            const rightCorrect = normalize(correctPair[1]);
-            const leftUser     = normalize(userPair[0]);
-            const rightUser    = normalize(userPair[1]);
-            if (leftCorrect === leftUser && rightCorrect === rightUser) {
-              questionScore += partial;
-            } else {
-              questionScore -= partial / 2;
-            }
-          });
-          break;
-
-        case 'ordering':
-          if (!Array.isArray(userAnswer)) break;
-          const correctOrder = q.correctAnswers.map(normalize);
-          const userOrder    = userAnswer.map(normalize);
-          correctOrder.forEach((correct, i) => {
-            if (userOrder[i] === correct) questionScore += partial;
-            else questionScore -= partial / 2;
-          });
-          break;
-
-        default: // singlechoice, truefalse, input
-          let isCorrect = false;
-          if (q.type === 'singlechoice' || q.type === 'truefalse') {
-            isCorrect = normalize(userAnswer) === normalize(q.correctAnswer || q.correctAnswers?.[0]);
-          } else if (q.type === 'input') {
-            const correct = q.correctAnswers?.[0];
-            if (correct?.includes('-')) {
-              const [min, max] = correct.split('-').map(Number);
-              const val = Number(normalize(userAnswer));
-              isCorrect = !isNaN(val) && val >= min && val <= max;
-            } else {
-              isCorrect = normalize(userAnswer) === normalize(correct);
-            }
-          }
-          questionScore = isCorrect ? q.points : 0;
-          break;
-      }
-
-      return Math.max(0, questionScore); // точне значення без округлення
+      return calculateQuestionScore(q, userAnswer);
     });
 
-    // Підсумкові значення з округленням тільки загальної суми
     const exactScore = scoresPerQuestion.reduce((sum, s) => sum + s, 0);
-    const roundedScore = Math.round(exactScore * 10) / 10; // округлюємо тільки тут
+    const roundedScore = Math.round(exactScore * 10) / 10;
     const totalPoints = questions.reduce((sum, q) => sum + q.points, 0);
     const percentage = totalPoints > 0 ? (exactScore / totalPoints) * 100 : 0;
     const roundedPercentage = Math.round(percentage * 10) / 10;
@@ -5947,7 +5676,6 @@ app.get('/admin/view-result', checkAuth, async (req, res) => {
     const totalQuestions = questions.length;
     const correctClicks = scoresPerQuestion.filter(s => s > 0).length;
 
-    // Підозріла активність
     const timeAwayPercent = result.suspiciousActivity?.timeAway && result.duration
       ? Math.round((result.suspiciousActivity.timeAway / result.duration) * 100)
       : 0;
@@ -5961,7 +5689,6 @@ app.get('/admin/view-result', checkAuth, async (req, res) => {
       ? result.suspiciousActivity.activityCounts.reduce((sum, c) => sum + (c || 0), 0)
       : 0;
 
-    // HTML-сторінка
     let html = `
       <!DOCTYPE html>
       <html lang="uk">
@@ -5970,17 +5697,15 @@ app.get('/admin/view-result', checkAuth, async (req, res) => {
           <meta name="viewport" content="width=device-width, initial-scale=1.0">
           <title>Деталі результату</title>
           <style>
-            body { font-family: Arial, sans-serif; padding: 20px; background: #f5f5f5; }
-            .container { max-width: 1200px; margin: 0 auto; background: white; padding: 25px; border-radius: 8px; box-shadow: 0 2px 15px rgba(0,0,0,0.1); }
-            h1 { text-align: center; color: #333; margin-bottom: 20px; }
+            body { font-family: Arial, sans-serif; padding: 30px 20px; background: #f5f5f5; }
+            .container { max-width: 1200px; margin: 0 auto; background: white; padding: 30px; border-radius: 12px; box-shadow: 0 4px 20px rgba(0,0,0,0.1); }
+            h1 { text-align: center; color: #333; margin-bottom: 25px; }
             table { border-collapse: collapse; width: 100%; margin: 20px 0; }
             th, td { border: 1px solid #ddd; padding: 12px; text-align: left; }
             th { background: #f2f2f2; font-weight: bold; }
-            .nav-btn { padding: 12px 24px; margin: 10px 5px; cursor: pointer; border: none; border-radius: 6px; background: #007bff; color: white; font-size: 16px; }
+            .summary { font-size: 20px; margin: 20px 0 40px; padding: 20px; background: #f8f9fa; border-radius: 8px; }
+            .nav-btn { padding: 12px 24px; margin: 10px 5px; cursor: pointer; border: none; border-radius: 8px; background: #007bff; color: white; }
             .nav-btn:hover { background: #0056b3; }
-            .details { white-space: pre-wrap; max-width: 400px; line-height: 1.6; }
-            .suspicious { color: #d32f2f; font-weight: bold; }
-            .summary { font-size: 18px; margin: 20px 0; padding: 15px; background: #f8f9fa; border-radius: 6px; }
           </style>
         </head>
         <body>
@@ -5990,9 +5715,10 @@ app.get('/admin/view-result', checkAuth, async (req, res) => {
             <div class="summary">
               <strong>Тест:</strong> ${testNames[result.testNumber]?.name?.replace(/"/g, '\\"') || 'Невідомий тест'}<br>
               <strong>Варіант:</strong> ${result.variant || 'Немає'}<br>
-              <strong>Загальний результат:</strong> ${roundedPercentage.toFixed(1)}% (${roundedScore.toFixed(1)} з ${totalPoints})<br>
-              <strong>Кількість питань:</strong> ${totalQuestions}<br>
-              <strong>Правильних відповідей:</strong> ${correctClicks}<br>
+              <strong>Бали:</strong> ${roundedScore.toFixed(1)} з ${totalPoints}<br>
+              <strong>Відсоток:</strong> ${roundedPercentage.toFixed(1)}%<br>
+              <strong>Питань:</strong> ${totalQuestions}<br>
+              <strong>Правильних:</strong> ${correctClicks}<br>
               <strong>Дата завершення:</strong> ${new Date(result.endTime).toLocaleString('uk-UA')}<br><br>
 
               <strong>Підозріла активність:</strong><br>
@@ -6010,10 +5736,9 @@ app.get('/admin/view-result', checkAuth, async (req, res) => {
               </tr>
     `;
 
-    // Виводимо відфільтровані питання з точними балами
     questions.forEach((question, index) => {
       const userAnswer = result.answers[index] !== undefined ? result.answers[index] : 'Не відповіли';
-      const questionScore = scoresPerQuestion[index]; // точне значення
+      const questionScore = scoresPerQuestion[index];
 
       let userAnswerDisplay = '—';
       if (Array.isArray(userAnswer)) {
@@ -6040,7 +5765,7 @@ app.get('/admin/view-result', checkAuth, async (req, res) => {
     html += `
             </table>
             <br>
-            <button class="nav-btn" onclick="window.location.href='/admin/results'">Назад до списку результатів</button>
+            <button class="nav-btn" onclick="window.location.href='/admin/results'">Назад до списку</button>
           </div>
         </body>
       </html>
@@ -6048,11 +5773,10 @@ app.get('/admin/view-result', checkAuth, async (req, res) => {
 
     res.send(html);
   } catch (error) {
-    logger.error('Помилка в /admin/view-result', { message: error.message, stack: error.stack });
-    res.status(500).send('Помилка при перегляді результату: ' + error.message);
+    logger.error('Помилка в /admin/view-result', error);
+    res.status(500).send('Помилка перегляду результату');
   } finally {
-    const endTime = Date.now();
-    logger.info('Маршрут /admin/view-result виконано', { duration: `${endTime - startTime} мс` });
+    logger.info('Маршрут /admin/view-result виконано');
   }
 });
 
