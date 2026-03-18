@@ -2127,7 +2127,7 @@ app.get('/instructions', checkAuth, (req, res) => {
   }
 });
 
-// Відображення питання тесту
+// Відображення питання тесту — з правильним переносом тексту цілими словами
 app.get('/test/question', checkAuth, async (req, res) => {
   const startTime = Date.now();
   try {
@@ -2138,7 +2138,19 @@ app.get('/test/question', checkAuth, async (req, res) => {
       return res.status(400).send('Тест не розпочато');
     }
 
-    const { questions, testNumber, answers, currentQuestion, startTime: testStartTime, timeLimit, isQuickTest, timePerQuestion, suspiciousActivity, variant, testSessionId } = userTest;
+    const { 
+      questions, 
+      testNumber, 
+      answers, 
+      currentQuestion, 
+      startTime: testStartTime, 
+      timeLimit, 
+      isQuickTest, 
+      timePerQuestion, 
+      suspiciousActivity, 
+      variant, 
+      testSessionId 
+    } = userTest;
 
     // Перевірка кешу тестів
     if (!testNames[testNumber]) {
@@ -2174,9 +2186,7 @@ app.get('/test/question', checkAuth, async (req, res) => {
           const isCorrect = correctAnswers.length === userAnswers.length &&
             correctAnswers.every(val => userAnswers.includes(val)) &&
             userAnswers.every(val => correctAnswers.includes(val));
-          if (isCorrect) {
-            questionScore = q.points;
-          }
+          if (isCorrect) questionScore = q.points;
         } else if (q.type === 'input' && userAnswer) {
           const normalizedUserAnswer = normalizeAnswer(userAnswer);
           const normalizedCorrectAnswer = normalizeAnswer(q.correctAnswers[0]);
@@ -2184,30 +2194,22 @@ app.get('/test/question', checkAuth, async (req, res) => {
             const [min, max] = normalizedCorrectAnswer.split('-').map(val => parseFloat(val.trim()));
             const userValue = parseFloat(normalizedUserAnswer);
             const isCorrect = !isNaN(userValue) && userValue >= min && userValue <= max;
-            if (isCorrect) {
-              questionScore = q.points;
-            }
+            if (isCorrect) questionScore = q.points;
           } else {
             const isCorrect = normalizedUserAnswer === normalizedCorrectAnswer;
-            if (isCorrect) {
-              questionScore = q.points;
-            }
+            if (isCorrect) questionScore = q.points;
           }
         } else if (q.type === 'ordering' && userAnswer && Array.isArray(userAnswer)) {
           const userAnswers = userAnswer.map(val => normalizeAnswer(val));
           const correctAnswers = q.correctAnswers.map(val => normalizeAnswer(val));
           const isCorrect = userAnswers.join(',') === correctAnswers.join(',');
-          if (isCorrect) {
-            questionScore = q.points;
-          }
+          if (isCorrect) questionScore = q.points;
         } else if (q.type === 'matching' && userAnswer && Array.isArray(userAnswer)) {
           const userPairs = userAnswer.map(pair => [normalizeAnswer(pair[0]), normalizeAnswer(pair[1])]);
           const correctPairs = q.correctPairs.map(pair => [normalizeAnswer(pair[0]), normalizeAnswer(pair[1])]);
           const isCorrect = userPairs.length === correctPairs.length &&
             userPairs.every(userPair => correctPairs.some(correctPair => userPair[0] === correctPair[0] && userPair[1] === correctPair[1]));
-          if (isCorrect) {
-            questionScore = q.points;
-          }
+          if (isCorrect) questionScore = q.points;
         } else if (q.type === 'fillblank' && userAnswer && Array.isArray(userAnswer)) {
           const userAnswers = userAnswer.map(val => normalizeAnswer(val));
           const correctAnswers = q.correctAnswers.map(val => normalizeAnswer(val));
@@ -2222,16 +2224,12 @@ app.get('/test/question', checkAuth, async (req, res) => {
                 return answer === correctAnswer;
               }
             });
-          if (isCorrect) {
-            questionScore = q.points;
-          }
+          if (isCorrect) questionScore = q.points;
         } else if (q.type === 'singlechoice' && userAnswer && Array.isArray(userAnswer)) {
           const userAnswers = userAnswer.map(val => normalizeAnswer(val));
           const correctAnswer = normalizeAnswer(q.correctAnswer);
           const isCorrect = userAnswers.length === 1 && userAnswers[0] === correctAnswer;
-          if (isCorrect) {
-            questionScore = q.points;
-          }
+          if (isCorrect) questionScore = q.points;
         }
         return questionScore;
       });
@@ -2330,12 +2328,12 @@ app.get('/test/question', checkAuth, async (req, res) => {
     const selectedOptions = answers[index] || [];
     const selectedOptionsString = JSON.stringify(selectedOptions);
 
-    const questionStartTime = userTest.questionStartTime || {};
-    if (!questionStartTime[index]) {
-      questionStartTime[index] = Date.now();
+    const questionStartTimeObj = userTest.questionStartTime || {};
+    if (!questionStartTimeObj[index]) {
+      questionStartTimeObj[index] = Date.now();
       await db.collection('active_tests').updateOne(
         { user: req.user },
-        { $set: { questionStartTime } }
+        { $set: { questionStartTime: questionStartTimeObj } }
       );
     }
 
@@ -2345,14 +2343,14 @@ app.get('/test/question', checkAuth, async (req, res) => {
         <head>
           <meta charset="UTF-8">
           <meta name="viewport" content="width=device-width, initial-scale=1.0">
-          <title>${testNames[testNumber]?.name.replace(/"/g, '\\"') || 'Невідомий тест'}</title>
+          <title>${testNames[testNumber]?.name?.replace(/"/g, '\\"') || 'Невідомий тест'}</title>
           <script src="https://cdnjs.cloudflare.com/ajax/libs/Sortable/1.15.0/Sortable.min.js"></script>
           <style>
             body {
               font-family: Arial, sans-serif;
               margin: 0;
               padding: 20px;
-              padding-bottom: 100px;
+              padding-bottom: 120px;
               background-color: #f0f0f0;
             }
             h1 {
@@ -2387,6 +2385,12 @@ app.get('/test/question', checkAuth, async (req, res) => {
               flex-shrink: 0;
               min-width: 38px;
               box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+              cursor: pointer;
+              transition: all 0.18s ease;
+            }
+            .progress-circle:hover {
+              transform: scale(1.15);
+              box-shadow: 0 4px 12px rgba(0,0,0,0.25);
             }
             .progress-circle.unanswered { background: #ff4d4d; color: white; }
             .progress-circle.answered   { background: #4CAF50; color: white; }
@@ -2421,46 +2425,56 @@ app.get('/test/question', checkAuth, async (req, res) => {
             #answers .blank-input {
               background: white;
               border: 2px solid #ddd;
+              box-sizing: border-box;
             }
             .option-box {
               border: 2px solid #ddd;
-              padding: 14px 18px;
-              margin: 8px 0;
-              border-radius: 8px;
+              padding: 16px 20px;
+              margin: 10px 0;
+              border-radius: 10px;
               cursor: pointer;
               font-size: 17px;
               user-select: none;
               transition: all 0.2s;
               background: white;
-              min-height: 60px; /* мінімальна висота */
-              height: auto;     /* розширюється автоматично */
+              min-height: 64px;
+              height: auto;
               display: flex;
               align-items: center;
               justify-content: flex-start;
               text-align: left;
-              box-sizing: border-box;
-              word-break: break-word; /* розбиває довгі слова */
-              overflow: hidden; /* ховає надлишок, але з height: auto не потрібно */
+              white-space: normal;              /* дозволити перенос */
+              overflow-wrap: break-word;        /* перенос цілими словами */
+              word-break: break-word;           /* розриває тільки дуже довгі слова */
+              hyphens: auto;                    /* автоматичні переноси за правилами мови */
+              line-height: 1.45;
+              overflow: visible;
             }
             .option-box:hover {
-              background: #f8f9fa !important;
+              background: #f8f9fa;
+              border-color: #bbb;
             }
             .option-box.selected {
               background: #d4edda !important;
               border-color: #28a745 !important;
               box-shadow: 0 0 0 3px rgba(40,167,69,0.3) !important;
             }
-
-            /* Для мобілок — ще більше свободи */
             @media (max-width: 600px) {
               .option-box {
                 font-size: 15px;
-                padding: 12px 16px;
+                padding: 14px 18px;
                 min-height: 60px;
-                height: auto;
+              }
+              .progress-circle {
+                width: 32px;
+                height: 32px;
+                font-size: 12px;
+                min-width: 32px;
+              }
+              .progress-line {
+                width: 5px;
               }
             }
-
             .option-box.draggable { cursor: move; }
             .option-box.dragging { opacity: 0.6; box-shadow: 0 4px 12px rgba(0,0,0,0.2); }
             .matching-container {
@@ -2476,24 +2490,25 @@ app.get('/test/question', checkAuth, async (req, res) => {
             }
             .matching-item {
               border: 2px solid #ddd;
-              padding: 14px 18px;
-              border-radius: 8px;
+              padding: 16px 20px;
+              border-radius: 10px;
               cursor: move;
               font-size: 17px;
               min-height: 70px;
-              height: 70px;
-              overflow: hidden;
-              text-overflow: ellipsis;
+              height: auto;
+              overflow: visible;
+              text-overflow: unset;
+              white-space: normal;
+              overflow-wrap: break-word;
+              word-break: break-word;
+              hyphens: auto;
               display: flex;
               align-items: center;
               justify-content: flex-start;
               background: white;
               transition: all 0.2s;
               box-sizing: border-box;
-              word-break: break-word;
             }
-            .matching-item:hover { background: #f8f9fa; }
-            .matching-item.matched { background: #d4edda; border-color: #28a745; }
             .button-container {
               position: fixed;
               bottom: 20px;
@@ -2596,42 +2611,24 @@ app.get('/test/question', checkAuth, async (req, res) => {
               padding: 14px 30px;
               font-size: 18px;
             }
-            @media (max-width: 600px) {
-              h1 { font-size: 24px; }
-              .progress-circle { width: 28px; height: 28px; font-size: 11px; min-width: 28px; }
-              .progress-line { width: 5px; height: 3px; }
-              .question-box { padding: 15px; }
-              .instruction { font-size: 15px; }
-              .option-box, .matching-item {
-                font-size: 15px;
-                padding: 12px 16px;
-                min-height: 55px;
-                height: 55px;
-              }
-              button {
-                font-size: 16px;
-                padding: 14px 20px;
-                min-height: 55px;
-              }
-              #timer { font-size: 22px; }
-              #question-timer { width: 80px; height: 80px; }
-              #question-timer .timer-text { font-size: 24px; }
-            }
-            @media (min-width: 601px) {
-              .matching-container { gap: 16px; }
-              .matching-item { padding: 16px 20px; font-size: 17px; min-height: 70px; height: 70px; }
-            }
           </style>
         </head>
         <body>
-          <h1>${testNames[testNumber]?.name.replace(/"/g, '\\"') || 'Невідомий тест'}</h1>
+          <h1>${testNames[testNumber]?.name?.replace(/"/g, '\\"') || 'Невідомий тест'}</h1>
           <div id="timer">Залишилось часу: ${minutes} хв ${seconds} с</div>
+
           <div class="progress-bar">
             ${progress.map((p, j) => `
-              <div class="progress-circle ${p.answered ? 'answered' : 'unanswered'}">${p.number}</div>
+              <div 
+                class="progress-circle ${p.answered ? 'answered' : 'unanswered'}" 
+                data-index="${j}"
+                onclick="goToQuestion(${j})"
+                title="Перейти до питання ${p.number}"
+              >${p.number}</div>
               ${j < progress.length - 1 ? '<div class="progress-line ' + (p.answered ? 'answered' : '') + '"></div>' : ''}
             `).join('')}
           </div>
+
           <div id="question-container">
     `;
 
@@ -2669,7 +2666,6 @@ app.get('/test/question', checkAuth, async (req, res) => {
    
     if (q.type === 'fillblank') {
       const userAnswers = Array.isArray(answers[index]) ? answers[index] : [];
-      logger.info(`Частини питання fillblank для індексу ${index}`, { parts: q.text.split('___') });
       const parts = q.text.split('___');
       let inputHtml = '';
       parts.forEach((part, i) => {
@@ -2768,6 +2764,7 @@ app.get('/test/question', checkAuth, async (req, res) => {
               <button onclick="hideConfirm()">Ні</button>
             </div>
           </div>
+
           <script>
             const startTime = ${testStartTime};
             const timeLimit = ${timeLimit};
@@ -2793,7 +2790,33 @@ app.get('/test/question', checkAuth, async (req, res) => {
             let lastGlobalUpdateTime = Date.now();
             let isSaving = false;
             let hasMovedToNext = false;
-            let questionStartTime = ${questionStartTime[index]};
+            let questionStartTime = ${questionStartTimeObj[index]};
+
+            // Функція переходу на інше питання
+            function goToQuestion(targetIndex) {
+              if (targetIndex === currentQuestionIndex) return;
+              saveCurrentAnswer(currentQuestionIndex).then(() => {
+                window.location.href = '/test/question?index=' + targetIndex;
+              }).catch(err => {
+                console.error('Помилка перед переходом:', err);
+                window.location.href = '/test/question?index=' + targetIndex;
+              });
+            }
+
+            // Вирівнювання висоти всіх matching-item
+            function equalizeMatchingHeights() {
+              const allItems = document.querySelectorAll('.matching-item');
+              if (allItems.length === 0) return;
+              let maxHeight = 0;
+              allItems.forEach(item => {
+                item.style.height = 'auto';
+                const height = item.getBoundingClientRect().height;
+                if (height > maxHeight) maxHeight = height;
+              });
+              allItems.forEach(item => {
+                item.style.height = maxHeight + 'px';
+              });
+            }
 
             // Автозбереження відповіді
             async function saveCurrentAnswer(index) {
@@ -2824,7 +2847,6 @@ app.get('/test/question', checkAuth, async (req, res) => {
                 formData.append('responseTime', responseTime);
                 formData.append('activityCount', activityCount);
                 formData.append('_csrf', '${res.locals._csrf}');
-                console.log('Автозбереження:', { index, type: '${q.type}', answer: safeAnswer });
                 const response = await fetch('/answer', {
                   method: 'POST',
                   headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
@@ -2870,7 +2892,6 @@ app.get('/test/question', checkAuth, async (req, res) => {
                 formData.append('responseTime', responseTime);
                 formData.append('activityCount', activityCount);
                 formData.append('_csrf', '${res.locals._csrf}');
-                console.log('saveAndNext:', { index, type: '${q.type}', answer: safeAnswer });
                 const response = await fetch('/answer', {
                   method: 'POST',
                   headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
@@ -2933,7 +2954,6 @@ app.get('/test/question', checkAuth, async (req, res) => {
                 formData.append('responseTime', responseTime);
                 formData.append('activityCount', activityCount);
                 formData.append('_csrf', '${res.locals._csrf}');
-                console.log('finishTest:', { index, type: '${q.type}', answer: safeAnswer });
                 const response = await fetch('/answer', {
                   method: 'POST',
                   headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
@@ -2955,17 +2975,14 @@ app.get('/test/question', checkAuth, async (req, res) => {
               }
             }
 
-            // Показ модального вікна підтвердження
             function showConfirm(index) {
               document.getElementById('confirm-modal').style.display = 'block';
             }
 
-            // Приховування модального вікна
             function hideConfirm() {
               document.getElementById('confirm-modal').style.display = 'none';
             }
 
-            // Оновлення глобального таймера
             function updateGlobalTimer() {
               const now = Date.now();
               const elapsedTime = Math.floor((now - startTime) / 1000);
@@ -2975,7 +2992,6 @@ app.get('/test/question', checkAuth, async (req, res) => {
               timerElement.textContent = 'Залишилось часу: ' + minutes + ' хв ' + seconds + ' с';
               lastGlobalUpdateTime = now;
               if (remainingTime <= 0) {
-                console.log('Глобальний таймер закінчився');
                 saveCurrentAnswer(currentQuestionIndex).then(() => {
                   setTimeout(() => window.location.href = '/result', 1500);
                 });
@@ -2983,7 +2999,6 @@ app.get('/test/question', checkAuth, async (req, res) => {
             }
             setInterval(updateGlobalTimer, 1000);
 
-            // Таймер для швидкого тесту
             if (isQuickTest) {
               function updateQuestionTimer() {
                 const now = Date.now();
@@ -3005,22 +3020,14 @@ app.get('/test/question', checkAuth, async (req, res) => {
                 }
               }
               const questionTimerInterval = setInterval(updateQuestionTimer, 50);
-              document.addEventListener('visibilitychange', () => {
-                if (!document.hidden) {
-                  updateGlobalTimer();
-                  updateQuestionTimer();
-                }
-              });
             }
 
-            // Відстеження втрати фокусу вкладки
             window.addEventListener('blur', () => {
               if (!blurTimeout) {
                 blurTimeout = setTimeout(() => {
                   if (lastBlurTime === 0) {
                     lastBlurTime = performance.now();
                     switchCount = Math.min(switchCount + 1, 1000);
-                    console.log('Blur: switchCount =', switchCount);
                   }
                   blurTimeout = null;
                 }, blurDebounceDelay);
@@ -3036,13 +3043,11 @@ app.get('/test/question', checkAuth, async (req, res) => {
                 const now = performance.now();
                 const awayDuration = Math.min((now - lastBlurTime) / 1000, 60);
                 timeAway += awayDuration;
-                console.log('Focus: +timeAway =', awayDuration, 'total =', timeAway);
                 lastBlurTime = 0;
                 saveCurrentAnswer(currentQuestionIndex);
               }
             });
 
-            // Дебаунсинг активності
             function debounceMouseMove() {
               const now = Date.now();
               if (now - lastMouseMoveTime >= debounceDelay) {
@@ -3064,7 +3069,6 @@ app.get('/test/question', checkAuth, async (req, res) => {
             document.addEventListener('mousemove', debounceMouseMove);
             document.addEventListener('keydown', debounceKeydown);
 
-            // Обробка кліків по варіантах — точна логіка для всіх типів
             document.querySelectorAll('.option-box:not(.draggable)').forEach(box => {
               box.style.pointerEvents = 'auto';
               box.style.cursor = 'pointer';
@@ -3076,16 +3080,8 @@ app.get('/test/question', checkAuth, async (req, res) => {
                 const questionType = '${q.type}';
                 const option = box.getAttribute('data-value');
 
-                console.log('Клік по варіанту:', {
-                  type: questionType,
-                  option: option,
-                  currentSelected: selectedOptions,
-                  boxClasses: box.className
-                });
-
                 if (['truefalse', 'multiple', 'singlechoice'].includes(questionType)) {
                   if (questionType === 'multiple') {
-                    // Для multiple — toggle (додавання/зняття)
                     const idx = selectedOptions.indexOf(option);
                     if (idx === -1) {
                       selectedOptions.push(option);
@@ -3095,12 +3091,9 @@ app.get('/test/question', checkAuth, async (req, res) => {
                       box.classList.remove('selected');
                     }
                   } else {
-                    // Для singlechoice та truefalse — вибір одного, повторний клік не знімає
                     if (selectedOptions[0] === option) {
-                      // Повторний клік по тому ж — нічого не робимо (залишається вибраним)
-                      console.log('Повторний клік по вже вибраному — залишаємо');
+                      // повторний клік — залишаємо
                     } else {
-                      // Клік по іншому — знімаємо з попереднього, додаємо до нового
                       document.querySelectorAll('.option-box:not(.draggable)').forEach(b => {
                         b.classList.remove('selected');
                       });
@@ -3108,21 +3101,15 @@ app.get('/test/question', checkAuth, async (req, res) => {
                       box.classList.add('selected');
                     }
                   }
-
-                  console.log('Оновлено selectedOptions:', selectedOptions);
-                } else {
-                  console.warn('Тип питання не підтримує клік:', questionType);
                 }
               });
             });
 
-            // Sortable для ordering
             const sortable = document.getElementById('sortable-options');
             if (sortable) {
               new Sortable(sortable, { animation: 150 });
             }
 
-            // Drag-and-drop для matching
             const leftColumn = document.getElementById('left-column');
             const rightColumn = document.getElementById('right-column');
             if (leftColumn && rightColumn && '${q.type}' === 'matching') {
@@ -3130,13 +3117,13 @@ app.get('/test/question', checkAuth, async (req, res) => {
                 group: 'matching',
                 animation: 150,
                 onStart: function(evt) { evt.item.classList.add('dragging'); },
-                onEnd: function(evt) { evt.item.classList.remove('dragging'); updateMatchingPairs(); }
+                onEnd: function(evt) { evt.item.classList.remove('dragging'); updateMatchingPairs(); equalizeMatchingHeights(); }
               });
               new Sortable(rightColumn, {
                 group: 'matching',
                 animation: 150,
                 onStart: function(evt) { evt.item.classList.add('dragging'); },
-                onEnd: function(evt) { evt.item.classList.remove('dragging'); updateMatchingPairs(); }
+                onEnd: function(evt) { evt.item.classList.remove('dragging'); updateMatchingPairs(); equalizeMatchingHeights(); }
               });
 
               function updateMatchingPairs() {
@@ -3151,7 +3138,6 @@ app.get('/test/question', checkAuth, async (req, res) => {
                     matchingPairs.push([leftValue, rightValue]);
                   }
                 });
-                console.log('Оновлено matchingPairs:', matchingPairs);
               }
 
               function resetMatchingPairs() {
@@ -3161,7 +3147,7 @@ app.get('/test/question', checkAuth, async (req, res) => {
                   const rightValue = item.dataset.value || '';
                   item.innerHTML = rightValue;
                 });
-                console.log('Скинуто matchingPairs');
+                equalizeMatchingHeights();
               }
 
               const droppableItems = document.querySelectorAll('.droppable');
@@ -3186,13 +3172,29 @@ app.get('/test/question', checkAuth, async (req, res) => {
                         leftColumn.appendChild(draggable);
                       }
                       updateMatchingPairs();
+                      equalizeMatchingHeights();
                     }
                   }
                 });
               });
+
+              window.addEventListener('load', equalizeMatchingHeights);
             }
 
-            // Ініціалізація таймерів та подій
+            function equalizeMatchingHeights() {
+              const allItems = document.querySelectorAll('.matching-item');
+              if (allItems.length === 0) return;
+              let maxHeight = 0;
+              allItems.forEach(item => {
+                item.style.height = 'auto';
+                const height = item.getBoundingClientRect().height;
+                if (height > maxHeight) maxHeight = height;
+              });
+              allItems.forEach(item => {
+                item.style.height = maxHeight + 'px';
+              });
+            }
+
             updateGlobalTimer();
             if (isQuickTest) {
               const questionTimerInterval = setInterval(() => {
@@ -3232,7 +3234,9 @@ app.get('/test/question', checkAuth, async (req, res) => {
     logger.error('Помилка в /test/question', { message: error.message, stack: error.stack });
     res.status(500).send('Внутрішня помилка сервера. Спробуйте ще раз або зверніться до адміністратора.');
   } finally {
-    logger.info('Маршрут /test/question виконано', { duration: `${Date.now() - startTime} мс` });
+    logger.info('Маршрут /test/question виконано', { 
+      duration: (Date.now() - startTime) + ' мс' 
+    });
   }
 });
 
@@ -3485,7 +3489,7 @@ function calculateQuestionScore(question, userAnswer) {
   return Math.max(0, score);
 }
 
-// Маршрут для відображення результатів тесту — фінальна стабільна версія (2026-03-17)
+// Маршрут для відображення результатів тесту — ВИПРАВЛЕНО підрахунок балів + центр відсотка + робочі кнопки
 app.get('/result', checkAuth, async (req, res) => {
   const startTime = Date.now();
   try {
@@ -3493,7 +3497,7 @@ app.get('/result', checkAuth, async (req, res) => {
 
     logger.info('[RESULT] Початок обробки результату', { user: req.user });
 
-    // 1. Спробуємо знайти активний тест або останній збережений результат
+    // 1. Знаходимо дані тесту
     let userTest = await db.collection('active_tests').findOne({ user: req.user });
     let testData;
     let dataSource = 'невідомо';
@@ -3513,13 +3517,9 @@ app.get('/result', checkAuth, async (req, res) => {
       }
       testData = recentResult;
       dataSource = 'test_results (останній)';
-      logger.info('[RESULT] Використано останній збережений результат', {
-        testSessionId: recentResult.testSessionId,
-        endTime: recentResult.endTime
-      });
     }
 
-    // 2. Витягуємо ключові поля з захистом
+    // 2. Витягуємо поля
     const testNumber     = testData.testNumber;
     const answers        = testData.answers || {};
     const startTimeMs    = testData.startTime || Date.now();
@@ -3533,12 +3533,11 @@ app.get('/result', checkAuth, async (req, res) => {
       return res.status(500).send('Помилка: не вдалося визначити номер тесту');
     }
 
-    // Нормалізація варіанту (гнучке порівняння)
+    // Нормалізація варіанту
     if (variant) {
       variant = String(variant).trim().toLowerCase().replace(/\s+/g, ' ');
       if (variant.startsWith('variant ')) variant = variant.replace('variant ', '');
       if (variant.startsWith('варіант ')) variant = variant.replace('варіант ', '');
-      logger.info('[RESULT] Нормалізований варіант', { original: testData.variant, normalized: variant });
     }
 
     logger.info('[RESULT] Основні дані', {
@@ -3555,31 +3554,23 @@ app.get('/result', checkAuth, async (req, res) => {
       .sort({ order: 1 })
       .toArray();
 
-    const questions = allQuestions.filter(q => {
+    let questions = allQuestions.filter(q => {
       if (!q.variant || q.variant === '') return true;
-
       const qVar = String(q.variant).trim().toLowerCase().replace(/\s+/g, ' ');
-      return (
-        qVar === variant ||
-        qVar === `variant ${variant}` ||
-        qVar === `варіант ${variant}` ||
-        qVar.includes(variant) ||
-        variant.includes(qVar)
-      );
+      return qVar === variant || qVar.includes(variant) || variant.includes(qVar);
     });
+
+    // Якщо після фільтрації питань 0 — беремо ВСІ (це найнадійніше)
+    if (questions.length === 0 && allQuestions.length > 0) {
+      logger.warn('[RESULT] Фільтр за варіантом дав 0 питань — використовуємо ВСІ питання тесту');
+      questions = [...allQuestions];
+    }
 
     logger.info('[RESULT] Питання після фільтрації', {
       allCount: allQuestions.length,
       filteredCount: questions.length,
-      variantUsed: variant || '(немає)',
-      variantsInDB: [...new Set(allQuestions.map(q => q.variant || 'без варіанту'))]
+      variantUsed: variant || '(немає)'
     });
-
-    // Fallback: якщо після фільтрації 0 питань — беремо всі
-    if (questions.length === 0 && allQuestions.length > 0) {
-      logger.warn('[RESULT] Фільтр за варіантом дав 0 питань — використовуємо всі');
-      questions = allQuestions;
-    }
 
     // 4. Розрахунок балів
     const scoresPerQuestion = questions.map((q, index) => {
@@ -3616,7 +3607,7 @@ app.get('/result', checkAuth, async (req, res) => {
 
     const ipAddress = req.headers['x-forwarded-for'] || req.socket.remoteAddress;
 
-    // 6. Збереження результату (якщо ще не збережено)
+    // 6. Збереження результату (якщо потрібно)
     const existingResult = await db.collection('test_results').findOne({ testSessionId });
 
     if (!existingResult) {
@@ -3649,14 +3640,11 @@ app.get('/result', checkAuth, async (req, res) => {
       );
 
       logger.info('[RESULT] Результат збережено успішно');
-    } else {
-      logger.info('[RESULT] Результат уже існує — пропускаємо збереження', { testSessionId });
     }
 
-    // 7. Видаляємо активний тест (якщо є)
+    // 7. Видаляємо активний тест
     if (userTest) {
       await db.collection('active_tests').deleteOne({ user: req.user });
-      logger.info('[RESULT] Активний тест видалено');
     }
 
     // 8. Форматування дати/часу
@@ -3674,7 +3662,7 @@ app.get('/result', checkAuth, async (req, res) => {
       logger.error('[RESULT] Помилка читання A.png', { message: error.message });
     }
 
-        // 10. HTML-результат з кружечками прогресу ПІД діаграмою і ПЕРЕД текстом
+    // 10. HTML-результат з центрованим відсотком і робочими кнопками
     const resultHtml = `
       <!DOCTYPE html>
       <html lang="uk">
@@ -3690,34 +3678,16 @@ app.get('/result', checkAuth, async (req, res) => {
               background-color: #f5f5f5;
               margin: 0;
             }
-            h1 {
-              color: #333;
-              margin-bottom: 30px;
-              font-size: 32px;
-            }
-            .result-section {
-              margin: 0 auto 40px;
-              max-width: 320px;
-            }
+            h1 { color: #333; margin-bottom: 30px; font-size: 32px; }
+            .result-section { margin: 0 auto 40px; max-width: 320px; }
             .result-container {
               position: relative;
               width: 180px;
               height: 180px;
               margin: 0 auto;
             }
-            .result-circle-bg {
-              stroke: #e0e0e0;
-              stroke-width: 12;
-              fill: none;
-            }
-            .result-circle {
-              stroke: #4CAF50;
-              stroke-width: 12;
-              fill: none;
-              stroke-dasharray: 530;
-              stroke-dashoffset: 530;
-              animation: fillCircle 1.8s ease-out forwards;
-            }
+            .result-circle-bg { stroke: #e0e0e0; stroke-width: 12; fill: none; }
+            .result-circle { stroke: #4CAF50; stroke-width: 12; fill: none; stroke-dasharray: 530; stroke-dashoffset: 530; animation: fillCircle 1.8s ease-out forwards; }
             .result-text {
               position: absolute;
               top: 50%;
@@ -3725,11 +3695,13 @@ app.get('/result', checkAuth, async (req, res) => {
               transform: translate(-50%, -50%);
               font-size: 48px;
               font-weight: bold;
-              color: #333;
+              fill: #333;
+              pointer-events: none;
+              text-anchor: middle;
+              dominant-baseline: middle;
+              alignment-baseline: middle;
               width: 100%;
               text-align: center;
-              pointer-events: none;
-              line-height: 1;
             }
             .progress-circles {
               display: flex;
@@ -3789,33 +3761,11 @@ app.get('/result', checkAuth, async (req, res) => {
 
             @media (max-width: 600px) {
               h1 { font-size: 26px; }
-              .result-section { max-width: 280px; }
-              .result-container { 
-                width: 140px; 
-                height: 140px; 
-              }
-              .result-text {
-                font-size: 38px;
-                top: 50%;
-                left: 50%;
-                transform: translate(-50%, -50%);
-              }
-              .progress-circle { 
-                width: 28px; 
-                height: 28px; 
-                font-size: 11px; 
-                min-width: 28px; 
-              }
+              .result-container { width: 140px; height: 140px; }
+              .result-text { font-size: 38px; }
+              .progress-circle { width: 28px; height: 28px; font-size: 11px; min-width: 28px; }
               .progress-circles { gap: 6px; }
               button { padding: 12px 24px; font-size: 16px; min-width: 140px; }
-            }
-
-            @media (max-width: 400px) {
-              .result-container { 
-                width: 120px; 
-                height: 120px; 
-              }
-              .result-text { font-size: 32px; }
             }
           </style>
           <script src="/pdfmake/pdfmake.min.js"></script>
@@ -3829,7 +3779,7 @@ app.get('/result', checkAuth, async (req, res) => {
               <svg width="100%" height="100%" viewBox="0 0 180 180" preserveAspectRatio="xMidYMid meet">
                 <circle class="result-circle-bg" cx="90" cy="90" r="78" />
                 <circle class="result-circle" cx="90" cy="90" r="78" />
-                <text x="90" y="90" class="result-text" text-anchor="middle" dominant-baseline="central">
+                <text x="90" y="90" class="result-text" text-anchor="middle" dominant-baseline="middle" alignment-baseline="middle">
                   ${Math.round(percentage)}%
                 </text>
               </svg>
@@ -3839,7 +3789,7 @@ app.get('/result', checkAuth, async (req, res) => {
           <div class="progress-circles">
             ${scoresPerQuestion.map((s, i) => {
               let colorClass = 'wrong';
-              if (s === questions[i].points) colorClass = 'correct';
+              if (s === questions[i]?.points) colorClass = 'correct';
               else if (s > 0) colorClass = 'partial';
               return `<div class="progress-circle ${colorClass}">${i + 1}</div>`;
             }).join('')}
@@ -3857,21 +3807,82 @@ app.get('/result', checkAuth, async (req, res) => {
             <button id="restart">Вихід</button>
           </div>
 
-          <!-- скрипт без змін -->
           <script>
-            // ... (твій попередній скрипт для pdf та кнопки виходу залишається без змін)
+            // Змінні для PDF — винесені в глобальний scope
+            const user = "${req.user.replace(/"/g, '\\"')}";
+            const testName = "${testNames[testNumber]?.name?.replace(/"/g, '\\"') || 'Невідомий тест'}";
+            const totalQuestions = ${totalQuestions};
+            const correctClicks = ${correctClicks};
+            const score = ${Math.round(score)};
+            const totalPoints = ${Math.round(totalPoints)};
+            const percentage = ${Math.round(percentage)};
+            const time = "${formattedTime.replace(/"/g, '\\"')}";
+            const date = "${formattedDate.replace(/"/g, '\\"')}";
+            const imageBase64 = "${imageBase64.replace(/"/g, '\\"')}";
+
+            document.addEventListener('DOMContentLoaded', () => {
+              const exportBtn = document.getElementById('exportPDF');
+              const restartBtn = document.getElementById('restart');
+
+              if (exportBtn) {
+                exportBtn.addEventListener('click', () => {
+                  if (typeof pdfMake === 'undefined' || !pdfMake.createPdf) {
+                    alert('PDF-генератор не завантажився. Оновіть сторінку або перевірте інтернет.');
+                    return;
+                  }
+
+                  const docDefinition = {
+                    content: [
+                      imageBase64 ? {
+                        image: 'data:image/png;base64,' + imageBase64,
+                        width: 50,
+                        alignment: 'center',
+                        margin: [0, 0, 0, 20]
+                      } : { text: 'Логотип відсутній', alignment: 'center', margin: [0, 0, 0, 20] },
+                      { text: 'Результат тесту користувача ' + user + ' з тесту ' + testName + ' складає ' + percentage + '%', style: 'header' },
+                      { text: 'Кількість питань: ' + totalQuestions, lineHeight: 2 },
+                      { text: 'Правильних відповідей: ' + correctClicks, lineHeight: 2 },
+                      { text: 'Набрано балів: ' + score, lineHeight: 2 },
+                      { text: 'Максимально можлива кількість балів: ' + totalPoints, lineHeight: 2 },
+                      {
+                        columns: [
+                          { text: 'Час: ' + time, width: '50%', lineHeight: 2 },
+                          { text: 'Дата: ' + date, width: '50%', alignment: 'right', lineHeight: 2 }
+                        ],
+                        margin: [0, 10, 0, 0]
+                      }
+                    ],
+                    styles: {
+                      header: { fontSize: 14, bold: true, margin: [0, 0, 0, 10], lineHeight: 2 }
+                    }
+                  };
+
+                  pdfMake.createPdf(docDefinition).download('результат.pdf');
+                });
+              } else {
+                console.error('Кнопка #exportPDF не знайдена');
+              }
+
+              if (restartBtn) {
+                restartBtn.addEventListener('click', () => {
+                  window.location.href = '/select-test';
+                });
+              } else {
+                console.error('Кнопка #restart не знайдена');
+              }
+            });
           </script>
         </body>
       </html>
     `;
-    
+
     res.send(resultHtml);
 
   } catch (error) {
-    logger.error('[RESULT] Критична помилка', { message: error.message, stack: error.stack, user: req.user });
-    res.status(500).send('Помилка при відображенні результатів: ' + error.message);
+    logger.error('[RESULT] Помилка', { message: error.message, stack: error.stack });
+    res.status(500).send('Помилка при завантаженні результатів');
   } finally {
-    logger.info('Маршрут /result завершено', { duration: Date.now() - startTime });
+    logger.info('Маршрут /result виконано', { duration: Date.now() - startTime });
   }
 });
 
