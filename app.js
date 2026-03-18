@@ -2498,16 +2498,17 @@ app.get('/test/question', checkAuth, async (req, res) => {
               height: auto;
               overflow: visible;
               text-overflow: unset;
-              white-space: normal;
-              overflow-wrap: break-word;
-              word-break: break-word;
-              hyphens: auto;
+              white-space: normal;              /* дозволити перенос */
+              overflow-wrap: break-word;        /* перенос цілими словами */
+              word-break: normal;               /* НЕ розривати слова посередині */
+              hyphens: none;                    /* вимкнути дефіси посеред слів */
               display: flex;
               align-items: center;
               justify-content: flex-start;
               background: white;
               transition: all 0.2s;
               box-sizing: border-box;
+              line-height: 1.45;
             }
             .button-container {
               position: fixed;
@@ -3782,10 +3783,10 @@ app.get('/result', checkAuth, async (req, res) => {
                 <circle class="result-circle" cx="90" cy="90" r="78" />
                 <text 
                   x="90" 
-                  y="92"                          <!-- зміщено на 2px вниз для візуального центру -->
+                  y="90" 
                   class="result-text" 
                   text-anchor="middle" 
-                  dominant-baseline="middle"      <!-- ключовий атрибут для вертикального центрування -->
+                  dominant-baseline="middle" 
                   alignment-baseline="middle"
                 >
                   ${Math.round(percentage)}%
