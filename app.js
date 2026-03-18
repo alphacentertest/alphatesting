@@ -2440,14 +2440,15 @@ app.get('/test/question', checkAuth, async (req, res) => {
               min-height: 64px;
               height: auto;
               display: flex;
-              align-items: flex-start;
+              align-items: center;
               justify-content: flex-start;
               text-align: left;
-              word-break: break-word;
-              hyphens: auto;
-              overflow: visible;
-              white-space: normal;
-              line-height: 1.45;
+              white-space: nowrap;           /* без переносів */
+              overflow: hidden;
+              text-overflow: ellipsis;
+              word-break: normal;
+              hyphens: none;
+              line-height: 1.4;
             }
             .option-box:hover {
               background: #f8f9fa;
@@ -2463,7 +2464,6 @@ app.get('/test/question', checkAuth, async (req, res) => {
                 font-size: 15px;
                 padding: 14px 18px;
                 min-height: 60px;
-                margin: 8px 0;
               }
               .progress-circle {
                 width: 32px;
@@ -2496,11 +2496,11 @@ app.get('/test/question', checkAuth, async (req, res) => {
               font-size: 17px;
               min-height: 70px;
               height: auto;
-              overflow: visible;
-              text-overflow: unset;
-              white-space: normal;
-              word-break: break-word;
-              hyphens: auto;
+              overflow: hidden;
+              text-overflow: ellipsis;
+              white-space: nowrap;
+              word-break: normal;
+              hyphens: none;
               display: flex;
               align-items: center;
               justify-content: flex-start;
@@ -2799,6 +2799,21 @@ app.get('/test/question', checkAuth, async (req, res) => {
               }).catch(err => {
                 console.error('Помилка перед переходом:', err);
                 window.location.href = '/test/question?index=' + targetIndex;
+              });
+            }
+
+            // Вирівнювання висоти всіх matching-item
+            function equalizeMatchingHeights() {
+              const allItems = document.querySelectorAll('.matching-item');
+              if (allItems.length === 0) return;
+              let maxHeight = 0;
+              allItems.forEach(item => {
+                item.style.height = 'auto';
+                const height = item.getBoundingClientRect().height;
+                if (height > maxHeight) maxHeight = height;
+              });
+              allItems.forEach(item => {
+                item.style.height = maxHeight + 'px';
               });
             }
 
@@ -3101,13 +3116,13 @@ app.get('/test/question', checkAuth, async (req, res) => {
                 group: 'matching',
                 animation: 150,
                 onStart: function(evt) { evt.item.classList.add('dragging'); },
-                onEnd: function(evt) { evt.item.classList.remove('dragging'); updateMatchingPairs(); }
+                onEnd: function(evt) { evt.item.classList.remove('dragging'); updateMatchingPairs(); equalizeMatchingHeights(); }
               });
               new Sortable(rightColumn, {
                 group: 'matching',
                 animation: 150,
                 onStart: function(evt) { evt.item.classList.add('dragging'); },
-                onEnd: function(evt) { evt.item.classList.remove('dragging'); updateMatchingPairs(); }
+                onEnd: function(evt) { evt.item.classList.remove('dragging'); updateMatchingPairs(); equalizeMatchingHeights(); }
               });
 
               function updateMatchingPairs() {
@@ -3131,6 +3146,7 @@ app.get('/test/question', checkAuth, async (req, res) => {
                   const rightValue = item.dataset.value || '';
                   item.innerHTML = rightValue;
                 });
+                equalizeMatchingHeights();
               }
 
               const droppableItems = document.querySelectorAll('.droppable');
@@ -3155,9 +3171,27 @@ app.get('/test/question', checkAuth, async (req, res) => {
                         leftColumn.appendChild(draggable);
                       }
                       updateMatchingPairs();
+                      equalizeMatchingHeights();
                     }
                   }
                 });
+              });
+
+              // Виклик вирівнювання після завантаження сторінки
+              window.addEventListener('load', equalizeMatchingHeights);
+            }
+
+            function equalizeMatchingHeights() {
+              const allItems = document.querySelectorAll('.matching-item');
+              if (allItems.length === 0) return;
+              let maxHeight = 0;
+              allItems.forEach(item => {
+                item.style.height = 'auto';
+                const height = item.getBoundingClientRect().height;
+                if (height > maxHeight) maxHeight = height;
+              });
+              allItems.forEach(item => {
+                item.style.height = maxHeight + 'px';
               });
             }
 
@@ -3201,8 +3235,8 @@ app.get('/test/question', checkAuth, async (req, res) => {
     res.status(500).send('Внутрішня помилка сервера. Спробуйте ще раз або зверніться до адміністратора.');
   } finally {
     logger.info('Маршрут /test/question виконано', { 
-    duration: (Date.now() - startTime) + ' мс' 
-  });
+      duration: (Date.now() - startTime) + ' мс' 
+    });
   }
 });
 
@@ -3455,7 +3489,7 @@ function calculateQuestionScore(question, userAnswer) {
   return Math.max(0, score);
 }
 
-// Маршрут для відображення результатів тесту — фінальна стабільна версія (2026-03-17)
+// Маршрут для відображення результатів тесту — фінальна стабільна версія (2026-03-18)
 app.get('/result', checkAuth, async (req, res) => {
   const startTime = Date.now();
   try {
@@ -3463,7 +3497,7 @@ app.get('/result', checkAuth, async (req, res) => {
 
     logger.info('[RESULT] Початок обробки результату', { user: req.user });
 
-    // 1. Спробуємо знайти активний тест або останній збережений результат
+    // 1. Знаходимо або активний тест, або останній збережений результат
     let userTest = await db.collection('active_tests').findOne({ user: req.user });
     let testData;
     let dataSource = 'невідомо';
@@ -3503,21 +3537,13 @@ app.get('/result', checkAuth, async (req, res) => {
       return res.status(500).send('Помилка: не вдалося визначити номер тесту');
     }
 
-    // Нормалізація варіанту (гнучке порівняння)
+    // Нормалізація варіанту
     if (variant) {
       variant = String(variant).trim().toLowerCase().replace(/\s+/g, ' ');
       if (variant.startsWith('variant ')) variant = variant.replace('variant ', '');
       if (variant.startsWith('варіант ')) variant = variant.replace('варіант ', '');
       logger.info('[RESULT] Нормалізований варіант', { original: testData.variant, normalized: variant });
     }
-
-    logger.info('[RESULT] Основні дані', {
-      dataSource,
-      testNumber,
-      variant: variant || '(немає)',
-      answersCount: Object.keys(answers).length,
-      testSessionId
-    });
 
     // 3. Завантаження питань + гнучка фільтрація
     let allQuestions = await db.collection('questions')
@@ -3538,18 +3564,17 @@ app.get('/result', checkAuth, async (req, res) => {
       );
     });
 
-    logger.info('[RESULT] Питання після фільтрації', {
-      allCount: allQuestions.length,
-      filteredCount: questions.length,
-      variantUsed: variant || '(немає)',
-      variantsInDB: [...new Set(allQuestions.map(q => q.variant || 'без варіанту'))]
-    });
-
     // Fallback: якщо після фільтрації 0 питань — беремо всі
     if (questions.length === 0 && allQuestions.length > 0) {
       logger.warn('[RESULT] Фільтр за варіантом дав 0 питань — використовуємо всі');
-      questions = allQuestions;
+      questions.push(...allQuestions);
     }
+
+    logger.info('[RESULT] Питання після фільтрації', {
+      allCount: allQuestions.length,
+      filteredCount: questions.length,
+      variantUsed: variant || '(немає)'
+    });
 
     // 4. Розрахунок балів
     const scoresPerQuestion = questions.map((q, index) => {
@@ -3564,15 +3589,6 @@ app.get('/result', checkAuth, async (req, res) => {
     const totalQuestions = questions.length;
     const correctClicks = scoresPerQuestion.filter(s => s > 0).length;
 
-    logger.info('[RESULT] Розраховано бали', {
-      score: score.toFixed(2),
-      totalPoints: totalPoints.toFixed(2),
-      percentage: percentage.toFixed(1) + '%',
-      totalQuestions,
-      correctClicks,
-      answered: Object.keys(answers).length
-    });
-
     // 5. Час та підозріла активність
     let endTime = testData.endTime ? new Date(testData.endTime).getTime() : Date.now();
     const maxEndTime = startTimeMs + timeLimit;
@@ -3586,7 +3602,7 @@ app.get('/result', checkAuth, async (req, res) => {
 
     const ipAddress = req.headers['x-forwarded-for'] || req.socket.remoteAddress;
 
-    // 6. Збереження результату (якщо ще не збережено)
+    // 6. Збереження результату (тільки якщо ще не збережено)
     const existingResult = await db.collection('test_results').findOne({ testSessionId });
 
     if (!existingResult) {
@@ -3644,7 +3660,7 @@ app.get('/result', checkAuth, async (req, res) => {
       logger.error('[RESULT] Помилка читання A.png', { message: error.message });
     }
 
-        // 10. HTML-результат з кружечками прогресу ПІД діаграмою і ПЕРЕД текстом
+    // 10. HTML-результат (з виправленим центром цифри та надійними кнопками)
     const resultHtml = `
       <!DOCTYPE html>
       <html lang="uk">
@@ -3695,11 +3711,12 @@ app.get('/result', checkAuth, async (req, res) => {
               transform: translate(-50%, -50%);
               font-size: 48px;
               font-weight: bold;
-              color: #333;
+              fill: #333;
+              pointer-events: none;
+              text-anchor: middle;
+              dominant-baseline: central;
               width: 100%;
               text-align: center;
-              pointer-events: none;
-              line-height: 1;
             }
             .progress-circles {
               display: flex;
@@ -3760,31 +3777,15 @@ app.get('/result', checkAuth, async (req, res) => {
             @media (max-width: 600px) {
               h1 { font-size: 26px; }
               .result-section { max-width: 280px; }
-              .result-container { 
-                width: 140px; 
-                height: 140px; 
-              }
-              .result-text {
-                font-size: 38px;
-                top: 50%;
-                left: 50%;
-                transform: translate(-50%, -50%);
-              }
-              .progress-circle { 
-                width: 28px; 
-                height: 28px; 
-                font-size: 11px; 
-                min-width: 28px; 
-              }
+              .result-container { width: 140px; height: 140px; }
+              .result-text { font-size: 38px; }
+              .progress-circle { width: 28px; height: 28px; font-size: 11px; min-width: 28px; }
               .progress-circles { gap: 6px; }
               button { padding: 12px 24px; font-size: 16px; min-width: 140px; }
             }
 
             @media (max-width: 400px) {
-              .result-container { 
-                width: 120px; 
-                height: 120px; 
-              }
+              .result-container { width: 120px; height: 120px; }
               .result-text { font-size: 32px; }
             }
           </style>
@@ -3799,7 +3800,7 @@ app.get('/result', checkAuth, async (req, res) => {
               <svg width="100%" height="100%" viewBox="0 0 180 180" preserveAspectRatio="xMidYMid meet">
                 <circle class="result-circle-bg" cx="90" cy="90" r="78" />
                 <circle class="result-circle" cx="90" cy="90" r="78" />
-                <text x="90" y="90" class="result-text" text-anchor="middle" dominant-baseline="central">
+                <text x="90" y="95" class="result-text" text-anchor="middle" dominant-baseline="central">
                   ${Math.round(percentage)}%
                 </text>
               </svg>
@@ -3827,19 +3828,71 @@ app.get('/result', checkAuth, async (req, res) => {
             <button id="restart">Вихід</button>
           </div>
 
-          <!-- скрипт без змін -->
           <script>
-            // ... (твій попередній скрипт для pdf та кнопки виходу залишається без змін)
+            document.addEventListener('DOMContentLoaded', () => {
+              const exportBtn = document.getElementById('exportPDF');
+              const restartBtn = document.getElementById('restart');
+
+              if (exportBtn) {
+                exportBtn.addEventListener('click', () => {
+                  if (typeof pdfMake === 'undefined') {
+                    alert('Бібліотека pdfMake не завантажилася. Спробуйте оновити сторінку.');
+                    return;
+                  }
+
+                  const docDefinition = {
+                    content: [
+                      imageBase64 ? { 
+                        image: 'data:image/png;base64,' + imageBase64, 
+                        width: 50, 
+                        alignment: 'center', 
+                        margin: [0, 0, 0, 20] 
+                      } : { text: 'Логотип відсутній', alignment: 'center', margin: [0, 0, 0, 20] },
+                      { 
+                        text: 'Результат тесту користувача ' + user + ' з тесту ' + testName + ' складає ' + percentage + '%', 
+                        style: 'header' 
+                      },
+                      { text: 'Кількість питань: ' + totalQuestions, lineHeight: 2 },
+                      { text: 'Правильних відповідей: ' + correctClicks, lineHeight: 2 },
+                      { text: 'Набрано балів: ' + score, lineHeight: 2 },
+                      { text: 'Максимально можлива кількість балів: ' + totalPoints, lineHeight: 2 },
+                      { 
+                        columns: [
+                          { text: 'Час: ' + time, width: '50%', lineHeight: 2 },
+                          { text: 'Дата: ' + date, width: '50%', alignment: 'right', lineHeight: 2 }
+                        ], 
+                        margin: [0, 10, 0, 0] 
+                      }
+                    ],
+                    styles: {
+                      header: { fontSize: 14, bold: true, margin: [0, 0, 0, 10], lineHeight: 2 }
+                    }
+                  };
+
+                  pdfMake.createPdf(docDefinition).download('result.pdf');
+                });
+              } else {
+                console.error('Кнопка #exportPDF не знайдена на сторінці');
+              }
+
+              if (restartBtn) {
+                restartBtn.addEventListener('click', () => {
+                  window.location.href = '/select-test';
+                });
+              } else {
+                console.error('Кнопка #restart не знайдена на сторінці');
+              }
+            });
           </script>
         </body>
       </html>
     `;
-    
+
     res.send(resultHtml);
 
   } catch (error) {
     logger.error('[RESULT] Критична помилка', { message: error.message, stack: error.stack, user: req.user });
-    res.status(500).send('Помилка при відображенні результатів: ' + error.message);
+    res.status(500).send('Помилка при відображенні результатів: ' + (error.message || 'Невідома помилка'));
   } finally {
     logger.info('Маршрут /result завершено', { duration: Date.now() - startTime });
   }
