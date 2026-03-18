@@ -3855,7 +3855,7 @@ app.get('/result', checkAuth, async (req, res) => {
                     }
                   };
 
-                  pdfMake.createPdf(docDefinition).download(viewResultData.user + '_результат.pdf');
+                  pdfMake.createPdf(docDefinition).download(user + '_результат.pdf');                  
                 });
               } else {
                 console.error('Кнопка #exportPDF не знайдена');
@@ -4029,7 +4029,7 @@ app.get('/results', checkAuth, async (req, res) => {
                   header: { fontSize: 18, bold: true, margin: [0, 0, 0, 10] }
                 }
               };
-              pdfMake.createPdf(docDefinition).download(viewResultData.user + '_результат.pdf');
+              pdfMake.createPdf(docDefinition).download(user + '_результат.pdf');
             });
           </script>
         </body>
