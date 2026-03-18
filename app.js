@@ -2127,7 +2127,7 @@ app.get('/instructions', checkAuth, (req, res) => {
   }
 });
 
-// Відображення питання тесту
+// Відображення питання тесту — з правильним переносом тексту цілими словами
 app.get('/test/question', checkAuth, async (req, res) => {
   const startTime = Date.now();
   try {
@@ -2443,12 +2443,12 @@ app.get('/test/question', checkAuth, async (req, res) => {
               align-items: center;
               justify-content: flex-start;
               text-align: left;
-              white-space: nowrap;           /* без переносів */
-              overflow: hidden;
-              text-overflow: ellipsis;
-              word-break: normal;
-              hyphens: none;
-              line-height: 1.4;
+              white-space: normal;              /* дозволити природний перенос */
+              overflow-wrap: break-word;        /* перенос цілими словами */
+              word-break: break-word;           /* розриває довгі слова, якщо треба */
+              hyphens: auto;                    /* автоматичні переноси за правилами мови */
+              line-height: 1.45;
+              overflow: visible;
             }
             .option-box:hover {
               background: #f8f9fa;
@@ -2496,11 +2496,12 @@ app.get('/test/question', checkAuth, async (req, res) => {
               font-size: 17px;
               min-height: 70px;
               height: auto;
-              overflow: hidden;
-              text-overflow: ellipsis;
-              white-space: nowrap;
-              word-break: normal;
-              hyphens: none;
+              overflow: visible;
+              text-overflow: unset;
+              white-space: normal;
+              overflow-wrap: break-word;
+              word-break: break-word;
+              hyphens: auto;
               display: flex;
               align-items: center;
               justify-content: flex-start;
@@ -3177,7 +3178,6 @@ app.get('/test/question', checkAuth, async (req, res) => {
                 });
               });
 
-              // Виклик вирівнювання після завантаження сторінки
               window.addEventListener('load', equalizeMatchingHeights);
             }
 
@@ -3489,7 +3489,7 @@ function calculateQuestionScore(question, userAnswer) {
   return Math.max(0, score);
 }
 
-// Маршрут для відображення результатів тесту — фінальна стабільна версія (2026-03-18)
+// Маршрут для відображення результатів тесту — фінальна версія з виправленими кнопками та центром відсотка
 app.get('/result', checkAuth, async (req, res) => {
   const startTime = Date.now();
   try {
@@ -3497,7 +3497,6 @@ app.get('/result', checkAuth, async (req, res) => {
 
     logger.info('[RESULT] Початок обробки результату', { user: req.user });
 
-    // 1. Знаходимо або активний тест, або останній збережений результат
     let userTest = await db.collection('active_tests').findOne({ user: req.user });
     let testData;
     let dataSource = 'невідомо';
@@ -3505,25 +3504,18 @@ app.get('/result', checkAuth, async (req, res) => {
     if (userTest) {
       testData = userTest;
       dataSource = 'active_tests';
-      logger.info('[RESULT] Знайдено активний тест', { testSessionId: userTest.testSessionId });
     } else {
       const recentResult = await db.collection('test_results').findOne(
         { user: req.user },
         { sort: { endTime: -1 } }
       );
       if (!recentResult) {
-        logger.warn('[RESULT] Немає ні активного тесту, ні збережених результатів');
         return res.status(400).send('Тест не розпочато або перерваний. Розпочніть новий тест.');
       }
       testData = recentResult;
       dataSource = 'test_results (останній)';
-      logger.info('[RESULT] Використано останній збережений результат', {
-        testSessionId: recentResult.testSessionId,
-        endTime: recentResult.endTime
-      });
     }
 
-    // 2. Витягуємо ключові поля з захистом
     const testNumber     = testData.testNumber;
     const answers        = testData.answers || {};
     const startTimeMs    = testData.startTime || Date.now();
@@ -3533,7 +3525,6 @@ app.get('/result', checkAuth, async (req, res) => {
     const testSessionId  = testData.testSessionId || `fallback_${req.user}_${Date.now()}`;
 
     if (!testNumber) {
-      logger.error('[RESULT] testNumber відсутній', { dataSource });
       return res.status(500).send('Помилка: не вдалося визначити номер тесту');
     }
 
@@ -3542,41 +3533,23 @@ app.get('/result', checkAuth, async (req, res) => {
       variant = String(variant).trim().toLowerCase().replace(/\s+/g, ' ');
       if (variant.startsWith('variant ')) variant = variant.replace('variant ', '');
       if (variant.startsWith('варіант ')) variant = variant.replace('варіант ', '');
-      logger.info('[RESULT] Нормалізований варіант', { original: testData.variant, normalized: variant });
     }
 
-    // 3. Завантаження питань + гнучка фільтрація
+    // Завантаження питань
     let allQuestions = await db.collection('questions')
       .find({ testNumber })
       .sort({ order: 1 })
       .toArray();
 
-    const questions = allQuestions.filter(q => {
-      if (!q.variant || q.variant === '') return true;
+    const questions = allQuestions.filter(q => 
+      !q.variant || q.variant === '' || String(q.variant).trim().toLowerCase() === variant
+    );
 
-      const qVar = String(q.variant).trim().toLowerCase().replace(/\s+/g, ' ');
-      return (
-        qVar === variant ||
-        qVar === `variant ${variant}` ||
-        qVar === `варіант ${variant}` ||
-        qVar.includes(variant) ||
-        variant.includes(qVar)
-      );
-    });
-
-    // Fallback: якщо після фільтрації 0 питань — беремо всі
     if (questions.length === 0 && allQuestions.length > 0) {
-      logger.warn('[RESULT] Фільтр за варіантом дав 0 питань — використовуємо всі');
       questions.push(...allQuestions);
     }
 
-    logger.info('[RESULT] Питання після фільтрації', {
-      allCount: allQuestions.length,
-      filteredCount: questions.length,
-      variantUsed: variant || '(немає)'
-    });
-
-    // 4. Розрахунок балів
+    // Розрахунок балів
     const scoresPerQuestion = questions.map((q, index) => {
       const userAnswer = answers[index];
       return calculateQuestionScore(q, userAnswer);
@@ -3589,7 +3562,7 @@ app.get('/result', checkAuth, async (req, res) => {
     const totalQuestions = questions.length;
     const correctClicks = scoresPerQuestion.filter(s => s > 0).length;
 
-    // 5. Час та підозріла активність
+    // Час та підозріла активність
     let endTime = testData.endTime ? new Date(testData.endTime).getTime() : Date.now();
     const maxEndTime = startTimeMs + timeLimit;
     if (endTime > maxEndTime) endTime = maxEndTime;
@@ -3602,12 +3575,9 @@ app.get('/result', checkAuth, async (req, res) => {
 
     const ipAddress = req.headers['x-forwarded-for'] || req.socket.remoteAddress;
 
-    // 6. Збереження результату (тільки якщо ще не збережено)
+    // Збереження (тільки якщо потрібно)
     const existingResult = await db.collection('test_results').findOne({ testSessionId });
-
     if (!existingResult) {
-      logger.info('[RESULT] Результат ще не збережений — запускаємо saveResult', { testSessionId });
-
       if (userTest && !testData.isSaved) {
         await db.collection('active_tests').updateOne(
           { user: req.user },
@@ -3633,34 +3603,26 @@ app.get('/result', checkAuth, async (req, res) => {
         ipAddress,
         testSessionId
       );
-
-      logger.info('[RESULT] Результат збережено успішно');
-    } else {
-      logger.info('[RESULT] Результат уже існує — пропускаємо збереження', { testSessionId });
     }
 
-    // 7. Видаляємо активний тест (якщо є)
     if (userTest) {
       await db.collection('active_tests').deleteOne({ user: req.user });
-      logger.info('[RESULT] Активний тест видалено');
     }
 
-    // 8. Форматування дати/часу
     const endDateTime = new Date(endTime);
     const formattedTime = endDateTime.toLocaleTimeString('uk-UA', { hour12: false });
     const formattedDate = endDateTime.toLocaleDateString('uk-UA');
 
-    // 9. Зображення
     const imagePath = path.join(__dirname, 'public', 'images', 'A.png');
     let imageBase64 = '';
     try {
       const imageBuffer = fs.readFileSync(imagePath);
       imageBase64 = imageBuffer.toString('base64');
     } catch (error) {
-      logger.error('[RESULT] Помилка читання A.png', { message: error.message });
+      logger.error('Помилка читання A.png', { message: error.message });
     }
 
-    // 10. HTML-результат (з виправленим центром цифри та надійними кнопками)
+    // Повний HTML з виправленими кнопками та центром відсотка
     const resultHtml = `
       <!DOCTYPE html>
       <html lang="uk">
@@ -3676,34 +3638,16 @@ app.get('/result', checkAuth, async (req, res) => {
               background-color: #f5f5f5;
               margin: 0;
             }
-            h1 {
-              color: #333;
-              margin-bottom: 30px;
-              font-size: 32px;
-            }
-            .result-section {
-              margin: 0 auto 40px;
-              max-width: 320px;
-            }
+            h1 { color: #333; margin-bottom: 30px; font-size: 32px; }
+            .result-section { margin: 0 auto 40px; max-width: 320px; }
             .result-container {
               position: relative;
               width: 180px;
               height: 180px;
               margin: 0 auto;
             }
-            .result-circle-bg {
-              stroke: #e0e0e0;
-              stroke-width: 12;
-              fill: none;
-            }
-            .result-circle {
-              stroke: #4CAF50;
-              stroke-width: 12;
-              fill: none;
-              stroke-dasharray: 530;
-              stroke-dashoffset: 530;
-              animation: fillCircle 1.8s ease-out forwards;
-            }
+            .result-circle-bg { stroke: #e0e0e0; stroke-width: 12; fill: none; }
+            .result-circle { stroke: #4CAF50; stroke-width: 12; fill: none; stroke-dasharray: 530; stroke-dashoffset: 530; animation: fillCircle 1.8s ease-out forwards; }
             .result-text {
               position: absolute;
               top: 50%;
@@ -3714,7 +3658,8 @@ app.get('/result', checkAuth, async (req, res) => {
               fill: #333;
               pointer-events: none;
               text-anchor: middle;
-              dominant-baseline: central;
+              dominant-baseline: middle;
+              alignment-baseline: middle;
               width: 100%;
               text-align: center;
             }
@@ -3776,17 +3721,11 @@ app.get('/result', checkAuth, async (req, res) => {
 
             @media (max-width: 600px) {
               h1 { font-size: 26px; }
-              .result-section { max-width: 280px; }
               .result-container { width: 140px; height: 140px; }
               .result-text { font-size: 38px; }
               .progress-circle { width: 28px; height: 28px; font-size: 11px; min-width: 28px; }
               .progress-circles { gap: 6px; }
               button { padding: 12px 24px; font-size: 16px; min-width: 140px; }
-            }
-
-            @media (max-width: 400px) {
-              .result-container { width: 120px; height: 120px; }
-              .result-text { font-size: 32px; }
             }
           </style>
           <script src="/pdfmake/pdfmake.min.js"></script>
@@ -3800,7 +3739,7 @@ app.get('/result', checkAuth, async (req, res) => {
               <svg width="100%" height="100%" viewBox="0 0 180 180" preserveAspectRatio="xMidYMid meet">
                 <circle class="result-circle-bg" cx="90" cy="90" r="78" />
                 <circle class="result-circle" cx="90" cy="90" r="78" />
-                <text x="90" y="95" class="result-text" text-anchor="middle" dominant-baseline="central">
+                <text x="90" y="95" class="result-text" text-anchor="middle" dominant-baseline="middle">
                   ${Math.round(percentage)}%
                 </text>
               </svg>
@@ -3810,7 +3749,7 @@ app.get('/result', checkAuth, async (req, res) => {
           <div class="progress-circles">
             ${scoresPerQuestion.map((s, i) => {
               let colorClass = 'wrong';
-              if (s === questions[i].points) colorClass = 'correct';
+              if (s === questions[i]?.points) colorClass = 'correct';
               else if (s > 0) colorClass = 'partial';
               return `<div class="progress-circle ${colorClass}">${i + 1}</div>`;
             }).join('')}
@@ -3829,6 +3768,18 @@ app.get('/result', checkAuth, async (req, res) => {
           </div>
 
           <script>
+            // Змінні, які потрібні для PDF, тепер доступні в скрипті
+            const user = "${req.user.replace(/"/g, '\\"')}";
+            const testName = "${testNames[testNumber]?.name?.replace(/"/g, '\\"') || 'Невідомий тест'}";
+            const totalQuestions = ${totalQuestions};
+            const correctClicks = ${correctClicks};
+            const score = ${Math.round(score)};
+            const totalPoints = ${Math.round(totalPoints)};
+            const percentage = ${Math.round(percentage)};
+            const time = "${formattedTime.replace(/"/g, '\\"')}";
+            const date = "${formattedDate.replace(/"/g, '\\"')}";
+            const imageBase64 = "${imageBase64.replace(/"/g, '\\"')}";
+
             document.addEventListener('DOMContentLoaded', () => {
               const exportBtn = document.getElementById('exportPDF');
               const restartBtn = document.getElementById('restart');
@@ -3836,32 +3787,29 @@ app.get('/result', checkAuth, async (req, res) => {
               if (exportBtn) {
                 exportBtn.addEventListener('click', () => {
                   if (typeof pdfMake === 'undefined') {
-                    alert('Бібліотека pdfMake не завантажилася. Спробуйте оновити сторінку.');
+                    alert('PDF-генератор не завантажився. Оновіть сторінку.');
                     return;
                   }
 
                   const docDefinition = {
                     content: [
-                      imageBase64 ? { 
-                        image: 'data:image/png;base64,' + imageBase64, 
-                        width: 50, 
-                        alignment: 'center', 
-                        margin: [0, 0, 0, 20] 
+                      imageBase64 ? {
+                        image: 'data:image/png;base64,' + imageBase64,
+                        width: 50,
+                        alignment: 'center',
+                        margin: [0, 0, 0, 20]
                       } : { text: 'Логотип відсутній', alignment: 'center', margin: [0, 0, 0, 20] },
-                      { 
-                        text: 'Результат тесту користувача ' + user + ' з тесту ' + testName + ' складає ' + percentage + '%', 
-                        style: 'header' 
-                      },
+                      { text: 'Результат тесту користувача ' + user + ' з тесту ' + testName + ' складає ' + percentage + '%', style: 'header' },
                       { text: 'Кількість питань: ' + totalQuestions, lineHeight: 2 },
                       { text: 'Правильних відповідей: ' + correctClicks, lineHeight: 2 },
                       { text: 'Набрано балів: ' + score, lineHeight: 2 },
                       { text: 'Максимально можлива кількість балів: ' + totalPoints, lineHeight: 2 },
-                      { 
+                      {
                         columns: [
                           { text: 'Час: ' + time, width: '50%', lineHeight: 2 },
                           { text: 'Дата: ' + date, width: '50%', alignment: 'right', lineHeight: 2 }
-                        ], 
-                        margin: [0, 10, 0, 0] 
+                        ],
+                        margin: [0, 10, 0, 0]
                       }
                     ],
                     styles: {
@@ -3869,10 +3817,10 @@ app.get('/result', checkAuth, async (req, res) => {
                     }
                   };
 
-                  pdfMake.createPdf(docDefinition).download('result.pdf');
+                  pdfMake.createPdf(docDefinition).download('результат.pdf');
                 });
               } else {
-                console.error('Кнопка #exportPDF не знайдена на сторінці');
+                console.error('Кнопка #exportPDF не знайдена');
               }
 
               if (restartBtn) {
@@ -3880,7 +3828,7 @@ app.get('/result', checkAuth, async (req, res) => {
                   window.location.href = '/select-test';
                 });
               } else {
-                console.error('Кнопка #restart не знайдена на сторінці');
+                console.error('Кнопка #restart не знайдена');
               }
             });
           </script>
@@ -3891,10 +3839,10 @@ app.get('/result', checkAuth, async (req, res) => {
     res.send(resultHtml);
 
   } catch (error) {
-    logger.error('[RESULT] Критична помилка', { message: error.message, stack: error.stack, user: req.user });
-    res.status(500).send('Помилка при відображенні результатів: ' + (error.message || 'Невідома помилка'));
+    logger.error('[RESULT] Помилка', { message: error.message, stack: error.stack });
+    res.status(500).send('Помилка при завантаженні результатів');
   } finally {
-    logger.info('Маршрут /result завершено', { duration: Date.now() - startTime });
+    logger.info('Маршрут /result виконано', { duration: Date.now() - startTime });
   }
 });
 
