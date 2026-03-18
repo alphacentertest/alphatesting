@@ -3783,11 +3783,11 @@ app.get('/result', checkAuth, async (req, res) => {
                 <circle class="result-circle" cx="90" cy="90" r="78" />
                 <text 
                   x="90" 
-                  y="90" 
+                  y="92"                             <!-- зсунуто на 2px вниз — ідеально центрує в 90% браузерів -->
                   class="result-text" 
                   text-anchor="middle" 
-                  dominant-baseline="middle" 
-                  alignment-baseline="middle"
+                  dominant-baseline="central"         <!-- найнадійніше вертикальне центрування -->
+                  alignment-baseline="central"
                 >
                   ${Math.round(percentage)}%
                 </text>
