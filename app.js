@@ -3690,21 +3690,17 @@ app.get('/result', checkAuth, async (req, res) => {
             .result-circle-bg { stroke: #e0e0e0; stroke-width: 12; fill: none; }
             .result-circle { stroke: #4CAF50; stroke-width: 12; fill: none; stroke-dasharray: 530; stroke-dashoffset: 530; animation: fillCircle 1.8s ease-out forwards; }
             .result-text {
-              position: absolute;
-              top: 50%;
-              left: 50%;
-              transform: translate(-50%, -50%);
               font-size: 48px;
               font-weight: bold;
               fill: #333;
               pointer-events: none;
               text-anchor: middle;
-              dominant-baseline: middle;
-              alignment-baseline: middle;
+              dominant-baseline: central;
+              alignment-baseline: central;
               width: 100%;
               text-align: center;
-              line-height: 1;                     /* зменшує зайвий простір */
-            }            
+              line-height: 1;                     /* зменшує зайвий простір під/над текстом */
+            }
             .progress-circles {
               display: flex;
               flex-wrap: wrap;
@@ -3781,14 +3777,7 @@ app.get('/result', checkAuth, async (req, res) => {
               <svg width="100%" height="100%" viewBox="0 0 180 180" preserveAspectRatio="xMidYMid meet">
                 <circle class="result-circle-bg" cx="90" cy="90" r="78" />
                 <circle class="result-circle" cx="90" cy="90" r="78" />
-                <text 
-                  x="90" 
-                  y="92"                             <!-- зсунуто на 2px вниз — ідеально центрує в 90% браузерів -->
-                  class="result-text" 
-                  text-anchor="middle" 
-                  dominant-baseline="central"         <!-- найнадійніше вертикальне центрування -->
-                  alignment-baseline="central"
-                >
+                <text x="90" y="92" class="result-text" text-anchor="middle" dominant-baseline="middle" alignment-baseline="middle">
                   ${Math.round(percentage)}%
                 </text>
               </svg>
