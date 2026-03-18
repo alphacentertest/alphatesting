@@ -2444,9 +2444,9 @@ app.get('/test/question', checkAuth, async (req, res) => {
               justify-content: flex-start;
               text-align: left;
               white-space: normal;              /* дозволити перенос */
-              overflow-wrap: break-word;        /* перенос цілими словами */
-              word-break: break-word;           /* розриває тільки дуже довгі слова */
-              hyphens: auto;                    /* автоматичні переноси за правилами мови */
+              overflow-wrap: break-word;        /* перенос цілими словами, якщо слово дуже довге */
+              word-break: normal;               /* НЕ розривати слова посередині */
+              hyphens: none;                    /* вимкнути автоматичні дефіси */
               line-height: 1.45;
               overflow: visible;
             }
@@ -3702,7 +3702,8 @@ app.get('/result', checkAuth, async (req, res) => {
               alignment-baseline: middle;
               width: 100%;
               text-align: center;
-            }
+              line-height: 1;                     /* зменшує зайвий простір */
+            }            
             .progress-circles {
               display: flex;
               flex-wrap: wrap;
@@ -3779,7 +3780,14 @@ app.get('/result', checkAuth, async (req, res) => {
               <svg width="100%" height="100%" viewBox="0 0 180 180" preserveAspectRatio="xMidYMid meet">
                 <circle class="result-circle-bg" cx="90" cy="90" r="78" />
                 <circle class="result-circle" cx="90" cy="90" r="78" />
-                <text x="90" y="90" class="result-text" text-anchor="middle" dominant-baseline="middle" alignment-baseline="middle">
+                <text 
+                  x="90" 
+                  y="92"                          <!-- зміщено на 2px вниз для візуального центру -->
+                  class="result-text" 
+                  text-anchor="middle" 
+                  dominant-baseline="middle"      <!-- ключовий атрибут для вертикального центрування -->
+                  alignment-baseline="middle"
+                >
                   ${Math.round(percentage)}%
                 </text>
               </svg>
