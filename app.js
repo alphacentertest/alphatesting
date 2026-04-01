@@ -15,6 +15,11 @@ const winston = require('winston');
 const session = require('express-session');
 const MongoStore = require('connect-mongo');
 
+
+// === ВИПРАВЛЕННЯ ЧАСОВОГО ПОЯСУ ДЛЯ VERCEL ===
+process.env.TZ = 'Europe/Kiev';   // або 'Europe/Kyiv' (залежить від версії Node)
+console.log('Серверний часовий пояс встановлено:', process.env.TZ);
+
 // Ініціалізація Express-додатку
 const app = express();
 
@@ -3542,9 +3547,9 @@ function calculateQuestionScore(question, userAnswer) {
   return Math.max(0, score);
 }
 
-// Маршрут для відображення результатів тесту — ОРИГІНАЛЬНИЙ ВИГЛЯД + ВИПРАВЛЕНО (-3 години)
+// Маршрут для відображення результатів тесту — ФІНАЛЬНЕ ВИПРАВЛЕННЯ (-3 години)
 app.get('/result', checkAuth, async (req, res) => {
-  const startTime = Date.now();
+  const routeStartTime = Date.now();
   try {
     if (req.user === 'admin') return res.redirect('/admin');
 
@@ -3586,9 +3591,13 @@ app.get('/result', checkAuth, async (req, res) => {
       return res.status(500).send('Помилка: не вдалося визначити номер тесту');
     }
 
-    // Захист startTimeMs
+    // Жорстке виправлення startTimeMs (якщо він прийшов в локальному часі)
+    if (typeof startTimeMs === 'string') {
+      startTimeMs = new Date(startTimeMs).getTime();
+    }
     if (typeof startTimeMs !== 'number' || isNaN(startTimeMs)) {
       startTimeMs = Date.now() - timeLimit;
+      logger.warn('[RESULT] startTimeMs невалідний, використовуємо fallback');
     }
 
     // Нормалізація варіанту
@@ -3598,15 +3607,9 @@ app.get('/result', checkAuth, async (req, res) => {
       if (variant.startsWith('варіант ')) variant = variant.replace('варіант ', '');
     }
 
-    logger.info('[RESULT] Основні дані', {
-      dataSource,
-      testNumber,
-      variant: variant || '(немає)',
-      answersCount: Object.keys(answers).length,
-      testSessionId
-    });
+    logger.info('[RESULT] Основні дані', { dataSource, testNumber, variant: variant || '(немає)' });
 
-    // 3. Завантаження питань
+    // 3. Питання
     let allQuestions = await db.collection('questions')
       .find({ testNumber })
       .sort({ order: 1 })
@@ -3619,17 +3622,10 @@ app.get('/result', checkAuth, async (req, res) => {
     });
 
     if (questions.length === 0 && allQuestions.length > 0) {
-      logger.warn('[RESULT] Фільтр за варіантом дав 0 питань — використовуємо ВСІ питання тесту');
       questions = [...allQuestions];
     }
 
-    logger.info('[RESULT] Питання після фільтрації', {
-      allCount: allQuestions.length,
-      filteredCount: questions.length,
-      variantUsed: variant || '(немає)'
-    });
-
-    // 4. Розрахунок балів
+    // 4. Бали
     const scoresPerQuestion = questions.map((q, index) => {
       const userAnswer = answers[index];
       return calculateQuestionScore(q, userAnswer);
@@ -3642,22 +3638,22 @@ app.get('/result', checkAuth, async (req, res) => {
     const totalQuestions = questions.length;
     const correctClicks = scoresPerQuestion.filter(s => s > 0).length;
 
-    logger.info('[RESULT] Розраховано бали', {
-      score: score.toFixed(2),
-      totalPoints: totalPoints.toFixed(2),
-      percentage: percentage.toFixed(1) + '%',
-      totalQuestions,
-      correctClicks
-    });
-
-    // 5. ЧАС — ВИПРАВЛЕНО (основна проблема з -3 годинами)
+    // 5. ЧАС — найжорсткіше виправлення
     let endTimeMs = Date.now();
 
     if (testData.endTime) {
-      const parsedEnd = new Date(testData.endTime);
-      if (!isNaN(parsedEnd.getTime())) {
-        endTimeMs = parsedEnd.getTime();
+      let parsed = testData.endTime;
+      if (typeof parsed === 'string') parsed = new Date(parsed);
+      if (parsed && !isNaN(parsed.getTime())) {
+        endTimeMs = parsed.getTime();
       }
+    }
+
+    // Додаємо 3 години, якщо різниця негативна (тимчасовий "костиль", поки не виправимо збереження)
+    const rawDuration = (endTimeMs - startTimeMs) / 1000;
+    if (rawDuration < 0) {
+      logger.warn('[RESULT] Виявлено негативну тривалість, додаємо 3 години (UTC+3)');
+      endTimeMs += 3 * 60 * 60 * 1000;   // +3 години
     }
 
     const maxEndTimeMs = startTimeMs + timeLimit;
@@ -3672,11 +3668,11 @@ app.get('/result', checkAuth, async (req, res) => {
 
     const ipAddress = req.headers['x-forwarded-for'] || req.socket.remoteAddress;
 
-    // 6. Збереження результату
+    // 6. Збереження (якщо потрібно)
     const existingResult = await db.collection('test_results').findOne({ testSessionId });
 
     if (!existingResult) {
-      logger.info('[RESULT] Результат ще не збережений — запускаємо saveResult', { testSessionId });
+      logger.info('[RESULT] Зберігаємо новий результат', { testSessionId });
 
       if (userTest && !testData.isSaved) {
         await db.collection('active_tests').updateOne(
@@ -3686,38 +3682,23 @@ app.get('/result', checkAuth, async (req, res) => {
       }
 
       await saveResult(
-        req.user,
-        testNumber,
-        score,
-        totalPoints,
-        startTimeMs,
-        endTimeMs,                    // ← передаємо число
-        Object.keys(answers).length,
-        correctClicks,
-        totalQuestions,
-        percentage,
+        req.user, testNumber, score, totalPoints, startTimeMs, endTimeMs,
+        Object.keys(answers).length, correctClicks, totalQuestions, percentage,
         { timeAway: correctedTimeAway, switchCount, responseTimes: suspiciousActivity.responseTimes || [], activityCounts: suspiciousActivity.activityCounts || [] },
-        answers,
-        scoresPerQuestion,
-        variant,
-        ipAddress,
-        testSessionId
+        answers, scoresPerQuestion, variant, ipAddress, testSessionId
       );
-
-      logger.info('[RESULT] Результат збережено успішно');
     }
 
-    // 7. Видаляємо активний тест
     if (userTest) {
       await db.collection('active_tests').deleteOne({ user: req.user });
     }
 
-    // 8. Форматування дати/часу
+    // 8. Форматування
     const endDateTime = new Date(endTimeMs);
     const formattedTime = endDateTime.toLocaleTimeString('uk-UA', { hour12: false });
     const formattedDate = endDateTime.toLocaleDateString('uk-UA');
 
-    // 9. Зображення
+    // 9. Зображення A.png
     const imagePath = path.join(__dirname, 'public', 'images', 'A.png');
     let imageBase64 = '';
     try {
@@ -3727,7 +3708,7 @@ app.get('/result', checkAuth, async (req, res) => {
       logger.error('[RESULT] Помилка читання A.png', { message: error.message });
     }
 
-    // 10. HTML — твій повний оригінальний код (без скорочень)
+    // 10. Повний HTML (без жодного скорочення)
     const resultHtml = `
       <!DOCTYPE html>
       <html lang="uk">
@@ -3939,7 +3920,7 @@ app.get('/result', checkAuth, async (req, res) => {
     logger.error('[RESULT] Помилка', { message: error.message, stack: error.stack });
     res.status(500).send('Помилка при завантаженні результатів');
   } finally {
-    logger.info('Маршрут /result виконано', { duration: Date.now() - startTime });
+    logger.info('Маршрут /result виконано', { duration: Date.now() - routeStartTime });
   }
 });
 
