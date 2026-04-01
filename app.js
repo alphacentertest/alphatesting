@@ -3542,7 +3542,7 @@ function calculateQuestionScore(question, userAnswer) {
   return Math.max(0, score);
 }
 
-// Маршрут для відображення результатів тесту — ВИПРАВЛЕНО підрахунок балів + центр відсотка + робочі кнопки
+// Маршрут для відображення результатів тесту — ВИПРАВЛЕНО (проблема з -3 годинами)
 app.get('/result', checkAuth, async (req, res) => {
   const startTime = Date.now();
   try {
@@ -3575,7 +3575,7 @@ app.get('/result', checkAuth, async (req, res) => {
     // 2. Витягуємо поля
     const testNumber     = testData.testNumber;
     const answers        = testData.answers || {};
-    const startTimeMs    = testData.startTime || Date.now();
+    let   startTimeMs    = testData.startTime || Date.now();
     const timeLimit      = testData.timeLimit || 3600000;
     const suspiciousActivity = testData.suspiciousActivity || {};
     let   variant        = testData.variant || '';
@@ -3584,6 +3584,12 @@ app.get('/result', checkAuth, async (req, res) => {
     if (!testNumber) {
       logger.error('[RESULT] testNumber відсутній', { dataSource });
       return res.status(500).send('Помилка: не вдалося визначити номер тесту');
+    }
+
+    // Захист від невалідного startTimeMs
+    if (typeof startTimeMs !== 'number' || isNaN(startTimeMs)) {
+      startTimeMs = Date.now() - timeLimit;
+      logger.warn('[RESULT] startTimeMs був невалідним, використовуємо fallback');
     }
 
     // Нормалізація варіанту
@@ -3613,7 +3619,6 @@ app.get('/result', checkAuth, async (req, res) => {
       return qVar === variant || qVar.includes(variant) || variant.includes(qVar);
     });
 
-    // Якщо після фільтрації питань 0 — беремо ВСІ (це найнадійніше)
     if (questions.length === 0 && allQuestions.length > 0) {
       logger.warn('[RESULT] Фільтр за варіантом дав 0 питань — використовуємо ВСІ питання тесту');
       questions = [...allQuestions];
@@ -3647,12 +3652,23 @@ app.get('/result', checkAuth, async (req, res) => {
       answered: Object.keys(answers).length
     });
 
-    // 5. Час та підозріла активність
-    let endTime = testData.endTime ? new Date(testData.endTime).getTime() : Date.now();
-    const maxEndTime = startTimeMs + timeLimit;
-    if (endTime > maxEndTime) endTime = maxEndTime;
+    // 5. Час та підозріла активність — ВИПРАВЛЕНО (проблема з -3 годинами)
+    let endTimeMs = Date.now();   // за замовчуванням — поточний час
 
-    const duration = Math.round((endTime - startTimeMs) / 1000);
+    if (testData.endTime) {
+      const parsedEnd = new Date(testData.endTime);
+      if (!isNaN(parsedEnd.getTime())) {
+        endTimeMs = parsedEnd.getTime();
+      } else {
+        logger.warn('[RESULT] endTime не вдалося розпарсити');
+      }
+    }
+
+    const maxEndTimeMs = startTimeMs + timeLimit;
+    if (endTimeMs > maxEndTimeMs) endTimeMs = maxEndTimeMs;
+
+    const duration = Math.round((endTimeMs - startTimeMs) / 1000);
+
     const timeAway = suspiciousActivity.timeAway || 0;
     const correctedTimeAway = Math.min(timeAway, duration);
     const timeAwayPercent = duration > 0 ? Math.round((correctedTimeAway / duration) * 100) : 0;
@@ -3679,7 +3695,7 @@ app.get('/result', checkAuth, async (req, res) => {
         score,
         totalPoints,
         startTimeMs,
-        endTime,
+        endTimeMs,                    // ← ВИПРАВЛЕНО: передаємо число в мілісекундах
         Object.keys(answers).length,
         correctClicks,
         totalQuestions,
@@ -3701,7 +3717,7 @@ app.get('/result', checkAuth, async (req, res) => {
     }
 
     // 8. Форматування дати/часу
-    const endDateTime = new Date(endTime);
+    const endDateTime = new Date(endTimeMs);
     const formattedTime = endDateTime.toLocaleTimeString('uk-UA', { hour12: false });
     const formattedDate = endDateTime.toLocaleDateString('uk-UA');
 
@@ -3715,7 +3731,7 @@ app.get('/result', checkAuth, async (req, res) => {
       logger.error('[RESULT] Помилка читання A.png', { message: error.message });
     }
 
-    // 10. HTML-результат з центрованим відсотком і робочими кнопками
+    // 10. HTML-результат
     const resultHtml = `
       <!DOCTYPE html>
       <html lang="uk">
@@ -3751,7 +3767,7 @@ app.get('/result', checkAuth, async (req, res) => {
               alignment-baseline: central;
               width: 100%;
               text-align: center;
-              line-height: 1;                     /* зменшує зайвий простір під/над текстом */
+              line-height: 1;
             }
             .progress-circles {
               display: flex;
@@ -3858,17 +3874,16 @@ app.get('/result', checkAuth, async (req, res) => {
           </div>
 
           <script>
-            // Змінні для PDF — винесені в глобальний scope
             const user = "${req.user.replace(/"/g, '\\"')}";
             const testName = "${testNames[testNumber]?.name?.replace(/"/g, '\\"') || 'Невідомий тест'}";
-            const totalQuestions = ${totalQuestions};
-            const correctClicks = ${correctClicks};
-            const score = ${Math.round(score)};
-            const totalPoints = ${Math.round(totalPoints)};
-            const percentage = ${Math.round(percentage)};
-            const time = "${formattedTime.replace(/"/g, '\\"')}";
-            const date = "${formattedDate.replace(/"/g, '\\"')}";
-            const imageBase64 = "${imageBase64.replace(/"/g, '\\"')}";
+            const totalQuestionsVal = ${totalQuestions};
+            const correctClicksVal = ${correctClicks};
+            const scoreVal = ${Math.round(score)};
+            const totalPointsVal = ${Math.round(totalPoints)};
+            const percentageVal = ${Math.round(percentage)};
+            const timeVal = "${formattedTime.replace(/"/g, '\\"')}";
+            const dateVal = "${formattedDate.replace(/"/g, '\\"')}";
+            const imageBase64Val = "${imageBase64.replace(/"/g, '\\"')}";
 
             document.addEventListener('DOMContentLoaded', () => {
               const exportBtn = document.getElementById('exportPDF');
@@ -3883,21 +3898,21 @@ app.get('/result', checkAuth, async (req, res) => {
 
                   const docDefinition = {
                     content: [
-                      imageBase64 ? {
-                        image: 'data:image/png;base64,' + imageBase64,
+                      imageBase64Val ? {
+                        image: 'data:image/png;base64,' + imageBase64Val,
                         width: 50,
                         alignment: 'center',
                         margin: [0, 0, 0, 20]
                       } : { text: 'Логотип відсутній', alignment: 'center', margin: [0, 0, 0, 20] },
-                      { text: 'Результат тесту користувача ' + user + ' з тесту ' + testName + ' складає ' + percentage + '%', style: 'header' },
-                      { text: 'Кількість питань: ' + totalQuestions, lineHeight: 2 },
-                      { text: 'Правильних відповідей: ' + correctClicks, lineHeight: 2 },
-                      { text: 'Набрано балів: ' + score, lineHeight: 2 },
-                      { text: 'Максимально можлива кількість балів: ' + totalPoints, lineHeight: 2 },
+                      { text: 'Результат тесту користувача ' + user + ' з тесту ' + testName + ' складає ' + percentageVal + '%', style: 'header' },
+                      { text: 'Кількість питань: ' + totalQuestionsVal, lineHeight: 2 },
+                      { text: 'Правильних відповідей: ' + correctClicksVal, lineHeight: 2 },
+                      { text: 'Набрано балів: ' + scoreVal, lineHeight: 2 },
+                      { text: 'Максимально можлива кількість балів: ' + totalPointsVal, lineHeight: 2 },
                       {
                         columns: [
-                          { text: 'Час: ' + time, width: '50%', lineHeight: 2 },
-                          { text: 'Дата: ' + date, width: '50%', alignment: 'right', lineHeight: 2 }
+                          { text: 'Час: ' + timeVal, width: '50%', lineHeight: 2 },
+                          { text: 'Дата: ' + dateVal, width: '50%', alignment: 'right', lineHeight: 2 }
                         ],
                         margin: [0, 10, 0, 0]
                       }
@@ -3909,16 +3924,12 @@ app.get('/result', checkAuth, async (req, res) => {
 
                   pdfMake.createPdf(docDefinition).download(user + '_результат.pdf');                  
                 });
-              } else {
-                console.error('Кнопка #exportPDF не знайдена');
               }
 
               if (restartBtn) {
                 restartBtn.addEventListener('click', () => {
                   window.location.href = '/select-test';
                 });
-              } else {
-                console.error('Кнопка #restart не знайдена');
               }
             });
           </script>
