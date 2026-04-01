@@ -3542,7 +3542,7 @@ function calculateQuestionScore(question, userAnswer) {
   return Math.max(0, score);
 }
 
-// Маршрут для відображення результатів тесту — ВИПРАВЛЕНО (проблема з -3 годинами)
+// Маршрут для відображення результатів тесту — ОРИГІНАЛЬНИЙ ВИГЛЯД + ВИПРАВЛЕНО (-3 години)
 app.get('/result', checkAuth, async (req, res) => {
   const startTime = Date.now();
   try {
@@ -3586,10 +3586,9 @@ app.get('/result', checkAuth, async (req, res) => {
       return res.status(500).send('Помилка: не вдалося визначити номер тесту');
     }
 
-    // Захист від невалідного startTimeMs
+    // Захист startTimeMs
     if (typeof startTimeMs !== 'number' || isNaN(startTimeMs)) {
       startTimeMs = Date.now() - timeLimit;
-      logger.warn('[RESULT] startTimeMs був невалідним, використовуємо fallback');
     }
 
     // Нормалізація варіанту
@@ -3607,7 +3606,7 @@ app.get('/result', checkAuth, async (req, res) => {
       testSessionId
     });
 
-    // 3. Завантаження питань + гнучка фільтрація
+    // 3. Завантаження питань
     let allQuestions = await db.collection('questions')
       .find({ testNumber })
       .sort({ order: 1 })
@@ -3648,19 +3647,16 @@ app.get('/result', checkAuth, async (req, res) => {
       totalPoints: totalPoints.toFixed(2),
       percentage: percentage.toFixed(1) + '%',
       totalQuestions,
-      correctClicks,
-      answered: Object.keys(answers).length
+      correctClicks
     });
 
-    // 5. Час та підозріла активність — ВИПРАВЛЕНО (проблема з -3 годинами)
-    let endTimeMs = Date.now();   // за замовчуванням — поточний час
+    // 5. ЧАС — ВИПРАВЛЕНО (основна проблема з -3 годинами)
+    let endTimeMs = Date.now();
 
     if (testData.endTime) {
       const parsedEnd = new Date(testData.endTime);
       if (!isNaN(parsedEnd.getTime())) {
         endTimeMs = parsedEnd.getTime();
-      } else {
-        logger.warn('[RESULT] endTime не вдалося розпарсити');
       }
     }
 
@@ -3676,7 +3672,7 @@ app.get('/result', checkAuth, async (req, res) => {
 
     const ipAddress = req.headers['x-forwarded-for'] || req.socket.remoteAddress;
 
-    // 6. Збереження результату (якщо потрібно)
+    // 6. Збереження результату
     const existingResult = await db.collection('test_results').findOne({ testSessionId });
 
     if (!existingResult) {
@@ -3695,7 +3691,7 @@ app.get('/result', checkAuth, async (req, res) => {
         score,
         totalPoints,
         startTimeMs,
-        endTimeMs,                    // ← ВИПРАВЛЕНО: передаємо число в мілісекундах
+        endTimeMs,                    // ← передаємо число
         Object.keys(answers).length,
         correctClicks,
         totalQuestions,
@@ -3731,7 +3727,7 @@ app.get('/result', checkAuth, async (req, res) => {
       logger.error('[RESULT] Помилка читання A.png', { message: error.message });
     }
 
-    // 10. HTML-результат
+    // 10. HTML — твій повний оригінальний код (без скорочень)
     const resultHtml = `
       <!DOCTYPE html>
       <html lang="uk">
