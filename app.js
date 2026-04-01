@@ -5952,7 +5952,7 @@ app.post('/admin/import-questions', ensureInitialized, checkAuth, checkAdmin, up
   }
 });
 
-// Маршрут для перегляду результатів тестів (адмін/інструктор)
+// Маршрут для перегляду результатів тестів (адмін/інструктор) — оновлено колонку Підозріла активність
 app.get('/admin/results', checkAuth, async (req, res) => {
   const startTime = Date.now();
   try {
@@ -5980,7 +5980,7 @@ app.get('/admin/results', checkAuth, async (req, res) => {
             .container { max-width: 1400px; margin: 0 auto; background: white; padding: 30px; border-radius: 12px; box-shadow: 0 4px 20px rgba(0,0,0,0.1); }
             h1 { text-align: center; color: #333; margin-bottom: 25px; }
             table { border-collapse: collapse; width: 100%; margin-top: 20px; }
-            th, td { border: 1px solid #ddd; padding: 12px; text-align: left; }
+            th, td { border: 1px solid #ddd; padding: 12px; text-align: left; vertical-align: top; }
             th { background: #f2f2f2; font-weight: bold; }
             .nav-btn, .action-btn, .search-btn { padding: 12px 24px; margin: 10px 5px; cursor: pointer; border: none; border-radius: 8px; font-size: 16px; }
             .nav-btn { background: #007bff; color: white; }
@@ -5988,14 +5988,16 @@ app.get('/admin/results', checkAuth, async (req, res) => {
             .search-btn { background: #28a745; color: white; }
             .action-btn.view { background: #4CAF50; color: white; }
             .action-btn.delete { background: #ef5350; color: white; }
-            .suspicious { color: #d32f2f; font-weight: bold; }
+            .suspicious { color: #d32f2f; font-weight: bold; background: #ffebee; }
+            .normal { color: #388e3c; }
             input[type="text"] { padding: 10px; width: 250px; font-size: 16px; }
             form { display: inline-block; margin: 10px 0; }
+            .activity-details { font-size: 14px; line-height: 1.5; }
           </style>
         </head>
         <body>
           <div class="container">
-            <h1>Результати тестів</h1>
+            <h1>Результати тестів (${results.length})</h1>
 
             <button class="nav-btn" onclick="window.location.href='/select-test'">Повернутися до вибору тесту</button>
 
@@ -6014,7 +6016,7 @@ app.get('/admin/results', checkAuth, async (req, res) => {
                 <th>Початок</th>
                 <th>Кінець</th>
                 <th>Тривалість</th>
-                <th>Підозріла активність (%)</th>
+                <th>Підозріла активність</th>
                 <th>Дія</th>
               </tr>
     `;
@@ -6023,54 +6025,61 @@ app.get('/admin/results', checkAuth, async (req, res) => {
       html += '<tr><td colspan="10">Немає результатів</td></tr>';
     } else {
       for (const result of results) {
-        // Завантажуємо питання для цього результату
+        // Завантажуємо питання для точного перерахунку балів
         let allQuestions = await db.collection('questions')
           .find({ testNumber: result.testNumber })
           .sort({ order: 1 })
           .toArray();
 
-        // Фільтруємо за варіантом
         const questions = allQuestions.filter(q => 
           !q.variant || q.variant === '' || q.variant === result.variant
         );
 
-        // Перерахунок балів за допомогою функції
         const scoresPerQuestion = questions.map((q, idx) => {
-          const userAnswer = result.answers[idx];
+          const userAnswer = result.answers ? result.answers[idx] : null;
           return calculateQuestionScore(q, userAnswer);
         });
 
         const exactScore = scoresPerQuestion.reduce((sum, s) => sum + s, 0);
         const roundedScore = Math.round(exactScore * 10) / 10;
-        const totalPoints = questions.reduce((sum, q) => sum + q.points, 0);
+        const totalPoints = questions.reduce((sum, q) => sum + (q.points || 0), 0);
         const percentage = totalPoints > 0 ? (exactScore / totalPoints) * 100 : 0;
         const roundedPercentage = Math.round(percentage * 10) / 10;
 
         const totalQuestions = questions.length;
         const correctClicks = scoresPerQuestion.filter(s => s > 0).length;
 
-        const startTimeStr = new Date(result.startTime).toLocaleString('uk-UA');
-        const endTimeStr = new Date(result.endTime).toLocaleString('uk-UA');
+        const startTimeStr = result.startTime ? new Date(result.startTime).toLocaleString('uk-UA') : '—';
+        const endTimeStr = result.endTime ? new Date(result.endTime).toLocaleString('uk-UA') : '—';
 
-        const durationSec = result.duration || Math.round((new Date(result.endTime) - new Date(result.startTime)) / 1000);
+        const durationSec = result.duration || 
+          (result.endTime && result.startTime ? 
+            Math.round((new Date(result.endTime) - new Date(result.startTime)) / 1000) : 0);
+
         const minutes = Math.floor(durationSec / 60).toString().padStart(2, '0');
         const seconds = (durationSec % 60).toString().padStart(2, '0');
 
-        const timeAwayPercent = result.suspiciousActivity?.timeAway && result.duration
-          ? Math.round((result.suspiciousActivity.timeAway / result.duration) * 100)
+        // Підозріла активність
+        const susp = result.suspiciousActivity || {};
+        const timeAwaySeconds = susp.timeAway || 0;
+        const timeAwayPercent = durationSec > 0 
+          ? Math.round((timeAwaySeconds / durationSec) * 100) 
           : 0;
+        const switchCount = susp.switchCount || 0;
 
-        const switchCount = result.suspiciousActivity?.switchCount || 0;
-        const avgResponseTime = result.suspiciousActivity?.responseTimes?.length
-          ? (result.suspiciousActivity.responseTimes.reduce((sum, t) => sum + (t || 0), 0) / result.suspiciousActivity.responseTimes.length).toFixed(2)
-          : 0;
+        // Форматування часу поза вкладкою
+        const awayMinutes = Math.floor(timeAwaySeconds / 60);
+        const awaySeconds = timeAwaySeconds % 60;
+        const timeAwayFormatted = awayMinutes > 0 
+          ? `${awayMinutes} хв ${awaySeconds} сек` 
+          : `${awaySeconds} сек`;
 
-        const isSuspicious = timeAwayPercent > config.suspiciousActivity.timeAwayThreshold ||
-                            switchCount > config.suspiciousActivity.switchCountThreshold;
+        const isSuspicious = timeAwayPercent > (config?.suspiciousActivity?.timeAwayThreshold || 15) || 
+                            switchCount > (config?.suspiciousActivity?.switchCountThreshold || 5);
 
         html += `
           <tr class="${isSuspicious ? 'suspicious' : ''}">
-            <td>${result.user}</td>
+            <td>${result.user || '—'}</td>
             <td>${testNames[result.testNumber]?.name?.replace(/"/g, '\\"') || 'Невідомий тест'}</td>
             <td>${result.variant || 'Немає'}</td>
             <td>${roundedScore.toFixed(1)} / ${roundedPercentage.toFixed(1)}%</td>
@@ -6078,10 +6087,16 @@ app.get('/admin/results', checkAuth, async (req, res) => {
             <td>${startTimeStr}</td>
             <td>${endTimeStr}</td>
             <td>${minutes} хв ${seconds} сек</td>
-            <td>${timeAwayPercent}%</td>
+            <td>
+              <div class="activity-details">
+                <strong>${timeAwayPercent}%</strong> поза вкладкою<br>
+                Перемикань: <strong>${switchCount}</strong><br>
+                Час поза: ${timeAwayFormatted}
+              </div>
+            </td>
             <td>
               <button class="action-btn view" onclick="viewResult('${result._id}')">Перегляд</button>
-              ${req.userRole === 'admin' ? '<button class="action-btn delete" onclick="deleteResult(\'' + result._id + '\')">🗑️ Видалити</button>' : ''}
+              ${req.userRole === 'admin' ? `<button class="action-btn delete" onclick="deleteResult('${result._id}')">🗑️ Видалити</button>` : ''}
             </td>
           </tr>
         `;
@@ -6090,46 +6105,47 @@ app.get('/admin/results', checkAuth, async (req, res) => {
 
     html += `
             </table>
+          </div>
 
-            <script>
-              async function viewResult(id) {
-                window.location.href = '/admin/view-result?id=' + id;
-              }
+          <script>
+            async function viewResult(id) {
+              window.location.href = '/admin/view-result?id=' + id;
+            }
 
-              async function deleteResult(id) {
-                if (confirm('Видалити цей результат?')) {
-                  const formData = new URLSearchParams();
-                  formData.append('id', id);
-                  formData.append('_csrf', '${res.locals._csrf}');
-                  try {
-                    const response = await fetch('/admin/delete-result', {
-                      method: 'POST',
-                      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-                      body: formData
-                    });
-                    if (response.ok) {
-                      location.reload();
-                    } else {
-                      alert('Помилка видалення: ' + response.status);
-                    }
-                  } catch (error) {
-                    alert('Не вдалося видалити');
+            async function deleteResult(id) {
+              if (confirm('Видалити цей результат?')) {
+                const formData = new URLSearchParams();
+                formData.append('id', id);
+                formData.append('_csrf', '${res.locals._csrf || ''}');
+                try {
+                  const response = await fetch('/admin/delete-result', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                    body: formData
+                  });
+                  if (response.ok) {
+                    location.reload();
+                  } else {
+                    alert('Помилка видалення');
                   }
+                } catch (error) {
+                  alert('Не вдалося видалити результат');
                 }
               }
+            }
 
-              document.getElementById('search-form')?.addEventListener('submit', e => {
-                e.preventDefault();
-                const search = e.target.search.value;
-                window.location.href = '/admin/results?search=' + encodeURIComponent(search);
-              });
-            </script>
-          </div>
+            document.getElementById('search-form')?.addEventListener('submit', e => {
+              e.preventDefault();
+              const searchValue = e.target.search.value;
+              window.location.href = '/admin/results?search=' + encodeURIComponent(searchValue);
+            });
+          </script>
         </body>
       </html>
     `;
 
     res.send(html);
+
   } catch (error) {
     logger.error('Помилка в /admin/results', { message: error.message, stack: error.stack });
     res.status(500).send('Помилка при завантаженні результатів');
