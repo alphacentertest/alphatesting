@@ -5952,7 +5952,7 @@ app.post('/admin/import-questions', ensureInitialized, checkAuth, checkAdmin, up
   }
 });
 
-// Маршрут для перегляду результатів тестів (адмін/інструктор) — оновлено колонку Підозріла активність
+// Маршрут для перегляду результатів тестів (адмін/інструктор) — оновлено формат часу поза вкладкою
 app.get('/admin/results', checkAuth, async (req, res) => {
   const startTime = Date.now();
   try {
@@ -6025,7 +6025,7 @@ app.get('/admin/results', checkAuth, async (req, res) => {
       html += '<tr><td colspan="10">Немає результатів</td></tr>';
     } else {
       for (const result of results) {
-        // Завантажуємо питання для точного перерахунку балів
+        // Перерахунок балів
         let allQuestions = await db.collection('questions')
           .find({ testNumber: result.testNumber })
           .sort({ order: 1 })
@@ -6046,9 +6046,6 @@ app.get('/admin/results', checkAuth, async (req, res) => {
         const percentage = totalPoints > 0 ? (exactScore / totalPoints) * 100 : 0;
         const roundedPercentage = Math.round(percentage * 10) / 10;
 
-        const totalQuestions = questions.length;
-        const correctClicks = scoresPerQuestion.filter(s => s > 0).length;
-
         const startTimeStr = result.startTime ? new Date(result.startTime).toLocaleString('uk-UA') : '—';
         const endTimeStr = result.endTime ? new Date(result.endTime).toLocaleString('uk-UA') : '—';
 
@@ -6067,12 +6064,17 @@ app.get('/admin/results', checkAuth, async (req, res) => {
           : 0;
         const switchCount = susp.switchCount || 0;
 
-        // Форматування часу поза вкладкою
-        const awayMinutes = Math.floor(timeAwaySeconds / 60);
-        const awaySeconds = timeAwaySeconds % 60;
-        const timeAwayFormatted = awayMinutes > 0 
-          ? `${awayMinutes} хв ${awaySeconds} сек` 
-          : `${awaySeconds} сек`;
+        // === НОВЕ ФОРМАТУВАННЯ ЧАСУ ПОЗА ВКЛАДКОЮ ===
+        let timeAwayFormatted = '';
+        if (timeAwaySeconds < 60) {
+          // менше хвилини — показуємо з десятими
+          timeAwayFormatted = timeAwaySeconds.toFixed(1) + ' сек';
+        } else {
+          // 1 хвилина і більше
+          const awayMinutes = Math.floor(timeAwaySeconds / 60);
+          const awaySeconds = timeAwaySeconds % 60;
+          timeAwayFormatted = `${awayMinutes} хв ${awaySeconds} сек`;
+        }
 
         const isSuspicious = timeAwayPercent > (config?.suspiciousActivity?.timeAwayThreshold || 15) || 
                             switchCount > (config?.suspiciousActivity?.switchCountThreshold || 5);
@@ -6091,7 +6093,7 @@ app.get('/admin/results', checkAuth, async (req, res) => {
               <div class="activity-details">
                 <strong>${timeAwayPercent}%</strong> поза вкладкою<br>
                 Перемикань: <strong>${switchCount}</strong><br>
-                Час поза: ${timeAwayFormatted}
+                Час поза: <strong>${timeAwayFormatted}</strong>
               </div>
             </td>
             <td>
