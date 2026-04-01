@@ -3383,14 +3383,13 @@ app.post('/answer', checkAuth, express.urlencoded({ extended: true }), async (re
 });
 
 /**
- * Обчислює точний бал за одне питання з урахуванням часткових балів і штрафів
- * @param {Object} question - об'єкт питання з бази (type, points, correctAnswers, correctPairs тощо)
- * @param {any} userAnswer - відповідь користувача (масив або значення)
- * @returns {number} точний бал за питання (може бути дробовим)
+ * Обчислює точний бал за одне питання
+ * Підтримує введення чисел як через кому (3,14), так і через крапку (3.14)
  */
 function calculateQuestionScore(question, userAnswer) {
   let score = 0;
 
+  // Нормалізація тексту
   const normalize = (val) => {
     if (val === null || val === undefined) return '';
     return String(val)
@@ -3400,10 +3399,26 @@ function calculateQuestionScore(question, userAnswer) {
       .replace(/[^a-z0-9а-яіїєґ\s.,-]/gi, '');
   };
 
+  // Нормалізація чисел для діапазонів
   const normalizeNumber = (val) => {
     if (val === null || val === undefined) return NaN;
     let str = String(val).trim().replace(/,/g, '.').replace(/\s+/g, '');
     return parseFloat(str);
+  };
+
+  // Головна функція для порівняння десяткових чисел (виправляє проблему з комою)
+  const normalizeDecimalForCompare = (val) => {
+    if (val === null || val === undefined) return '';
+    let str = String(val).trim()
+      .replace(/,/g, '.')        // кома → крапка
+      .replace(/\s+/g, '');      // прибрати пробіли
+
+    // Захист від кількох крапок
+    const parts = str.split('.');
+    if (parts.length > 2) {
+      str = parts[0] + '.' + parts.slice(1).join('');
+    }
+    return str;
   };
 
   switch (question.type) {
@@ -3413,17 +3428,16 @@ function calculateQuestionScore(question, userAnswer) {
       const userSet = new Set(userAnswer.map(normalize));
       const partial = question.points / correctSet.size;
 
-      correctSet.forEach(c => {
-        if (userSet.has(c)) score += partial;
-      });
-      userSet.forEach(u => {
-        if (!correctSet.has(u)) score -= partial;
-      });
+      correctSet.forEach(c => { if (userSet.has(c)) score += partial; });
+      userSet.forEach(u => { if (!correctSet.has(u)) score -= partial; });
       break;
     }
 
     case 'fillblank': {
-      if (!Array.isArray(userAnswer) || userAnswer.length !== question.correctAnswers.length) return 0;
+      if (!Array.isArray(userAnswer) || userAnswer.length !== question.correctAnswers.length) {
+        return 0;
+      }
+
       const partial = question.points / question.correctAnswers.length;
 
       question.correctAnswers.forEach((correct, i) => {
@@ -3431,13 +3445,17 @@ function calculateQuestionScore(question, userAnswer) {
         let isCorrect = false;
 
         if (correct.includes('-')) {
+          // ДІАПАЗОН
           const [minStr, maxStr] = correct.split('-').map(s => s.trim());
           const min = normalizeNumber(minStr);
           const max = normalizeNumber(maxStr);
           const val = normalizeNumber(userVal);
           isCorrect = !isNaN(val) && !isNaN(min) && !isNaN(max) && val >= min && val <= max;
         } else {
-          isCorrect = normalize(userVal) === normalize(correct);
+          // ЗВИЧАЙНЕ ЧИСЛО — тепер підтримує кому
+          const userNormalized = normalizeDecimalForCompare(userVal);
+          const correctNormalized = normalizeDecimalForCompare(correct);
+          isCorrect = userNormalized === correctNormalized;
         }
 
         if (isCorrect) {
@@ -3449,10 +3467,31 @@ function calculateQuestionScore(question, userAnswer) {
       break;
     }
 
+    case 'input': {
+      const correct = question.correctAnswers?.[0] || '';
+      let isCorrect = false;
+
+      if (correct.includes('-')) {
+        // ДІАПАЗОН
+        const [minStr, maxStr] = correct.split('-').map(s => s.trim());
+        const min = normalizeNumber(minStr);
+        const max = normalizeNumber(maxStr);
+        const val = normalizeNumber(userAnswer);
+        isCorrect = !isNaN(val) && !isNaN(min) && !isNaN(max) && val >= min && val <= max;
+      } else {
+        // ЗВИЧАЙНЕ ЧИСЛО
+        const userNormalized = normalizeDecimalForCompare(userAnswer);
+        const correctNormalized = normalizeDecimalForCompare(correct);
+        isCorrect = userNormalized === correctNormalized;
+      }
+
+      score = isCorrect ? question.points : 0;
+      break;
+    }
+
     case 'matching': {
       if (!Array.isArray(userAnswer) || userAnswer.length === 0) return 0;
 
-      // Конвертуємо у масив пар [left, right]
       let userPairs = userAnswer;
       if (userAnswer[0] && typeof userAnswer[0] === 'object' && !Array.isArray(userAnswer[0])) {
         userPairs = userAnswer.map(p => [p.left || '', p.right || '']);
@@ -3462,36 +3501,22 @@ function calculateQuestionScore(question, userAnswer) {
       const pairCount = correctPairs.length || 1;
       const partial = question.points / pairCount;
 
-      // Створюємо Set правильних пар (незалежно від порядку)
       const correctSet = new Set(
-        correctPairs.map(pair => {
-          const left = normalize(pair[0]);
-          const right = normalize(pair[1]);
-          return `${left}|||${right}`;
-        })
+        correctPairs.map(pair => `${normalize(pair[0])}|||${normalize(pair[1])}`)
       );
-
-      let correctCount = 0;
 
       userPairs.forEach(userPair => {
         if (!Array.isArray(userPair) || userPair.length !== 2) {
           score -= partial;
           return;
         }
-
-        const leftUser = normalize(userPair[0]);
-        const rightUser = normalize(userPair[1]);
-        const pairKey = `${leftUser}|||${rightUser}`;
-
+        const pairKey = `${normalize(userPair[0])}|||${normalize(userPair[1])}`;
         if (correctSet.has(pairKey)) {
-          correctCount++;
           score += partial;
         } else {
           score -= partial;
         }
       });
-
-      logger.debug(`[SCORE] Matching: ${correctCount} правильних з ${pairCount}, балів: ${score.toFixed(2)}`);
       break;
     }
 
@@ -3508,24 +3533,8 @@ function calculateQuestionScore(question, userAnswer) {
       break;
     }
 
-    default: // singlechoice, truefalse, input
-      let isCorrect = false;
-
-      if (question.type === 'singlechoice' || question.type === 'truefalse') {
-        isCorrect = normalize(userAnswer) === normalize(question.correctAnswer || question.correctAnswers?.[0]);
-      } else if (question.type === 'input') {
-        const correct = question.correctAnswers?.[0] || '';
-        if (correct.includes('-')) {
-          const [minStr, maxStr] = correct.split('-').map(s => s.trim());
-          const min = normalizeNumber(minStr);
-          const max = normalizeNumber(maxStr);
-          const val = normalizeNumber(userAnswer);
-          isCorrect = !isNaN(val) && !isNaN(min) && !isNaN(max) && val >= min && val <= max;
-        } else {
-          isCorrect = normalize(userAnswer) === normalize(correct);
-        }
-      }
-
+    default: // singlechoice, truefalse
+      const isCorrect = normalize(userAnswer) === normalize(question.correctAnswer || question.correctAnswers?.[0]);
       score = isCorrect ? question.points : 0;
       break;
   }
