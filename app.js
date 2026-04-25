@@ -2772,62 +2772,73 @@ app.get('/test/question', checkAuth, async (req, res) => {
             <div id="answers">
     `;
 
+    // ==================== MATCHING ====================
     if (q.type === 'matching' && q.pairs) {
-      const leftItems = q.pairs.map(p => p.left);           // Ліва колонка — статична
-      const rightItems = shuffleArray([...q.pairs.map(p => p.right)]); // Права — перемішуємо
-
-      const userAnswer = Array.isArray(answers[index]) ? answers[index] : [];
+      const leftItems = q.pairs.map(p => p.left);
+      const rightItems = shuffleArray([...q.pairs.map(p => p.right)]);
 
       html += `
         <div class="matching-container" id="matching-${index}">
-          <!-- Ліва колонка (статична) -->
+          <!-- Ліва колонка -->
           <div class="matching-column" id="left-column-${index}">
-            <h4 style="margin-bottom: 15px; color: #333;">Терміни</h4>
-            ${leftItems.map(item => `
-              <div class="matching-item static">
-                ${item}
-              </div>
-            `).join('')}
+            <h4 style="margin-bottom: 15px; color: #333; text-align: center;">Терміни</h4>
+            ${leftItems.map(item => {
+              const escaped = item.replace(/'/g, "\\'").replace(/"/g, '\\"');
+              return `
+                <div class="matching-item draggable" data-value="${escaped}">
+                  ${item}
+                </div>`;
+            }).join('')}
           </div>
 
-          <!-- Права колонка (sortable) -->
+          <!-- Права колонка -->
           <div class="matching-column" id="right-column-${index}">
-            <h4 style="margin-bottom: 15px; color: #333;">Відповіді (сортуйте)</h4>
-            <div class="sortable-right" id="sortable-right-${index}">
-              ${rightItems.map((item, i) => {
-                const escaped = item.replace(/'/g, "\\'").replace(/"/g, '\\"');
-                return `
-                  <div class="matching-item draggable" data-value="${escaped}">
-                    ${item}
-                  </div>`;
-              }).join('')}
-            </div>
+            <h4 style="margin-bottom: 15px; color: #333; text-align: center;">Відповіді (сортуйте)</h4>
+            ${rightItems.map(item => {
+              const escaped = item.replace(/'/g, "\\'").replace(/"/g, '\\"');
+              return `
+                <div class="matching-item draggable" data-value="${escaped}">
+                  ${item}
+                </div>`;
+            }).join('')}
           </div>
         </div>
 
-        <button onclick="resetMatching(${index})" style="margin-top: 10px;">Скинути порядок</button>
+        <button onclick="resetMatching(${index})" style="margin-top: 15px;">Скинути порядок</button>
 
         <script>
-          new Sortable(document.getElementById('sortable-right-${index}'), {
+          // Сортування тільки всередині своєї колонки (без group)
+          new Sortable(document.getElementById('left-column-${index}'), {
             animation: 150,
             ghostClass: 'sortable-ghost',
-            onEnd: function () {
-              saveMatchingAnswer(${index});
-            }
+            onEnd: () => equalizeMatchingHeights()
           });
 
-          function saveMatchingAnswer(idx) {
-            const items = document.querySelectorAll('#sortable-right-' + idx + ' .matching-item');
-            const answer = Array.from(items).map(el => el.getAttribute('data-value'));
-            window.currentAnswers = window.currentAnswers || {};
-            window.currentAnswers[idx] = answer;
-            if (typeof saveAnswer === 'function') {
-              saveAnswer(idx, answer);
-            }
+          new Sortable(document.getElementById('right-column-${index}'), {
+            animation: 150,
+            ghostClass: 'sortable-ghost',
+            onEnd: () => equalizeMatchingHeights()
+          });
+
+          // Вирівнювання висоти блоків
+          function equalizeMatchingHeights() {
+            const allItems = document.querySelectorAll('#matching-${index} .matching-item');
+            if (allItems.length === 0) return;
+            
+            let maxHeight = 0;
+            allItems.forEach(item => {
+              item.style.height = 'auto';
+              const height = item.getBoundingClientRect().height;
+              if (height > maxHeight) maxHeight = height;
+            });
+
+            allItems.forEach(item => {
+              item.style.height = maxHeight + 'px';
+            });
           }
 
           function resetMatching(idx) {
-            if (confirm('Скинути порядок у правій колонці?')) {
+            if (confirm('Скинути порядок у колонках?')) {
               location.reload();
             }
           }
