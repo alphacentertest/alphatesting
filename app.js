@@ -2868,7 +2868,7 @@ app.get('/test/question', checkAuth, async (req, res) => {
               });
             }
 
-            // Автозбереження відповіді
+// ====================== ЗБЕРЕЖЕННЯ ВІДПОВІДІ ======================
             async function saveCurrentAnswer(index) {
               if (isSaving) return;
               isSaving = true;
@@ -2888,7 +2888,7 @@ app.get('/test/question', checkAuth, async (req, res) => {
                                     .map(el => el.dataset.value.trim());
                 } 
                 else if (document.getElementById('left-column-' + index)) {
-                  // === MATCHING — ВАЖЛИВЕ ВИПРАВЛЕННЯ ===
+                  // === MATCHING — ОСНОВНЕ ЗБЕРЕЖЕННЯ ===
                   const leftItems = Array.from(document.querySelectorAll('#left-column-' + index + ' .matching-item'));
                   const rightItems = Array.from(document.querySelectorAll('#right-column-' + index + ' .matching-item'));
                   
@@ -2899,7 +2899,7 @@ app.get('/test/question', checkAuth, async (req, res) => {
                     const leftVal = (leftItems[i].dataset.value || '').trim();
                     const rightVal = (rightItems[i].dataset.value || '').trim();
                     if (leftVal || rightVal) {
-                      answerData.push([leftVal, rightVal]);   // <-- Масив пар!
+                      answerData.push([leftVal, rightVal]);
                     }
                   }
                 } 
@@ -2939,53 +2939,13 @@ app.get('/test/question', checkAuth, async (req, res) => {
               isSaving = true;
               try {
                 hasMovedToNext = true;
-                let answers = selectedOptions;
-                if (document.querySelector('input[name="q' + index + '"]')) {
-                  answers = document.getElementById('q' + index + '_input').value;
-                } else if (document.getElementById('sortable-options')) {
-                  answers = Array.from(document.querySelectorAll('#sortable-options .option-box')).map(el => el.dataset.value);
-                } else if (document.getElementById('left-column')) {
-                  answers = matchingPairs;
-                } else if ('${q.type}' === 'fillblank') {
-                  answers = [];
-                  for (let i = 0; i < ${q.blankCount || 1}; i++) {
-                    const input = document.getElementById('blank_' + i);
-                    answers.push(input ? input.value.trim() : '');
-                  }
-                }
-                const responseTime = (Date.now() - questionStartTime) / 1000;
-                const formData = new URLSearchParams();
-                formData.append('index', index);
-                const safeAnswer = JSON.stringify(answers);
-                formData.append('answer', safeAnswer);
-                formData.append('timeAway', timeAway);
-                formData.append('switchCount', switchCount);
-                formData.append('responseTime', responseTime);
-                formData.append('activityCount', activityCount);
-                formData.append('_csrf', '${res.locals._csrf}');
-                const response = await fetch('/answer', {
-                  method: 'POST',
-                  headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-                  body: formData
-                });
-                if (!response.ok) throw new Error('HTTP ' + response.status);
-                const result = await response.json();
-                if (result.success) {
-                  const nextIndex = index + 1;
-                  fetch('/set-question-start-time?index=' + nextIndex, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-                    body: new URLSearchParams({ '_csrf': '${res.locals._csrf}' })
-                  }).then(() => {
-                    if (nextIndex < ${questions.length}) {
-                      window.location.href = '/test/question?index=' + nextIndex;
-                    } else {
-                      setTimeout(() => window.location.href = '/result', 300);
-                    }
-                  });
+                await saveCurrentAnswer(index);   // <-- використовуємо єдину функцію
+
+                const nextIndex = index + 1;
+                if (nextIndex < ${questions.length}) {
+                  window.location.href = '/test/question?index=' + nextIndex;
                 } else {
-                  console.error('Помилка збереження:', result.error);
-                  alert('Помилка збереження відповіді');
+                  setTimeout(() => window.location.href = '/result', 300);
                 }
               } catch (error) {
                 console.error('Помилка в saveAndNext:', error);
@@ -3000,44 +2960,8 @@ app.get('/test/question', checkAuth, async (req, res) => {
               if (isSaving) return;
               isSaving = true;
               try {
-                await saveCurrentAnswer(index);
-                let answers = selectedOptions;
-                if (document.querySelector('input[name="q' + index + '"]')) {
-                  answers = document.getElementById('q' + index + '_input').value;
-                } else if (document.getElementById('sortable-options')) {
-                  answers = Array.from(document.querySelectorAll('#sortable-options .option-box')).map(el => el.dataset.value);
-                } else if (document.getElementById('left-column')) {
-                  answers = matchingPairs;
-                } else if ('${q.type}' === 'fillblank') {
-                  answers = [];
-                  for (let i = 0; i < ${q.blankCount || 1}; i++) {
-                    const input = document.getElementById('blank_' + i);
-                    answers.push(input ? input.value.trim() : '');
-                  }
-                }
-                const responseTime = (Date.now() - questionStartTime) / 1000;
-                const formData = new URLSearchParams();
-                formData.append('index', index);
-                const safeAnswer = JSON.stringify(answers);
-                formData.append('answer', safeAnswer);
-                formData.append('timeAway', timeAway);
-                formData.append('switchCount', switchCount);
-                formData.append('responseTime', responseTime);
-                formData.append('activityCount', activityCount);
-                formData.append('_csrf', '${res.locals._csrf}');
-                const response = await fetch('/answer', {
-                  method: 'POST',
-                  headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-                  body: formData
-                });
-                if (!response.ok) throw new Error('HTTP ' + response.status);
-                const result = await response.json();
-                if (result.success) {
-                  setTimeout(() => window.location.href = '/result', 300);
-                } else {
-                  console.error('Помилка завершення:', result.error);
-                  alert('Помилка завершення тесту');
-                }
+                await saveCurrentAnswer(index);   // <-- використовуємо єдину функцію
+                setTimeout(() => window.location.href = '/result', 300);
               } catch (error) {
                 console.error('Помилка в finishTest:', error);
                 alert('Не вдалося завершити тест');
@@ -6091,11 +6015,12 @@ app.get('/admin/results', checkAuth, async (req, res) => {
       html += '<tr><td colspan="10">Немає результатів</td></tr>';
     } else {
       for (const result of results) {
-        // === ВИПРАВЛЕННЯ: Правильне завантаження питань ===
+        // === ВИПРАВЛЕНО: Правильне завантаження питань (як у /result) ===
         let questions = [];
 
         if (result.questions && Array.isArray(result.questions) && result.questions.length > 0) {
           questions = result.questions;
+          logger.info('[ADMIN/RESULTS] Використано збережені питання з result.questions', { count: questions.length });
         } else {
           let allQuestions = await db.collection('questions')
             .find({ testNumber: result.testNumber })
