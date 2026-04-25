@@ -3439,36 +3439,68 @@ function calculateQuestionScore(question, userAnswer) {
     }
 
     case 'fillblank': {
-      if (!Array.isArray(userAnswer) || userAnswer.length !== question.correctAnswers.length) {
+      if (!Array.isArray(userAnswer)) {
         return 0;
       }
 
       const partial = question.points / question.correctAnswers.length;
+      let correctCount = 0;
 
-      question.correctAnswers.forEach((correct, i) => {
-        const userVal = userAnswer[i];
+      question.correctAnswers.forEach((correctRaw, i) => {
+        const userVal = userAnswer[i] || '';
+        if (!userVal) return;
+
+        const user = normalize(userVal);           // вже є у твоїй функції
+        const correct = normalize(correctRaw);
+
         let isCorrect = false;
 
-        if (correct.includes('-')) {
-          // ДІАПАЗОН
-          const [minStr, maxStr] = correct.split('-').map(s => s.trim());
+        // 1. Діапазон чисел (12-15, 99-101 і т.д.)
+        if (correctRaw.includes('-')) {
+          const [minStr, maxStr] = correctRaw.split('-').map(s => s.trim());
           const min = normalizeNumber(minStr);
           const max = normalizeNumber(maxStr);
           const val = normalizeNumber(userVal);
-          isCorrect = !isNaN(val) && !isNaN(min) && !isNaN(max) && val >= min && val <= max;
-        } else {
-          // ЗВИЧАЙНЕ ЧИСЛО — тепер підтримує кому
-          const userNormalized = normalizeDecimalForCompare(userVal);
-          const correctNormalized = normalizeDecimalForCompare(correct);
-          isCorrect = userNormalized === correctNormalized;
+
+          if (!isNaN(val) && !isNaN(min) && !isNaN(max)) {
+            isCorrect = val >= min && val <= max;
+          }
+        } 
+        // 2. Звичайний текст — М'ЯКЕ СПІВПАДІННЯ
+        else {
+          // Варіант А: одне слово повністю входить в інше
+          if (user.includes(correct) || correct.includes(user)) {
+            isCorrect = true;
+          } 
+          // Варіант Б: схожість ≥ 50%
+          else {
+            const correctLen = correct.length;
+            const userLen = user.length;
+
+            if (correctLen > 0 && userLen > 0) {
+              const minLen = Math.min(correctLen, userLen);
+              let similarity = 0;
+
+              for (let j = 0; j < minLen; j++) {
+                if (correct[j] === user[j]) {
+                  similarity++;
+                }
+              }
+
+              if (similarity / minLen >= 0.5) {   // 50% співпадіння
+                isCorrect = true;
+              }
+            }
+          }
         }
 
         if (isCorrect) {
-          score += partial;
-        } else {
-          score -= partial;
+          correctCount++;
+          // score += partial;   // можна залишити, але краще рахувати в кінці
         }
       });
+
+      score = (correctCount / question.correctAnswers.length) * question.points;
       break;
     }
 
