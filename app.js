@@ -3392,8 +3392,10 @@ app.post('/answer', checkAuth, express.urlencoded({ extended: true }), async (re
  */
 function calculateQuestionScore(question, userAnswer) {
   let score = 0;
+  const maxPoints = parseFloat(question.points) || 1.0;
+  const type = (question.type || '').toLowerCase().trim();
 
-  // Нормалізація тексту
+  // Нормалізація для порівняння тексту
   const normalize = (val) => {
     if (val === null || val === undefined) return '';
     return String(val)
@@ -3409,36 +3411,76 @@ function calculateQuestionScore(question, userAnswer) {
     return parseFloat(str);
   };
 
-  const normalizeDecimalForCompare = (val) => {
-    if (val === null || val === undefined) return '';
-    let str = String(val).trim()
-      .replace(/,/g, '.')
-      .replace(/\s+/g, '');
+  switch (type) {
+    // ====================== SINGLECHOICE / TRUEFALSE ======================
+    case 'singlechoice':
+    case 'truefalse': {
+      if (!userAnswer) return 0;
 
-    const parts = str.split('.');
-    if (parts.length > 2) {
-      str = parts[0] + '.' + parts.slice(1).join('');
+      const userVal = Array.isArray(userAnswer) ? userAnswer[0] : userAnswer;
+      const correctVal = question.correctAnswer || (question.correctAnswers && question.correctAnswers[0]);
+
+      const isCorrect = normalize(userVal) === normalize(correctVal);
+      return isCorrect ? maxPoints : 0;
     }
-    return str;
-  };
 
-  switch (question.type) {
+    // ====================== MULTIPLE ======================
     case 'multiple': {
       if (!Array.isArray(userAnswer)) return 0;
       const correctSet = new Set(question.correctAnswers.map(normalize));
       const userSet = new Set(userAnswer.map(normalize));
-      const partial = question.points / correctSet.size;
+      const partial = maxPoints / correctSet.size;
 
       correctSet.forEach(c => { if (userSet.has(c)) score += partial; });
       userSet.forEach(u => { if (!correctSet.has(u)) score -= partial; });
       break;
     }
 
+    // ====================== MATCHING ======================
+    case 'matching': {
+      if (!Array.isArray(userAnswer) || userAnswer.length === 0) return 0;
+
+      let userPairs = userAnswer;
+      // Якщо прийшли об'єкти {left, right}
+      if (userAnswer[0] && typeof userAnswer[0] === 'object' && !Array.isArray(userAnswer[0])) {
+        userPairs = userAnswer.map(p => [p.left || '', p.right || '']);
+      }
+
+      const correctPairs = question.correctPairs || [];
+      const totalPairs = correctPairs.length || 1;
+      const partial = maxPoints / totalPairs;
+
+      let correctCount = 0;
+      const correctSet = new Set(
+        correctPairs.map(pair => `${normalize(pair[0])}|||${normalize(pair[1])}`)
+      );
+
+      userPairs.forEach(pair => {
+        if (!Array.isArray(pair) || pair.length !== 2) {
+          score -= partial;
+          return;
+        }
+        const key = `${normalize(pair[0])}|||${normalize(pair[1])}`;
+        if (correctSet.has(key)) correctCount++;
+      });
+
+      const extra = userPairs.length - correctCount;
+
+      if (correctCount === totalPairs && extra === 0) {
+        return maxPoints;
+      }
+      if (correctCount > 0) {
+        score = (correctCount / totalPairs) * maxPoints;
+        if (extra > 0) score -= (extra / totalPairs) * maxPoints * 0.5;
+      }
+      break;
+    }
+
+    // ====================== FILLBLANK ======================
     case 'fillblank': {
-      // Твій поточний код для fillblank — залишаємо без змін
       if (!Array.isArray(userAnswer)) return 0;
 
-      const partial = question.points / question.correctAnswers.length;
+      const partial = maxPoints / question.correctAnswers.length;
       let correctCount = 0;
 
       question.correctAnswers.forEach((correctRaw, i) => {
@@ -3455,10 +3497,7 @@ function calculateQuestionScore(question, userAnswer) {
           const min = normalizeNumber(minStr);
           const max = normalizeNumber(maxStr);
           const val = normalizeNumber(userVal);
-
-          if (!isNaN(val) && !isNaN(min) && !isNaN(max)) {
-            isCorrect = val >= min && val <= max;
-          }
+          isCorrect = !isNaN(val) && !isNaN(min) && !isNaN(max) && val >= min && val <= max;
         } else {
           if (user.includes(correct) || correct.includes(user)) {
             isCorrect = true;
@@ -3479,12 +3518,26 @@ function calculateQuestionScore(question, userAnswer) {
         if (isCorrect) correctCount++;
       });
 
-      score = (correctCount / question.correctAnswers.length) * question.points;
+      score = (correctCount / question.correctAnswers.length) * maxPoints;
       break;
     }
 
+    // ====================== ORDERING ======================
+    case 'ordering': {
+      if (!Array.isArray(userAnswer)) return 0;
+      const correctOrder = question.correctAnswers.map(normalize);
+      const userOrder = userAnswer.map(normalize);
+      const partial = maxPoints / correctOrder.length;
+
+      correctOrder.forEach((correct, i) => {
+        if (userOrder[i] === correct) score += partial;
+        else score -= partial;
+      });
+      break;
+    }
+
+    // ====================== INPUT ======================
     case 'input': {
-      // Твій код для input — залишаємо
       const correct = question.correctAnswers?.[0] || '';
       let isCorrect = false;
 
@@ -3495,71 +3548,10 @@ function calculateQuestionScore(question, userAnswer) {
         const val = normalizeNumber(userAnswer);
         isCorrect = !isNaN(val) && !isNaN(min) && !isNaN(max) && val >= min && val <= max;
       } else {
-        const userNormalized = normalizeDecimalForCompare(userAnswer);
-        const correctNormalized = normalizeDecimalForCompare(correct);
-        isCorrect = userNormalized === correctNormalized;
+        isCorrect = normalize(userAnswer) === normalize(correct);
       }
 
-      score = isCorrect ? question.points : 0;
-      break;
-    }
-
-    case 'matching': {
-      // Твій поточний код — залишаємо
-      if (!Array.isArray(userAnswer) || userAnswer.length === 0) return 0;
-
-      let userPairs = userAnswer;
-      if (userAnswer[0] && typeof userAnswer[0] === 'object' && !Array.isArray(userAnswer[0])) {
-        userPairs = userAnswer.map(p => [p.left || '', p.right || '']);
-      }
-
-      const correctPairs = question.correctPairs || [];
-      const pairCount = correctPairs.length || 1;
-      const partial = question.points / pairCount;
-
-      const correctSet = new Set(
-        correctPairs.map(pair => `${normalize(pair[0])}|||${normalize(pair[1])}`)
-      );
-
-      userPairs.forEach(userPair => {
-        if (!Array.isArray(userPair) || userPair.length !== 2) {
-          score -= partial;
-          return;
-        }
-        const pairKey = `${normalize(userPair[0])}|||${normalize(userPair[1])}`;
-        if (correctSet.has(pairKey)) {
-          score += partial;
-        } else {
-          score -= partial;
-        }
-      });
-      break;
-    }
-
-    case 'ordering': {
-      if (!Array.isArray(userAnswer)) return 0;
-      const correctOrder = question.correctAnswers.map(normalize);
-      const userOrder = userAnswer.map(normalize);
-      const partial = question.points / correctOrder.length;
-
-      correctOrder.forEach((correct, i) => {
-        if (userOrder[i] === correct) score += partial;
-        else score -= partial;
-      });
-      break;
-    }
-
-    // ====================== ВИПРАВЛЕНИЙ БЛОК ======================
-    case 'singlechoice':
-    case 'truefalse': {
-      if (!userAnswer) return 0;
-
-      // Приймаємо як рядок, так і масив з одним елементом
-      const userVal = Array.isArray(userAnswer) ? userAnswer[0] : userAnswer;
-      const correctVal = question.correctAnswer || (question.correctAnswers && question.correctAnswers[0]);
-
-      const isCorrect = normalize(userVal) === normalize(correctVal);
-      score = isCorrect ? question.points : 0;
+      score = isCorrect ? maxPoints : 0;
       break;
     }
 
