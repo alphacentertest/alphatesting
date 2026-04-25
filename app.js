@@ -2442,9 +2442,11 @@ app.get('/test/question', checkAuth, async (req, res) => {
             }
             img {
               max-width: 100%;
+              max-height: 400px;
               margin: 15px auto;
               display: block;
               border-radius: 8px;
+              object-fit: contain;
             }
             .progress-bar {
               display: flex;
@@ -2541,6 +2543,24 @@ app.get('/test/question', checkAuth, async (req, res) => {
               border-color: #28a745 !important;
               box-shadow: 0 0 0 3px rgba(40,167,69,0.3) !important;
             }
+            @media (max-width: 600px) {
+              .option-box {
+                font-size: 15px;
+                padding: 14px 18px;
+                min-height: 60px;
+              }
+              .progress-circle {
+                width: 32px;
+                height: 32px;
+                font-size: 12px;
+                min-width: 32px;
+              }
+              .progress-line {
+                width: 5px;
+              }
+            }
+            .option-box.draggable { cursor: move; }
+            .option-box.dragging { opacity: 0.6; box-shadow: 0 4px 12px rgba(0,0,0,0.2); }
             .matching-container {
               display: grid;
               grid-template-columns: 1fr 1fr;
@@ -2556,7 +2576,6 @@ app.get('/test/question', checkAuth, async (req, res) => {
               border: 2px solid #ddd;
               padding: 16px 20px;
               border-radius: 10px;
-              cursor: move;
               font-size: 17px;
               min-height: 70px;
               height: auto;
@@ -2585,6 +2604,20 @@ app.get('/test/question', checkAuth, async (req, res) => {
               gap: 12px;
               z-index: 100;
               flex-wrap: nowrap;
+            }
+            @media (max-width: 600px) {
+              .button-container {
+                gap: 8px;
+                padding: 0 10px;
+                flex-wrap: nowrap !important;
+                overflow-x: auto;
+                box-sizing: border-box;
+              }
+              button {
+                font-size: 15px;
+                padding: 12px 16px;
+                min-height: 55px;
+              }
             }
             button {
               flex: 1;
@@ -2617,6 +2650,51 @@ app.get('/test/question', checkAuth, async (req, res) => {
               text-align: center;
               margin: 15px 0 25px;
               color: #333;
+            }
+            #question-timer {
+              position: relative;
+              width: 90px;
+              height: 90px;
+              margin: 0 auto 15px;
+            }
+            #question-timer svg { width: 100%; height: 100%; transform: rotate(-90deg); }
+            #question-timer circle { fill: none; stroke-width: 10; }
+            #question-timer .timer-circle-bg { stroke: #e0e0e0; }
+            #question-timer .timer-circle { stroke: #ff4d4d; stroke-dasharray: 280; transition: stroke-dashoffset 0.3s linear; }
+            #question-timer .timer-text {
+              position: absolute;
+              top: 50%;
+              left: 50%;
+              transform: translate(-50%, -50%);
+              font-size: 28px;
+              font-weight: bold;
+              color: #333;
+            }
+            #confirm-modal {
+              display: none;
+              position: fixed;
+              top: 50%;
+              left: 50%;
+              transform: translate(-50%, -50%);
+              background: white;
+              padding: 30px;
+              border-radius: 12px;
+              box-shadow: 0 10px 30px rgba(0,0,0,0.4);
+              z-index: 1000;
+              text-align: center;
+              max-width: 90%;
+            }
+            #confirm-modal h2 { margin: 0 0 25px; font-size: 24px; }
+            #confirm-modal .buttons {
+              display: flex;
+              justify-content: center;
+              gap: 20px;
+              margin-top: 20px;
+            }
+            #confirm-modal button {
+              min-width: 120px;
+              padding: 14px 30px;
+              font-size: 18px;
             }
           </style>
         </head>
@@ -2654,22 +2732,23 @@ app.get('/test/question', checkAuth, async (req, res) => {
     if (q.picture && q.picture.trim() !== '') {
       html += `
         <div id="image-container">
-          <img src="${q.picture}" alt="Picture" onerror="this.style.display='none';">
+          <img src="${q.picture}" alt="Picture" style="max-height: 400px; object-fit: contain;" onerror="this.style.display='none'; document.getElementById('image-error').style.display='block';">
+          <div id="image-error" class="image-error" style="display: none;">Зображення недоступне</div>
         </div>
       `;
     }
 
     const instructionText = q.type === 'multiple' ? 'Виберіть усі правильні відповіді' :
-                           q.type === 'singlechoice' ? 'Виберіть одну правильну відповідь' :
                            q.type === 'input' ? 'Введіть правильну відповідь' :
                            q.type === 'ordering' ? 'Розташуйте відповіді у правильній послідовності' :
-                           q.type === 'matching' ? 'Сортуйте елементи в правій колонці' :
-                           q.type === 'fillblank' ? 'Заповніть пропуски у реченні' : '';
+                           q.type === 'matching' ? 'Складіть правильні пари, перетягуючи елементи' :
+                           q.type === 'fillblank' ? 'Заповніть пропуски у реченні' :
+                           q.type === 'singlechoice' ? 'Виберіть правильну відповідь' : '';
 
     html += `
             <div class="question-box">
               <h2 id="question-text">${index + 1}. `;
-
+   
     if (q.type === 'fillblank') {
       const userAnswers = Array.isArray(answers[index]) ? answers[index] : [];
       const parts = q.text.split('___');
@@ -2693,7 +2772,6 @@ app.get('/test/question', checkAuth, async (req, res) => {
             <div id="answers">
     `;
 
-    // ==================== MATCHING ====================
     if (q.type === 'matching' && q.pairs) {
       const leftItems = q.pairs.map(p => p.left);           // Ліва колонка — статична
       const rightItems = shuffleArray([...q.pairs.map(p => p.right)]); // Права — перемішуємо
@@ -2753,43 +2831,57 @@ app.get('/test/question', checkAuth, async (req, res) => {
               location.reload();
             }
           }
+
+          // Вирівнювання висоти блоків matching
+          function equalizeMatchingHeights() {
+            const allItems = document.querySelectorAll('.matching-item');
+            if (allItems.length === 0) return;
+            let maxHeight = 0;
+            allItems.forEach(item => {
+              item.style.height = 'auto';
+              const height = item.getBoundingClientRect().height;
+              if (height > maxHeight) maxHeight = height;
+            });
+            allItems.forEach(item => {
+              item.style.height = maxHeight + 'px';
+            });
+          }
+
+          window.addEventListener('load', equalizeMatchingHeights);
         </script>
       `;
-    } 
-    // ==================== ORDERING ====================
-    else if (q.type === 'ordering') {
-      const optionsToShow = answers[index] || q.options || [];
-      html += `
-        <div id="sortable-options">
-          ${optionsToShow.map((option, optIndex) => {
-            const escapedOption = option.replace(/'/g, "\\'").replace(/"/g, '\\"');
-            return `
-              <div class="option-box draggable" data-index="${optIndex}" data-value="${escapedOption}">
-                ${option}
-              </div>
-            `;
-          }).join('')}
-        </div>
-      `;
-    } 
-    // ==================== SINGLECHOICE, MULTIPLE, TRUEFALSE ====================
-    else if (q.options && q.options.length > 0) {
-      q.options.forEach((option, optIndex) => {
-        const selected = selectedOptions.includes(option) ? 'selected' : '';
-        const escapedOption = option.replace(/'/g, "\\'").replace(/"/g, '\\"');
+    } else if (!q.options || q.options.length === 0) {
+      if (q.type !== 'fillblank') {
+        const userAnswer = answers[index] || '';
         html += `
-          <div class="option-box ${selected}" data-value="${escapedOption}">
-            ${option}
+          <input type="text" name="q${index}" id="q${index}_input" value="${userAnswer}" placeholder="Введіть відповідь" class="answer-option" autocomplete="off"><br>
+        `;
+      }
+    } else {
+      if (q.type === 'ordering') {
+        html += `
+          <div id="sortable-options">
+            ${(answers[index] || q.options).map((option, optIndex) => {
+              const escapedOption = option.replace(/'/g, "\\'").replace(/"/g, '\\"');
+              return `
+                <div class="option-box draggable" data-index="${optIndex}" data-value="${escapedOption}">
+                  ${option}
+                </div>
+              `;
+            }).join('')}
           </div>
         `;
-      });
-    } 
-    // ==================== INPUT ====================
-    else if (q.type === 'input') {
-      const userAnswer = answers[index] || '';
-      html += `
-        <input type="text" name="q${index}" id="q${index}_input" value="${userAnswer}" placeholder="Введіть відповідь" class="answer-option" autocomplete="off"><br>
-      `;
+      } else {
+        q.options.forEach((option, optIndex) => {
+          const selected = selectedOptions.includes(option) ? 'selected' : '';
+          const escapedOption = option.replace(/'/g, "\\'").replace(/"/g, '\\"');
+          html += `
+            <div class="option-box ${selected}" data-value="${escapedOption}">
+              ${option}
+            </div>
+          `;
+        });
+      }
     }
 
     html += `
@@ -2845,21 +2937,6 @@ app.get('/test/question', checkAuth, async (req, res) => {
               }).catch(err => {
                 console.error('Помилка перед переходом:', err);
                 window.location.href = '/test/question?index=' + targetIndex;
-              });
-            }
-
-            // Вирівнювання висоти всіх matching-item
-            function equalizeMatchingHeights() {
-              const allItems = document.querySelectorAll('.matching-item');
-              if (allItems.length === 0) return;
-              let maxHeight = 0;
-              allItems.forEach(item => {
-                item.style.height = 'auto';
-                const height = item.getBoundingClientRect().height;
-                if (height > maxHeight) maxHeight = height;
-              });
-              allItems.forEach(item => {
-                item.style.height = maxHeight + 'px';
               });
             }
 
@@ -3153,91 +3230,6 @@ app.get('/test/question', checkAuth, async (req, res) => {
             const sortable = document.getElementById('sortable-options');
             if (sortable) {
               new Sortable(sortable, { animation: 150 });
-            }
-
-            const leftColumn = document.getElementById('left-column');
-            const rightColumn = document.getElementById('right-column');
-            if (leftColumn && rightColumn && '${q.type}' === 'matching') {
-              new Sortable(leftColumn, {
-                group: 'matching',
-                animation: 150,
-                onStart: function(evt) { evt.item.classList.add('dragging'); },
-                onEnd: function(evt) { evt.item.classList.remove('dragging'); updateMatchingPairs(); equalizeMatchingHeights(); }
-              });
-              new Sortable(rightColumn, {
-                group: 'matching',
-                animation: 150,
-                onStart: function(evt) { evt.item.classList.add('dragging'); },
-                onEnd: function(evt) { evt.item.classList.remove('dragging'); updateMatchingPairs(); equalizeMatchingHeights(); }
-              });
-
-              function updateMatchingPairs() {
-                matchingPairs = [];
-                const leftItems = Array.from(document.querySelectorAll('#left-column .draggable'));
-                const rightItems = Array.from(document.querySelectorAll('#right-column .droppable'));
-                rightItems.forEach((rightItem, idx) => {
-                  const rightValue = rightItem.dataset.value || '';
-                  const leftItem = leftItems[idx];
-                  const leftValue = leftItem ? leftItem.dataset.value || '' : '';
-                  if (leftValue && rightValue) {
-                    matchingPairs.push([leftValue, rightValue]);
-                  }
-                });
-              }
-
-              function resetMatchingPairs() {
-                matchingPairs = [];
-                const rightItems = document.querySelectorAll('#right-column .droppable');
-                rightItems.forEach(item => {
-                  const rightValue = item.dataset.value || '';
-                  item.innerHTML = rightValue;
-                });
-                equalizeMatchingHeights();
-              }
-
-              const droppableItems = document.querySelectorAll('.droppable');
-              droppableItems.forEach(item => {
-                item.addEventListener('dragover', (e) => e.preventDefault());
-                item.addEventListener('drop', (e) => {
-                  e.preventDefault();
-                  const draggable = document.querySelector('.dragging');
-                  if (draggable && draggable.classList.contains('draggable')) {
-                    const leftValue = draggable.dataset.value || '';
-                    const rightValue = item.dataset.value || '';
-                    if (leftValue && rightValue) {
-                      item.innerHTML = rightValue + ' <span class="matched"> (Зіставлено: ' + leftValue + ')</span>';
-                      const leftColumn = document.getElementById('left-column');
-                      const rightColumn = document.getElementById('right-column');
-                      const leftItems = Array.from(leftColumn.children);
-                      const rightItems = Array.from(rightColumn.children);
-                      const rightIndex = rightItems.indexOf(item);
-                      if (leftItems[rightIndex]) {
-                        leftColumn.insertBefore(draggable, leftItems[rightIndex]);
-                      } else {
-                        leftColumn.appendChild(draggable);
-                      }
-                      updateMatchingPairs();
-                      equalizeMatchingHeights();
-                    }
-                  }
-                });
-              });
-
-              window.addEventListener('load', equalizeMatchingHeights);
-            }
-
-            function equalizeMatchingHeights() {
-              const allItems = document.querySelectorAll('.matching-item');
-              if (allItems.length === 0) return;
-              let maxHeight = 0;
-              allItems.forEach(item => {
-                item.style.height = 'auto';
-                const height = item.getBoundingClientRect().height;
-                if (height > maxHeight) maxHeight = height;
-              });
-              allItems.forEach(item => {
-                item.style.height = maxHeight + 'px';
-              });
             }
 
             updateGlobalTimer();
