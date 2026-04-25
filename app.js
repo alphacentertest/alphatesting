@@ -1249,10 +1249,10 @@ app.post('/logout', checkAuth, async (req, res) => {
 });
 
 // Збереження результатів тесту (оновлено: перераховуємо все перед збереженням)
-const saveResult = async (user, testNumber, score, totalPoints, startTime, endTime, totalClicks, correctClicks, totalQuestions, percentage, suspiciousActivity, answers, scoresPerQuestion, variant, ipAddress, testSessionId) => {
+const saveResult = async (user, testNumber, score, totalPoints, startTime, endTime, totalClicks, correctClicks, totalQuestions, percentage, suspiciousActivity, answers, scoresPerQuestion, variant, ipAddress, testSessionId, savedQuestions = null) => {
   const startTimeLog = Date.now();
 
-  logger.info('[SAVE-RESULT] Початок збереження (спрощена версія без транзакції)', {
+  logger.info('[SAVE-RESULT] Початок збереження', {
     user,
     testNumber,
     testSessionId,
@@ -1260,54 +1260,38 @@ const saveResult = async (user, testNumber, score, totalPoints, startTime, endTi
     percentage: percentage.toFixed(1) + '%',
     totalQuestions,
     answersCount: Object.keys(answers).length,
-    variant: variant || '(немає)'
+    hasSavedQuestions: !!savedQuestions
   });
 
   try {
-    // Завантажуємо питання
-    let questions = await db.collection('questions')
-      .find({ testNumber })
-      .sort({ order: 1 })
-      .toArray();
+    let questionsToSave = savedQuestions;
 
-    logger.info('[SAVE-RESULT] Знайдено питань у базі', { count: questions.length });
+    // Якщо питань не передали — завантажуємо з бази (fallback)
+    if (!questionsToSave || !Array.isArray(questionsToSave) || questionsToSave.length === 0) {
+      logger.info('[SAVE-RESULT] Питання не передані — завантажуємо з бази');
+      let allQuestions = await db.collection('questions')
+        .find({ testNumber })
+        .sort({ order: 1 })
+        .toArray();
 
-    questions = questions.filter(q =>
-      !q.variant || q.variant === '' || q.variant === variant
-    );
-
-    logger.info('[SAVE-RESULT] Після фільтрації за варіантом', { count: questions.length });
-
-    if (questions.length === 0) {
-      logger.warn('[SAVE-RESULT] Немає питань після фільтрації — пропускаємо перерахунок');
-    }
-
-    // Перерахунок (якщо питань немає — використовуємо передані значення)
-    let actualScore = score;
-    let actualTotalPoints = totalPoints;
-    let actualPercentage = percentage;
-    let actualTotalQuestions = totalQuestions;
-
-    if (questions.length > 0) {
-      const actualScoresPerQuestion = questions.map((q, index) => {
-        const userAnswer = answers[index];
-        return calculateQuestionScore(q, userAnswer);
-      });
-
-      actualScore = actualScoresPerQuestion.reduce((sum, s) => sum + s, 0);
-      actualTotalPoints = questions.reduce((sum, q) => sum + (q.points || 0), 0);
-      actualPercentage = actualTotalPoints > 0 ? (actualScore / actualTotalPoints) * 100 : 0;
-      actualTotalQuestions = questions.length;
-
-      logger.info('[SAVE-RESULT] Перераховано значення', {
-        actualScore: actualScore.toFixed(2),
-        actualTotalPoints: actualTotalPoints.toFixed(2),
-        actualPercentage: actualPercentage.toFixed(1) + '%',
-        actualTotalQuestions
-      });
+      questionsToSave = allQuestions.filter(q =>
+        !q.variant || q.variant === '' || q.variant === variant
+      );
     } else {
-      logger.warn('[SAVE-RESULT] Використовуємо передані значення (питань не знайдено)');
+      logger.info('[SAVE-RESULT] Використано збережені питання з тесту', { count: questionsToSave.length });
     }
+
+    // Перерахунок балів за реальними питаннями
+    const actualScoresPerQuestion = questionsToSave.map((q, index) => {
+      const userAnswer = answers[index];
+      return calculateQuestionScore(q, userAnswer);
+    });
+
+    const actualScore = actualScoresPerQuestion.reduce((sum, s) => sum + s, 0);
+    const actualTotalPoints = questionsToSave.reduce((sum, q) => sum + (q.points || 0), 0);
+    const actualPercentage = actualTotalPoints > 0 ? (actualScore / actualTotalPoints) * 100 : 0;
+    const actualTotalQuestions = questionsToSave.length;
+    const actualCorrectClicks = actualScoresPerQuestion.filter(s => s > 0).length;
 
     const duration = Math.round((endTime - startTime) / 1000);
 
@@ -1317,7 +1301,7 @@ const saveResult = async (user, testNumber, score, totalPoints, startTime, endTi
       score: actualScore,
       totalPoints: actualTotalPoints,
       totalClicks,
-      correctClicks,
+      correctClicks: actualCorrectClicks,
       totalQuestions: actualTotalQuestions,
       percentage: actualPercentage,
       startTime: new Date(startTime).toISOString(),
@@ -1328,10 +1312,14 @@ const saveResult = async (user, testNumber, score, totalPoints, startTime, endTi
       variant: variant ? `Variant ${variant}` : 'Немає',
       testSessionId,
       createdAt: new Date(),
-      ipAddress
+      ipAddress,
+      questions: questionsToSave   // ← НАЙВАЖЛИВІШЕ
     };
 
-    logger.info('[SAVE-RESULT] Готовий документ для вставки', { testSessionId, size: JSON.stringify(result).length });
+    logger.info('[SAVE-RESULT] Готовий документ для вставки', { 
+      testSessionId, 
+      questionsSaved: questionsToSave.length 
+    });
 
     const insertResult = await db.collection('test_results').insertOne(result);
 
@@ -1353,7 +1341,7 @@ const saveResult = async (user, testNumber, score, totalPoints, startTime, endTi
       stack: error.stack,
       testSessionId
     });
-    throw error; // не ковтаємо помилку — нехай маршрут /result її побачить
+    throw error;
   } finally {
     const duration = Date.now() - startTimeLog;
     logger.info('[SAVE-RESULT] Завершено', { duration: `${duration} мс` });
@@ -2263,7 +2251,8 @@ app.get('/test/question', checkAuth, async (req, res) => {
           scoresPerQuestion,
           variant,
           ipAddress,
-          testSessionId
+          testSessionId,
+          questions
         );
         logger.info(`Результат збережено для testSessionId: ${testSessionId} через недоступність тесту`);
       }
@@ -6091,7 +6080,7 @@ app.get('/admin/results', checkAuth, async (req, res) => {
       html += '<tr><td colspan="10">Немає результатів</td></tr>';
     } else {
       for (const result of results) {
-        // === ВИПРАВЛЕНО: використовуємо збережені питання ===
+        // === КРИТИЧНЕ ВИПРАВЛЕННЯ ===
         let questions = [];
 
         if (result.questions && Array.isArray(result.questions) && result.questions.length > 0) {
