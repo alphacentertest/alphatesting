@@ -2772,80 +2772,80 @@ app.get('/test/question', checkAuth, async (req, res) => {
             <div id="answers">
     `;
 
-    // ==================== MATCHING ====================
+        // ==================== MATCHING ====================
     if (q.type === 'matching' && q.pairs) {
       const leftItems = q.pairs.map(p => p.left);
       const rightItems = shuffleArray([...q.pairs.map(p => p.right)]);
 
       html += `
         <div class="matching-container" id="matching-${index}">
-          <!-- Ліва колонка -->
+          <!-- Ліва колонка (сортується, але без перетягування в іншу колонку) -->
           <div class="matching-column" id="left-column-${index}">
-            <h4 style="margin-bottom: 15px; color: #333; text-align: center;">Терміни</h4>
+            <h4 style="margin-bottom:15px;color:#333;text-align:center;">Терміни</h4>
             ${leftItems.map(item => {
               const escaped = item.replace(/'/g, "\\'").replace(/"/g, '\\"');
-              return `
-                <div class="matching-item draggable" data-value="${escaped}">
-                  ${item}
-                </div>`;
+              return `<div class="matching-item draggable" data-value="${escaped}">${item}</div>`;
             }).join('')}
           </div>
 
-          <!-- Права колонка -->
+          <!-- Права колонка (сортується тільки всередині себе) -->
           <div class="matching-column" id="right-column-${index}">
-            <h4 style="margin-bottom: 15px; color: #333; text-align: center;">Відповіді (сортуйте)</h4>
-            ${rightItems.map(item => {
-              const escaped = item.replace(/'/g, "\\'").replace(/"/g, '\\"');
-              return `
-                <div class="matching-item draggable" data-value="${escaped}">
-                  ${item}
-                </div>`;
-            }).join('')}
+            <h4 style="margin-bottom:15px;color:#333;text-align:center;">Відповіді (сортуйте)</h4>
+            <div id="sortable-right-${index}">
+              ${rightItems.map(item => {
+                const escaped = item.replace(/'/g, "\\'").replace(/"/g, '\\"');
+                return `<div class="matching-item draggable" data-value="${escaped}">${item}</div>`;
+              }).join('')}
+            </div>
           </div>
         </div>
 
-        <button onclick="resetMatching(${index})" style="margin-top: 15px;">Скинути порядок</button>
+        <button onclick="resetMatching(${index})" style="margin-top:15px;">Скинути порядок</button>
 
         <script>
-          // Сортування тільки всередині своєї колонки (без group)
+          // Сортування тільки всередині своєї колонки (без group — немає перетягування між колонками)
           new Sortable(document.getElementById('left-column-${index}'), {
             animation: 150,
             ghostClass: 'sortable-ghost',
-            onEnd: () => equalizeMatchingHeights()
+            onEnd: () => saveMatchingAnswer(${index})
           });
 
-          new Sortable(document.getElementById('right-column-${index}'), {
+          new Sortable(document.getElementById('sortable-right-${index}'), {
             animation: 150,
             ghostClass: 'sortable-ghost',
-            onEnd: () => equalizeMatchingHeights()
+            onEnd: () => saveMatchingAnswer(${index})
           });
 
-          // Вирівнювання висоти блоків
-          function equalizeMatchingHeights() {
-            const allItems = document.querySelectorAll('#matching-${index} .matching-item');
-            if (allItems.length === 0) return;
+          function saveMatchingAnswer(idx) {
+            const leftEls = document.querySelectorAll('#left-column-' + idx + ' .matching-item');
+            const rightEls = document.querySelectorAll('#sortable-right-' + idx + ' .matching-item');
             
-            let maxHeight = 0;
-            allItems.forEach(item => {
-              item.style.height = 'auto';
-              const height = item.getBoundingClientRect().height;
-              if (height > maxHeight) maxHeight = height;
+            const pairs = [];
+            leftEls.forEach((leftEl, i) => {
+              const rightEl = rightEls[i];
+              if (leftEl && rightEl) {
+                pairs.push([
+                  leftEl.getAttribute('data-value'),
+                  rightEl.getAttribute('data-value')
+                ]);
+              }
             });
 
-            allItems.forEach(item => {
-              item.style.height = maxHeight + 'px';
-            });
-          }
+            window.currentAnswers = window.currentAnswers || {};
+            window.currentAnswers[idx] = pairs;
 
-          function resetMatching(idx) {
-            if (confirm('Скинути порядок у колонках?')) {
-              location.reload();
+            if (typeof saveAnswer === 'function') {
+              saveAnswer(idx, pairs);
             }
           }
 
-          // Вирівнювання висоти блоків matching
+          function resetMatching(idx) {
+            if (confirm('Скинути порядок?')) location.reload();
+          }
+
+          // Вирівнювання висоти блоків
           function equalizeMatchingHeights() {
-            const allItems = document.querySelectorAll('.matching-item');
+            const allItems = document.querySelectorAll('#matching-' + idx + ' .matching-item');
             if (allItems.length === 0) return;
             let maxHeight = 0;
             allItems.forEach(item => {
@@ -3403,21 +3403,18 @@ function calculateQuestionScore(question, userAnswer) {
       .replace(/[^a-z0-9а-яіїєґ\s.,-]/gi, '');
   };
 
-  // Нормалізація чисел для діапазонів
   const normalizeNumber = (val) => {
     if (val === null || val === undefined) return NaN;
     let str = String(val).trim().replace(/,/g, '.').replace(/\s+/g, '');
     return parseFloat(str);
   };
 
-  // Головна функція для порівняння десяткових чисел (виправляє проблему з комою)
   const normalizeDecimalForCompare = (val) => {
     if (val === null || val === undefined) return '';
     let str = String(val).trim()
-      .replace(/,/g, '.')        // кома → крапка
-      .replace(/\s+/g, '');      // прибрати пробіли
+      .replace(/,/g, '.')
+      .replace(/\s+/g, '');
 
-    // Захист від кількох крапок
     const parts = str.split('.');
     if (parts.length > 2) {
       str = parts[0] + '.' + parts.slice(1).join('');
@@ -3438,9 +3435,8 @@ function calculateQuestionScore(question, userAnswer) {
     }
 
     case 'fillblank': {
-      if (!Array.isArray(userAnswer)) {
-        return 0;
-      }
+      // Твій поточний код для fillblank — залишаємо без змін
+      if (!Array.isArray(userAnswer)) return 0;
 
       const partial = question.points / question.correctAnswers.length;
       let correctCount = 0;
@@ -3449,12 +3445,11 @@ function calculateQuestionScore(question, userAnswer) {
         const userVal = userAnswer[i] || '';
         if (!userVal) return;
 
-        const user = normalize(userVal);           // вже є у твоїй функції
+        const user = normalize(userVal);
         const correct = normalize(correctRaw);
 
         let isCorrect = false;
 
-        // 1. Діапазон чисел (12-15, 99-101 і т.д.)
         if (correctRaw.includes('-')) {
           const [minStr, maxStr] = correctRaw.split('-').map(s => s.trim());
           const min = normalizeNumber(minStr);
@@ -3464,39 +3459,24 @@ function calculateQuestionScore(question, userAnswer) {
           if (!isNaN(val) && !isNaN(min) && !isNaN(max)) {
             isCorrect = val >= min && val <= max;
           }
-        } 
-        // 2. Звичайний текст — М'ЯКЕ СПІВПАДІННЯ
-        else {
-          // Варіант А: одне слово повністю входить в інше
+        } else {
           if (user.includes(correct) || correct.includes(user)) {
             isCorrect = true;
-          } 
-          // Варіант Б: схожість ≥ 50%
-          else {
+          } else {
             const correctLen = correct.length;
             const userLen = user.length;
-
             if (correctLen > 0 && userLen > 0) {
               const minLen = Math.min(correctLen, userLen);
               let similarity = 0;
-
               for (let j = 0; j < minLen; j++) {
-                if (correct[j] === user[j]) {
-                  similarity++;
-                }
+                if (correct[j] === user[j]) similarity++;
               }
-
-              if (similarity / minLen >= 0.5) {   // 50% співпадіння
-                isCorrect = true;
-              }
+              if (similarity / minLen >= 0.5) isCorrect = true;
             }
           }
         }
 
-        if (isCorrect) {
-          correctCount++;
-          // score += partial;   // можна залишити, але краще рахувати в кінці
-        }
+        if (isCorrect) correctCount++;
       });
 
       score = (correctCount / question.correctAnswers.length) * question.points;
@@ -3504,18 +3484,17 @@ function calculateQuestionScore(question, userAnswer) {
     }
 
     case 'input': {
+      // Твій код для input — залишаємо
       const correct = question.correctAnswers?.[0] || '';
       let isCorrect = false;
 
       if (correct.includes('-')) {
-        // ДІАПАЗОН
         const [minStr, maxStr] = correct.split('-').map(s => s.trim());
         const min = normalizeNumber(minStr);
         const max = normalizeNumber(maxStr);
         const val = normalizeNumber(userAnswer);
         isCorrect = !isNaN(val) && !isNaN(min) && !isNaN(max) && val >= min && val <= max;
       } else {
-        // ЗВИЧАЙНЕ ЧИСЛО
         const userNormalized = normalizeDecimalForCompare(userAnswer);
         const correctNormalized = normalizeDecimalForCompare(correct);
         isCorrect = userNormalized === correctNormalized;
@@ -3526,6 +3505,7 @@ function calculateQuestionScore(question, userAnswer) {
     }
 
     case 'matching': {
+      // Твій поточний код — залишаємо
       if (!Array.isArray(userAnswer) || userAnswer.length === 0) return 0;
 
       let userPairs = userAnswer;
@@ -3569,10 +3549,22 @@ function calculateQuestionScore(question, userAnswer) {
       break;
     }
 
-    default: // singlechoice, truefalse
-      const isCorrect = normalize(userAnswer) === normalize(question.correctAnswer || question.correctAnswers?.[0]);
+    // ====================== ВИПРАВЛЕНИЙ БЛОК ======================
+    case 'singlechoice':
+    case 'truefalse': {
+      if (!userAnswer) return 0;
+
+      // Приймаємо як рядок, так і масив з одним елементом
+      const userVal = Array.isArray(userAnswer) ? userAnswer[0] : userAnswer;
+      const correctVal = question.correctAnswer || (question.correctAnswers && question.correctAnswers[0]);
+
+      const isCorrect = normalize(userVal) === normalize(correctVal);
       score = isCorrect ? question.points : 0;
       break;
+    }
+
+    default:
+      score = 0;
   }
 
   return Math.max(0, score);
