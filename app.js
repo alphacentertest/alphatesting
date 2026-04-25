@@ -6091,18 +6091,23 @@ app.get('/admin/results', checkAuth, async (req, res) => {
       html += '<tr><td colspan="10">Немає результатів</td></tr>';
     } else {
       for (const result of results) {
-        // Завантажуємо питання для цього результату
-        let allQuestions = await db.collection('questions')
-          .find({ testNumber: result.testNumber })
-          .sort({ order: 1 })
-          .toArray();
+        // === ВИПРАВЛЕННЯ: Правильне завантаження питань ===
+        let questions = [];
 
-        // Фільтруємо за варіантом
-        const questions = allQuestions.filter(q => 
-          !q.variant || q.variant === '' || q.variant === result.variant
-        );
+        if (result.questions && Array.isArray(result.questions) && result.questions.length > 0) {
+          questions = result.questions;
+        } else {
+          let allQuestions = await db.collection('questions')
+            .find({ testNumber: result.testNumber })
+            .sort({ order: 1 })
+            .toArray();
 
-        // Перерахунок балів за допомогою функції
+          questions = allQuestions.filter(q => 
+            !q.variant || q.variant === '' || q.variant === result.variant
+          );
+        }
+
+        // Перерахунок балів
         const scoresPerQuestion = questions.map((q, idx) => {
           const userAnswer = result.answers[idx];
           return calculateQuestionScore(q, userAnswer);
@@ -6110,7 +6115,7 @@ app.get('/admin/results', checkAuth, async (req, res) => {
 
         const exactScore = scoresPerQuestion.reduce((sum, s) => sum + s, 0);
         const roundedScore = Math.round(exactScore * 10) / 10;
-        const totalPoints = questions.reduce((sum, q) => sum + q.points, 0);
+        const totalPoints = questions.reduce((sum, q) => sum + (q.points || 0), 0);
         const percentage = totalPoints > 0 ? (exactScore / totalPoints) * 100 : 0;
         const roundedPercentage = Math.round(percentage * 10) / 10;
 
@@ -6129,12 +6134,8 @@ app.get('/admin/results', checkAuth, async (req, res) => {
           : 0;
 
         const switchCount = result.suspiciousActivity?.switchCount || 0;
-        const avgResponseTime = result.suspiciousActivity?.responseTimes?.length
-          ? (result.suspiciousActivity.responseTimes.reduce((sum, t) => sum + (t || 0), 0) / result.suspiciousActivity.responseTimes.length).toFixed(2)
-          : 0;
 
-        const isSuspicious = timeAwayPercent > config.suspiciousActivity.timeAwayThreshold ||
-                            switchCount > config.suspiciousActivity.switchCountThreshold;
+        const isSuspicious = timeAwayPercent > 50 || switchCount > 10;
 
         html += `
           <tr class="${isSuspicious ? 'suspicious' : ''}">
