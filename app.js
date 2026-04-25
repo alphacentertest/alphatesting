@@ -6224,13 +6224,22 @@ app.get('/admin/view-result', checkAuth, async (req, res) => {
       return res.status(404).send('Результат не знайдено');
     }
 
-    let questions = allQuestions.filter(q => 
-      !q.variant || q.variant === '' || q.variant === result.variant
-    );
+    // === ВИПРАВЛЕНО: Правильне завантаження питань ===
+    let questions = [];
 
-    // Якщо це Quick Test — використовуємо збережені питання з active_tests (вони містять саме ті, що були показані)
-    if (result.isQuickTest && result.questions && result.questions.length > 0) {
-      questions = result.questions;   // <-- Беремо точний набір питань з тесту користувача
+    if (result.questions && Array.isArray(result.questions) && result.questions.length > 0) {
+      questions = result.questions;
+      logger.info('[VIEW-RESULT] Використано збережені питання з result.questions', { count: questions.length });
+    } else {
+      let allQuestions = await db.collection('questions')
+        .find({ testNumber: result.testNumber })
+        .sort({ order: 1 })
+        .toArray();
+
+      questions = allQuestions.filter(q => 
+        !q.variant || q.variant === '' || q.variant === result.variant
+      );
+      logger.info('[VIEW-RESULT] Використано питання з бази даних', { count: questions.length });
     }
 
     // Використовуємо функцію для підрахунку
@@ -6241,7 +6250,7 @@ app.get('/admin/view-result', checkAuth, async (req, res) => {
 
     const exactScore = scoresPerQuestion.reduce((sum, s) => sum + s, 0);
     const roundedScore = Math.round(exactScore * 10) / 10;
-    const totalPoints = questions.reduce((sum, q) => sum + q.points, 0);
+    const totalPoints = questions.reduce((sum, q) => sum + (q.points || 0), 0);
     const percentage = totalPoints > 0 ? (exactScore / totalPoints) * 100 : 0;
     const roundedPercentage = Math.round(percentage * 10) / 10;
 
@@ -6279,6 +6288,7 @@ app.get('/admin/view-result', checkAuth, async (req, res) => {
             .nav-btn { padding: 12px 24px; margin: 10px 5px; cursor: pointer; border: none; border-radius: 8px; background: #007bff; color: white; }
             .nav-btn:hover { background: #0056b3; }
             .correct-answer { color: #166534; font-weight: bold; }
+            .details { white-space: pre-line; }
           </style>
           <!-- Підключення pdfMake -->
           <script src="/pdfmake/pdfmake.min.js"></script>
@@ -6389,7 +6399,7 @@ app.get('/admin/view-result', checkAuth, async (req, res) => {
                           ...viewResultData.questionsTable.map(row => [
                             row.text,
                             row.userAnswer,
-                            '', // Тут буде правильна відповідь (додано порожнє поле)
+                            '', 
                             { text: row.score + ' / ' + row.maxPoints, alignment: 'center' }
                           ])
                         ]
