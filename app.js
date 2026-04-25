@@ -3612,28 +3612,36 @@ app.get('/result', checkAuth, async (req, res) => {
       testSessionId
     });
 
-    // 3. Завантаження питань + гнучка фільтрація
-    let allQuestions = await db.collection('questions')
-      .find({ testNumber })
-      .sort({ order: 1 })
-      .toArray();
+    // 3. === ВИПРАВЛЕННЯ: ПІДТРИМКА ВИПАДКОВИХ ПИТАНЬ ===
+    let questions = [];
 
-    let questions = allQuestions.filter(q => {
-      if (!q.variant || q.variant === '') return true;
-      const qVar = String(q.variant).trim().toLowerCase().replace(/\s+/g, ' ');
-      return qVar === variant || qVar.includes(variant) || variant.includes(qVar);
-    });
+    // Пріоритет 1: використовуємо збережені питання з тесту (для випадкового вибору та Quick Test)
+    if (testData.questions && Array.isArray(testData.questions) && testData.questions.length > 0) {
+      questions = testData.questions;
+      logger.info('[RESULT] Використано збережені питання з active_tests / result', { count: questions.length });
+    } 
+    // Пріоритет 2: fallback — завантажуємо з бази (для старих тестів)
+    else {
+      let allQuestions = await db.collection('questions')
+        .find({ testNumber })
+        .sort({ order: 1 })
+        .toArray();
 
-    // Якщо після фільтрації питань 0 — беремо ВСІ (це найнадійніше)
-    if (questions.length === 0 && allQuestions.length > 0) {
-      logger.warn('[RESULT] Фільтр за варіантом дав 0 питань — використовуємо ВСІ питання тесту');
-      questions = [...allQuestions];
+      questions = allQuestions.filter(q => {
+        if (!q.variant || q.variant === '') return true;
+        const qVar = String(q.variant).trim().toLowerCase().replace(/\s+/g, ' ');
+        return qVar === variant || qVar.includes(variant) || variant.includes(qVar);
+      });
+
+      if (questions.length === 0 && allQuestions.length > 0) {
+        logger.warn('[RESULT] Фільтр за варіантом дав 0 питань — використовуємо ВСІ питання');
+        questions = [...allQuestions];
+      }
     }
 
-    logger.info('[RESULT] Питання після фільтрації', {
-      allCount: allQuestions.length,
-      filteredCount: questions.length,
-      variantUsed: variant || '(немає)'
+    logger.info('[RESULT] Питання після обробки', {
+      count: questions.length,
+      source: testData.questions ? 'saved_in_test' : 'database'
     });
 
     // 4. Розрахунок балів
@@ -3700,7 +3708,8 @@ app.get('/result', checkAuth, async (req, res) => {
         scoresPerQuestion,
         variant,
         ipAddress,
-        testSessionId
+        testSessionId,
+        questions  // <-- передаємо збережені питання
       );
 
       logger.info('[RESULT] Результат збережено успішно');
@@ -3726,7 +3735,7 @@ app.get('/result', checkAuth, async (req, res) => {
       logger.error('[RESULT] Помилка читання A.png', { message: error.message });
     }
 
-    // 10. Повний HTML (без жодного скорочення)
+    // 10. Повний HTML
     const resultHtml = `
       <!DOCTYPE html>
       <html lang="uk">
@@ -3966,9 +3975,30 @@ app.get('/results', checkAuth, async (req, res) => {
 
     const { questions: rawQuestions, testNumber, answers, startTime: testStartTime, suspiciousActivity, variant, testSessionId, timeLimit } = testData;
 
-    let questions = rawQuestions.filter(q => 
-      !q.variant || q.variant === '' || q.variant === variant
-    );
+    // === ВИПРАВЛЕННЯ: ПІДТРИМКА ВИПАДКОВИХ ПИТАНЬ ===
+    let questions = [];
+
+    if (testData.questions && Array.isArray(testData.questions) && testData.questions.length > 0) {
+      // Використовуємо збережені питання (найправильніший варіант)
+      questions = testData.questions;
+      logger.info('[RESULTS] Використано збережені питання з тесту', { count: questions.length });
+    } else if (rawQuestions && Array.isArray(rawQuestions)) {
+      // Fallback для старих результатів
+      questions = rawQuestions.filter(q => 
+        !q.variant || q.variant === '' || q.variant === variant
+      );
+      logger.info('[RESULTS] Використано фільтрацію з rawQuestions', { count: questions.length });
+    } else {
+      // Якщо нічого немає — завантажуємо з бази
+      let allQuestions = await db.collection('questions')
+        .find({ testNumber })
+        .sort({ order: 1 })
+        .toArray();
+
+      questions = allQuestions.filter(q => 
+        !q.variant || q.variant === '' || q.variant === variant
+      );
+    }
 
     const scoresPerQuestion = questions.map((q, displayIndex) => {
       const userAnswer = answers[displayIndex];
@@ -3977,7 +4007,7 @@ app.get('/results', checkAuth, async (req, res) => {
 
     const exactScore = scoresPerQuestion.reduce((sum, s) => sum + s, 0);
     const roundedScore = Math.round(exactScore * 10) / 10;
-    const totalPoints = questions.reduce((sum, q) => sum + q.points, 0);
+    const totalPoints = questions.reduce((sum, q) => sum + (q.points || 0), 0);
     const percentage = totalPoints > 0 ? (exactScore / totalPoints) * 100 : 0;
     const roundedPercentage = Math.round(percentage * 10) / 10;
 
@@ -4012,6 +4042,7 @@ app.get('/results', checkAuth, async (req, res) => {
             #exportPDF:hover { background: #ffe082; }
             #restart { background: #ef5350; color: white; }
             #restart:hover { background: #e53935; }
+            .details { white-space: pre-line; }
           </style>
           <script src="/pdfmake/pdfmake.min.js"></script>
           <script src="/pdfmake/vfs_fonts.js"></script>
@@ -4042,18 +4073,38 @@ app.get('/results', checkAuth, async (req, res) => {
       const userAnswer = answers[index] || 'Не відповіли';
       const questionScore = scoresPerQuestion[index];
 
-      let userAnswerDisplay = userAnswer;
-      let correctAnswerDisplay = q.correctAnswers?.join(', ') || q.correctAnswer || '—';
+      let userAnswerDisplay = '—';
+      let correctAnswerDisplay = '—';
 
+      // Ваша відповідь
       if (Array.isArray(userAnswer)) {
-        userAnswerDisplay = userAnswer.join(', ');
+        if (q.type === 'matching') {
+          userAnswerDisplay = userAnswer.map(pair => 
+            Array.isArray(pair) && pair.length === 2 ? `${pair[0]} → ${pair[1]}` : String(pair)
+          ).join('<br>');
+        } else if (q.type === 'fillblank') {
+          userAnswerDisplay = userAnswer.join('<br>');
+        } else {
+          userAnswerDisplay = userAnswer.join(', ');
+        }
+      } else {
+        userAnswerDisplay = String(userAnswer);
+      }
+
+      // Правильна відповідь
+      if (q.type === 'matching' && q.correctPairs) {
+        correctAnswerDisplay = q.correctPairs.map(pair => `${pair[0]} → ${pair[1]}`).join('<br>');
+      } else if (q.correctAnswers && Array.isArray(q.correctAnswers)) {
+        correctAnswerDisplay = q.correctAnswers.join('<br>');
+      } else if (q.correctAnswer) {
+        correctAnswerDisplay = q.correctAnswer;
       }
 
       resultsHtml += `
         <tr>
           <td>${q.text}</td>
-          <td>${userAnswerDisplay}</td>
-          <td>${correctAnswerDisplay}</td>
+          <td class="details">${userAnswerDisplay}</td>
+          <td class="details">${correctAnswerDisplay}</td>
           <td>${questionScore.toFixed(3)} / ${q.points}</td>
         </tr>
       `;
@@ -4072,22 +4123,21 @@ app.get('/results', checkAuth, async (req, res) => {
             document.getElementById('exportPDF').addEventListener('click', () => {
               const docDefinition = {
                 content: [
-                  imageBase64 ? { image: 'data:image/png;base64,' + imageBase64, width: 60, alignment: 'center', margin: [0, 0, 0, 20] } : {},
-                  { text: 'Результат тесту користувача ' + user + ' з тесту ' + testName + ' складає ' + percentage + '%', style: 'header' },
-                  { text: 'Кількість питань: ' + totalQuestions, margin: [0, 10, 0, 0] },
-                  { text: 'Правильних відповідей: ' + correctClicks, margin: [0, 5, 0, 0] },
-                  { text: 'Набрано балів: ' + score, margin: [0, 5, 0, 0] },
-                  { text: 'Максимально можлива кількість балів: ' + totalPoints, margin: [0, 5, 0, 0] },
-                  { columns: [
-                    { text: 'Час: ' + time, width: '50%', lineHeight: 1.8 },
-                    { text: 'Дата: ' + date, width: '50%', alignment: 'right', lineHeight: 1.8 }
-                  ], margin: [0, 20, 0, 0] }
+                  { text: 'Результат тесту користувача ' + "${req.user}" + ' з тесту ' + "${testNames[testNumber]?.name || 'Тест'}", style: 'header' },
+                  { text: 'Кількість питань: ${totalQuestions}', margin: [0, 10, 0, 0] },
+                  { text: 'Правильних відповідей: ${correctClicks}', margin: [0, 5, 0, 0] },
+                  { text: 'Набрано балів: ${Math.round(exactScore)}', margin: [0, 5, 0, 0] },
+                  { text: 'Максимально можлива кількість балів: ${Math.round(totalPoints)}', margin: [0, 5, 0, 0] }
                 ],
                 styles: {
                   header: { fontSize: 18, bold: true, margin: [0, 0, 0, 10] }
                 }
               };
               pdfMake.createPdf(docDefinition).download('результат.pdf');
+            });
+
+            document.getElementById('restart').addEventListener('click', () => {
+              window.location.href = '/select-test';
             });
           </script>
         </body>
@@ -4103,7 +4153,7 @@ app.get('/results', checkAuth, async (req, res) => {
   }
 });
 
-// Маршрут для адмін-панелі
+
 // Маршрут для адмін-панелі
 app.get('/admin', checkAuth, checkAdmin, async (req, res) => {
   const startTime = Date.now();
@@ -6174,14 +6224,14 @@ app.get('/admin/view-result', checkAuth, async (req, res) => {
       return res.status(404).send('Результат не знайдено');
     }
 
-    let allQuestions = await db.collection('questions')
-      .find({ testNumber: result.testNumber })
-      .sort({ order: 1 })
-      .toArray();
-
-    const questions = allQuestions.filter(q => 
+    let questions = allQuestions.filter(q => 
       !q.variant || q.variant === '' || q.variant === result.variant
     );
+
+    // Якщо це Quick Test — використовуємо збережені питання з active_tests (вони містять саме ті, що були показані)
+    if (result.isQuickTest && result.questions && result.questions.length > 0) {
+      questions = result.questions;   // <-- Беремо точний набір питань з тесту користувача
+    }
 
     // Використовуємо функцію для підрахунку
     const scoresPerQuestion = questions.map((q, displayIndex) => {
@@ -6410,24 +6460,32 @@ app.get('/admin/view-result', checkAuth, async (req, res) => {
       const questionScore = scoresPerQuestion[index];
 
       let userAnswerDisplay = '—';
+
       if (Array.isArray(userAnswer)) {
         if (question.type === 'matching') {
-          userAnswerDisplay = userAnswer.map(pair => `${pair[0]} → ${pair[1]}`).join('<br>');
+          if (userAnswer.length > 0 && Array.isArray(userAnswer[0]) && userAnswer[0].length === 2) {
+            userAnswerDisplay = userAnswer.map(pair => 
+              Array.isArray(pair) && pair.length === 2 ? `${pair[0]} → ${pair[1]}` : String(pair)
+            ).join('<br>');
+          } else {
+            userAnswerDisplay = userAnswer.join('<br>');
+          }
         } else if (question.type === 'fillblank') {
           userAnswerDisplay = userAnswer.join('<br>');
         } else {
           userAnswerDisplay = userAnswer.join(', ');
         }
       } else {
-        userAnswerDisplay = userAnswer;
+        userAnswerDisplay = String(userAnswer);
       }
 
-      // === ПРАВИЛЬНА ВІДПОВІДЬ ===
       let correctAnswerDisplay = '—';
       if (question.type === 'matching' && question.correctPairs) {
-        correctAnswerDisplay = question.correctPairs.map(pair => `${pair[0]} → ${pair[1]}`).join('<br>');
+        correctAnswerDisplay = question.correctPairs.map(pair => 
+          `${pair[0]} → ${pair[1]}`
+        ).join('<br>');
       } else if (question.correctAnswers && Array.isArray(question.correctAnswers)) {
-        correctAnswerDisplay = question.correctAnswers.join(', ');
+        correctAnswerDisplay = question.correctAnswers.join('<br>');
       } else if (question.correctAnswer) {
         correctAnswerDisplay = question.correctAnswer;
       }
@@ -6435,7 +6493,7 @@ app.get('/admin/view-result', checkAuth, async (req, res) => {
       html += `
         <tr>
           <td>${question.text.replace(/</g, '&lt;').replace(/>/g, '&gt;')}</td>
-          <td class="details">${userAnswerDisplay}</td>
+          <td class="details">${userAnswerDisplay || '—'}</td>
           <td class="details">${correctAnswerDisplay}</td>
           <td>${questionScore.toFixed(3)} / ${question.points}</td>
         </tr>
