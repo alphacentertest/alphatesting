@@ -1906,9 +1906,9 @@ app.get('/admin/feedback', checkAuth, checkAdmin, async (req, res) => {
 // Початок тесту
 app.get('/test', checkAuth, async (req, res) => {
   const startTime = Date.now();
-  testData.answers = {};
   try {
     if (req.userRole === 'admin') return res.redirect('/admin');
+
     const testNumber = req.query.test;
     if (!testNumber || !testNames[testNumber]) {
       return res.status(400).send('Номер тесту не вказано або тест не знайдено');
@@ -1919,25 +1919,10 @@ app.get('/test', checkAuth, async (req, res) => {
       return res.send(`
         <!DOCTYPE html>
         <html lang="uk">
-          <head>
-            <meta charset="UTF-8">
-            <meta name="viewport" content="width=device-width, initial-scale=1.0">
-            <title>Помилка</title>
-            <style>
-              body { font-family: Arial, sans-serif; text-align: center; padding: 50px; background-color: #f5f5f5; margin: 0; }
-              #modal { position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%); background: white; padding: 20px; border: 2px solid black; z-index: 1000; box-shadow: 0 0 10px rgba(0,0,0,0.3); border-radius: 10px; }
-              button { padding: 10px 20px; margin: 5px; cursor: pointer; border: none; border-radius: 5px; background-color: #4CAF50; color: white; transition: background-color 0.3s; }
-              button:hover { background-color: #45a049; }
-              .overlay { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.5); z-index: 999; }
-              h2 { margin-bottom: 20px; font-size: 24px; color: #333; }
-            </style>
-          </head>
-          <body>
-            <div class="overlay"></div>
-            <div id="modal">
-              <h2>Ви вже проходили сьогодні цей тест</h2>
-              <button onclick="window.location.href='/select-test'">Повернутися до вибору тесту</button>
-            </div>
+          <head><meta charset="UTF-8"><title>Помилка</title></head>
+          <body style="font-family:Arial;text-align:center;padding:50px;">
+            <h2>Ви вже використали всі спроби сьогодні для цього тесту</h2>
+            <a href="/select-test">Повернутися до вибору тесту</a>
           </body>
         </html>
       `);
@@ -1945,32 +1930,32 @@ app.get('/test', checkAuth, async (req, res) => {
 
     let questions = await loadQuestions(testNumber);
     const userVariant = Math.floor(Math.random() * 3) + 1;
-    logger.info(`Призначено варіант користувачу ${req.user} для тесту ${testNumber}: Variant ${userVariant}`);
 
-    questions = questions.filter(q => !q.variant || q.variant === '' || q.variant === `Variant ${userVariant}`);
-    logger.info(`Відфільтровано питання для тесту ${testNumber}, варіант ${userVariant}: знайдено ${questions.length} питань`);
+    questions = questions.filter(q => 
+      !q.variant || q.variant === '' || q.variant === `Variant ${userVariant}`
+    );
 
     if (questions.length === 0) {
-      return res.status(400).send(`Немає питань для варіанту ${userVariant} у тесті ${testNumber}`);
+      return res.status(400).send(`Немає питань для варіанту ${userVariant}`);
     }
 
-    const questionLimit = testNames[testNumber].questionLimit;
-    if (questionLimit && questions.length > questionLimit) {
-      questions = shuffleArray([...questions]).slice(0, questionLimit);
+    const testInfo = testNames[testNumber];
+
+    if (testInfo.questionLimit && questions.length > testInfo.questionLimit) {
+      questions = shuffleArray([...questions]).slice(0, testInfo.questionLimit);
     }
 
-    if (testNames[testNumber].randomQuestions) {
+    if (testInfo.randomQuestions) {
       questions = shuffleArray([...questions]);
     }
 
-    if (testNames[testNumber].randomAnswers) {
+    if (testInfo.randomAnswers) {
       questions = questions.map(q => {
-        if (q.options && q.options.length > 0 && q.type !== 'ordering' && q.type !== 'matching') {
-          const shuffledOptions = shuffleArray([...q.options]);
-          return { ...q, options: shuffledOptions };
-        } else if (q.type === 'matching' && q.pairs) {
-          const shuffledPairs = shuffleArray([...q.pairs]);
-          return { ...q, pairs: shuffledPairs };
+        if (q.type === 'matching' && q.pairs) {
+          return { ...q, pairs: shuffleArray([...q.pairs]) };
+        }
+        if (q.options && q.options.length > 0 && !['ordering', 'matching'].includes(q.type)) {
+          return { ...q, options: shuffleArray([...q.options]) };
         }
         return q;
       });
@@ -1979,7 +1964,7 @@ app.get('/test', checkAuth, async (req, res) => {
     const testStartTime = Date.now();
     const testSessionId = `${req.user}_${testNumber}_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
 
-    // Збереження стану тесту в MongoDB
+    // === ЗБЕРЕЖЕННЯ СТАНУ ТЕСТУ ===
     const testData = {
       user: req.user,
       testNumber,
@@ -1987,15 +1972,17 @@ app.get('/test', checkAuth, async (req, res) => {
       answers: {},
       currentQuestion: 0,
       startTime: testStartTime,
-      timeLimit: testNames[testNumber].timeLimit * 1000,
+      timeLimit: testInfo.timeLimit || 3600000,
       variant: userVariant,
-      isQuickTest: testNames[testNumber].isQuickTest,
-      timePerQuestion: testNames[testNumber].timePerQuestion,
+      isQuickTest: testInfo.isQuickTest || false,
+      timePerQuestion: testInfo.timePerQuestion || 60,
       testSessionId: testSessionId,
-      isSavingResult: false,
-      answerTimestamps: {},
-      questionStartTime: {},
-      suspiciousActivity: { timeAway: 0, switchCount: 0, responseTimes: [], activityCounts: [] }
+      suspiciousActivity: {
+        timeAway: 0,
+        switchCount: 0,
+        responseTimes: [],
+        activityCounts: []
+      }
     };
 
     await db.collection('active_tests').updateOne(
@@ -2005,14 +1992,22 @@ app.get('/test', checkAuth, async (req, res) => {
     );
 
     const ipAddress = req.headers['x-forwarded-for'] || req.socket.remoteAddress;
-    await logActivity(req.user, `розпочав тест ${testNames[testNumber].name.replace(/"/g, '\\"')}`, ipAddress);
+    await logActivity(req.user, `розпочав тест ${testInfo.name || testNumber}`, ipAddress);
+
+    logger.info(`Тест ${testNumber} запущено для ${req.user}, варіант ${userVariant}, питань: ${questions.length}`);
+
     res.redirect(`/test/question?index=0`);
+
   } catch (error) {
-    logger.error('Помилка в /test', { message: error.message, stack: error.stack });
-    res.status(500).send('Помилка при завантаженні тесту: ' + error.message);
+    logger.error('Помилка в /test', { 
+      message: error.message, 
+      stack: error.stack,
+      user: req.user,
+      testNumber: req.query.test 
+    });
+    res.status(500).send('Щось пішло не так! Спробуйте ще раз або зверніться до адміністратора.');
   } finally {
-    const endTime = Date.now();
-    logger.info('Маршрут /test виконано', { duration: `${endTime - startTime} мс` });
+    logger.info('Маршрут /test виконано', { duration: `${Date.now() - startTime} мс` });
   }
 });
 
