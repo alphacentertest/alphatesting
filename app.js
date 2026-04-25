@@ -15,11 +15,6 @@ const winston = require('winston');
 const session = require('express-session');
 const MongoStore = require('connect-mongo');
 
-
-// === ВИПРАВЛЕННЯ ЧАСОВОГО ПОЯСУ ДЛЯ VERCEL ===
-process.env.TZ = 'Europe/Kiev';   // або 'Europe/Kyiv' (залежить від версії Node)
-console.log('Серверний часовий пояс встановлено:', process.env.TZ);
-
 // Ініціалізація Express-додатку
 const app = express();
 
@@ -439,162 +434,128 @@ const importUsersToMongoDB = async (buffer) => {
   }
 };
 
-// Імпорт питань — покращена версія з діагностикою
+// Імпорт питань
 const importQuestionsToMongoDB = async (buffer, testNumber) => {
   try {
     const workbook = new ExcelJS.Workbook();
     await workbook.xlsx.load(buffer);
-
-    // === ДІАГНОСТИКА ЛИСТІВ ===
-    const sheetNames = workbook.worksheets.map(ws => ws.name);
-    logger.info(`Імпорт питань: доступні листи: ${sheetNames.join(', ')}`);
-
-    let sheet = workbook.getWorksheet('Questions') || 
-                workbook.getWorksheet('questions') || 
-                workbook.getWorksheet('Питання') || 
-                workbook.getWorksheet('Sheet1') || 
-                workbook.worksheets[0];
-
-    if (!sheet) {
-      throw new Error(`Лист з питаннями не знайдено. Доступні: ${sheetNames.join(', ')}`);
-    }
-
-    logger.info(`Використовуємо лист "${sheet.name}", рядків: ${sheet.rowCount}`);
-
+    const sheet = workbook.getWorksheet('Questions');
+    if (!sheet) throw new Error('Лист "Questions" не знайдено');
     const MAX_ROWS = 1000;
-    if (sheet.rowCount > MAX_ROWS + 1) {
-      throw new Error(`Занадто багато рядків (${sheet.rowCount - 1}). Максимум: ${MAX_ROWS}`);
-    }
-
+    if (sheet.rowCount > MAX_ROWS + 1) throw new Error(`Занадто багато рядків (${sheet.rowCount - 1}). Макс: ${MAX_ROWS}`);
     const questions = [];
-    let errorRows = [];
-
     sheet.eachRow({ includeEmpty: false }, (row, rowNumber) => {
-      if (rowNumber <= 1) return; // пропускаємо заголовок
+      if (rowNumber > 1) {
+        try {
+          const rowValues = row.values.slice(1);
+          let questionText = rowValues[1];
+          if (typeof questionText === 'object' && questionText) questionText = questionText.text || questionText.value || '[Невірний текст]';
+          questionText = String(questionText || '').trim();
+          if (!questionText) throw new Error('Текст питання відсутній');
+          const picture = String(rowValues[0] || '').trim();
+          let options = rowValues.slice(2, 14).filter(Boolean).map(val => String(val).trim());
+          const correctAnswers = rowValues.slice(14, 26).filter(Boolean).map(val => String(val).trim());
+          const type = String(rowValues[26] || 'multiple').toLowerCase();
+          const points = Number(rowValues[27]) || 1;
+          const variant = String(rowValues[28] || '').trim();
 
-      try {
-        const rowValues = row.values.slice(1);
-        let questionText = rowValues[1];
-        if (typeof questionText === 'object' && questionText) {
-          questionText = questionText.text || questionText.value || '[Невірний текст]';
-        }
-        questionText = String(questionText || '').trim();
+          if (type === 'truefalse') options = ["Правда", "Неправда"];
 
-        if (!questionText) throw new Error('Текст питання відсутній');
+          const normalizedPicture = picture ? picture.replace(/\.png$/i, '').replace(/^picture/i, 'Picture').replace(/\s+/g, '') : null;
 
-        const picture = String(rowValues[0] || '').trim();
-        let options = rowValues.slice(2, 14).filter(Boolean).map(val => String(val).trim());
-        const correctAnswers = rowValues.slice(14, 26).filter(Boolean).map(val => String(val).trim());
-        const type = String(rowValues[26] || 'multiple').toLowerCase().trim();
-        const points = Number(rowValues[27]) || 1;
-        const variant = String(rowValues[28] || '').trim();
+          let questionData = {
+            testNumber,
+            picture: null,
+            originalPicture: normalizedPicture,
+            text: questionText,
+            options,
+            correctAnswers,
+            type,
+            points,
+            variant,
+            order: rowNumber - 1
+          };
 
-        if (type === 'truefalse') options = ["Правда", "Неправда"];
-
-        const normalizedPicture = picture ? picture.replace(/\.png$/i, '').replace(/^picture/i, 'Picture').replace(/\s+/g, '') : null;
-
-        let questionData = {
-          testNumber,
-          picture: null,
-          originalPicture: normalizedPicture,
-          text: questionText,
-          options,
-          correctAnswers,
-          type,
-          points,
-          variant,
-          order: rowNumber - 1
-        };
-
-        // Обробка зображення
-        if (normalizedPicture) {
-          // ... (залишаємо твій код обробки картинок без змін)
-          const pictureMatch = normalizedPicture.match(/^Picture(\d+)$/i);
-          if (pictureMatch) {
-            const pictureNumber = parseInt(pictureMatch[1], 10);
-            const targetFileNameBase = `Picture${pictureNumber}`;
-            const extensions = ['.png', '.jpg', '.jpeg', '.gif'];
-            const imageDir = path.join(__dirname, 'public', 'images');
-            const filesInDir = fs.existsSync(imageDir) ? fs.readdirSync(imageDir) : [];
-            for (const ext of extensions) {
-              const expectedFileName = `${targetFileNameBase}${ext}`;
-              const matchedFile = filesInDir.find(file => file.toLowerCase() === expectedFileName.toLowerCase());
-              if (matchedFile) {
-                questionData.picture = `/images/${matchedFile}`;
-                break;
+          if (normalizedPicture) {
+            const pictureMatch = normalizedPicture.match(/^Picture(\d+)$/i);
+            if (pictureMatch) {
+              const pictureNumber = parseInt(pictureMatch[1], 10);
+              const targetFileNameBase = `Picture${pictureNumber}`;
+              const extensions = ['.png', '.jpg', '.jpeg', '.gif'];
+              const imageDir = path.join(__dirname, 'public', 'images');
+              const filesInDir = fs.existsSync(imageDir) ? fs.readdirSync(imageDir) : [];
+              for (const ext of extensions) {
+                const expectedFileName = `${targetFileNameBase}${ext}`;
+                const fileExists = filesInDir.some(file => file.toLowerCase() === expectedFileName.toLowerCase());
+                if (fileExists) {
+                  const matchedFile = filesInDir.find(file => file.toLowerCase() === expectedFileName.toLowerCase());
+                  const imagePath = path.join(imageDir, matchedFile);
+                  if (fs.existsSync(imagePath)) {
+                    questionData.picture = `/images/Picture${pictureNumber}${ext.toLowerCase()}`;
+                    break;
+                  }
+                }
               }
             }
           }
-        }
 
-        // Matching
-        if (type === 'matching') {
-          questionData.pairs = options.map((opt, idx) => ({
-            left: opt || '',
-            right: questionData.correctAnswers[idx] || ''
-          })).filter(pair => pair.left && pair.right);
-          if (!questionData.pairs.length) throw new Error('Для Matching потрібні пари');
-          questionData.correctPairs = questionData.pairs.map(pair => [pair.left, pair.right]);
-        }
-
-        // Fillblank — тільки перевірка структури
-        if (type === 'fillblank') {
-          questionData.text = questionText.replace(/\s*___/g, '___');
-          const blankCount = (questionData.text.match(/___/g) || []).length;
-          if (blankCount === 0 || blankCount !== correctAnswers.length) {
-            throw new Error(`Пропусків (${blankCount}) не відповідає відповідям (${correctAnswers.length})`);
+          if (type === 'matching') {
+            questionData.pairs = options.map((opt, idx) => ({
+              left: opt || '',
+              right: questionData.correctAnswers[idx] || ''
+            })).filter(pair => pair.left && pair.right);
+            if (!questionData.pairs.length) throw new Error('Для Matching потрібні пари');
+            questionData.correctPairs = questionData.pairs.map(pair => [pair.left, pair.right]);
           }
-          questionData.blankCount = blankCount;
-        }
 
-        // Singlechoice
-        if (type === 'singlechoice') {
-          if (correctAnswers.length !== 1 || options.length < 2) {
-            throw new Error('Single Choice: потрібна 1 відповідь і ≥2 варіанти');
+          if (type === 'fillblank') {
+            questionData.text = questionText.replace(/\s*___/g, '___');
+            const blankCount = (questionData.text.match(/___/g) || []).length;
+            if (blankCount === 0 || blankCount !== questionData.correctAnswers.length) {
+              throw new Error('Пропуски не відповідають відповідям');
+            }
+            questionData.blankCount = blankCount;
+            questionData.correctAnswers.forEach((answer, idx) => {
+              if (answer.includes('-')) {
+                const [min, max] = answer.split('-').map(val => parseFloat(val.trim()));
+                if (isNaN(min) || isNaN(max) || min > max) throw new Error(`Невірний діапазон для відповіді ${idx + 1}`);
+              } else {
+                const value = parseFloat(answer);
+                if (isNaN(value)) throw new Error(`Відповідь ${idx + 1} має бути числом або діапазоном`);
+              }
+            });
           }
-          questionData.correctAnswer = correctAnswers[0];
-        }
 
-        // Input
-        if (type === 'input') {
-          if (correctAnswers.length !== 1) throw new Error('Input: потрібна 1 відповідь');
-          const correctAnswer = correctAnswers[0];
-          if (correctAnswer.includes('-')) {
-            const [min, max] = correctAnswer.split('-').map(val => parseFloat(val.trim()));
-            if (isNaN(min) || isNaN(max) || min > max) throw new Error('Невірний діапазон');
+          if (type === 'singlechoice') {
+            if (correctAnswers.length !== 1 || options.length < 2) throw new Error('Single Choice: потрібна 1 відповідь і ≥2 варіанти');
+            questionData.correctAnswer = correctAnswers[0];
           }
+
+          if (type === 'input') {
+            if (correctAnswers.length !== 1) throw new Error('Input: потрібна 1 відповідь');
+            const correctAnswer = correctAnswers[0];
+            if (correctAnswer.includes('-')) {
+              const [min, max] = correctAnswer.split('-').map(val => parseFloat(val.trim()));
+              if (isNaN(min) || isNaN(max) || min > max) throw new Error('Невірний діапазон');
+            } else {
+              const value = parseFloat(correctAnswer);
+              if (isNaN(value)) throw new Error('Відповідь має бути числом або діапазоном');
+            }
+          }
+
+          questions.push(questionData);
+        } catch (error) {
+          throw new Error(`Помилка в рядку ${rowNumber}: ${error.message}`);
         }
-
-        questions.push(questionData);
-
-      } catch (rowError) {
-        errorRows.push({ row: rowNumber, error: rowError.message });
-        logger.warn(`Помилка в рядку ${rowNumber}: ${rowError.message}`);
       }
     });
-
-    if (errorRows.length > 0) {
-      logger.error(`Імпорт завершено з помилками в ${errorRows.length} рядках`, errorRows);
-    }
-
-    if (!questions.length) {
-      throw new Error('Не знайдено жодного валідного питання');
-    }
-
+    if (!questions.length) throw new Error('Не знайдено питань');
     await db.collection('questions').deleteMany({ testNumber });
     await db.collection('questions').insertMany(questions);
-
     await CacheManager.invalidateCache('questions', testNumber);
-
-    logger.info(`Успішно імпортовано ${questions.length} питань для тесту ${testNumber}`);
     return questions.length;
-
   } catch (error) {
-    logger.error('Критична помилка імпорту питань', { 
-      message: error.message, 
-      stack: error.stack,
-      testNumber 
-    });
+    logger.error('Помилка імпорту питань', { message: error.message, stack: error.stack });
     throw error;
   }
 };
@@ -1908,7 +1869,6 @@ app.get('/test', checkAuth, async (req, res) => {
   const startTime = Date.now();
   try {
     if (req.userRole === 'admin') return res.redirect('/admin');
-
     const testNumber = req.query.test;
     if (!testNumber || !testNames[testNumber]) {
       return res.status(400).send('Номер тесту не вказано або тест не знайдено');
@@ -1919,10 +1879,25 @@ app.get('/test', checkAuth, async (req, res) => {
       return res.send(`
         <!DOCTYPE html>
         <html lang="uk">
-          <head><meta charset="UTF-8"><title>Помилка</title></head>
-          <body style="font-family:Arial;text-align:center;padding:50px;">
-            <h2>Ви вже використали всі спроби сьогодні для цього тесту</h2>
-            <a href="/select-test">Повернутися до вибору тесту</a>
+          <head>
+            <meta charset="UTF-8">
+            <meta name="viewport" content="width=device-width, initial-scale=1.0">
+            <title>Помилка</title>
+            <style>
+              body { font-family: Arial, sans-serif; text-align: center; padding: 50px; background-color: #f5f5f5; margin: 0; }
+              #modal { position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%); background: white; padding: 20px; border: 2px solid black; z-index: 1000; box-shadow: 0 0 10px rgba(0,0,0,0.3); border-radius: 10px; }
+              button { padding: 10px 20px; margin: 5px; cursor: pointer; border: none; border-radius: 5px; background-color: #4CAF50; color: white; transition: background-color 0.3s; }
+              button:hover { background-color: #45a049; }
+              .overlay { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.5); z-index: 999; }
+              h2 { margin-bottom: 20px; font-size: 24px; color: #333; }
+            </style>
+          </head>
+          <body>
+            <div class="overlay"></div>
+            <div id="modal">
+              <h2>Ви вже проходили сьогодні цей тест</h2>
+              <button onclick="window.location.href='/select-test'">Повернутися до вибору тесту</button>
+            </div>
           </body>
         </html>
       `);
@@ -1930,32 +1905,32 @@ app.get('/test', checkAuth, async (req, res) => {
 
     let questions = await loadQuestions(testNumber);
     const userVariant = Math.floor(Math.random() * 3) + 1;
+    logger.info(`Призначено варіант користувачу ${req.user} для тесту ${testNumber}: Variant ${userVariant}`);
 
-    questions = questions.filter(q => 
-      !q.variant || q.variant === '' || q.variant === `Variant ${userVariant}`
-    );
+    questions = questions.filter(q => !q.variant || q.variant === '' || q.variant === `Variant ${userVariant}`);
+    logger.info(`Відфільтровано питання для тесту ${testNumber}, варіант ${userVariant}: знайдено ${questions.length} питань`);
 
     if (questions.length === 0) {
-      return res.status(400).send(`Немає питань для варіанту ${userVariant}`);
+      return res.status(400).send(`Немає питань для варіанту ${userVariant} у тесті ${testNumber}`);
     }
 
-    const testInfo = testNames[testNumber];
-
-    if (testInfo.questionLimit && questions.length > testInfo.questionLimit) {
-      questions = shuffleArray([...questions]).slice(0, testInfo.questionLimit);
+    const questionLimit = testNames[testNumber].questionLimit;
+    if (questionLimit && questions.length > questionLimit) {
+      questions = shuffleArray([...questions]).slice(0, questionLimit);
     }
 
-    if (testInfo.randomQuestions) {
+    if (testNames[testNumber].randomQuestions) {
       questions = shuffleArray([...questions]);
     }
 
-    if (testInfo.randomAnswers) {
+    if (testNames[testNumber].randomAnswers) {
       questions = questions.map(q => {
-        if (q.type === 'matching' && q.pairs) {
-          return { ...q, pairs: shuffleArray([...q.pairs]) };
-        }
-        if (q.options && q.options.length > 0 && !['ordering', 'matching'].includes(q.type)) {
-          return { ...q, options: shuffleArray([...q.options]) };
+        if (q.options && q.options.length > 0 && q.type !== 'ordering' && q.type !== 'matching') {
+          const shuffledOptions = shuffleArray([...q.options]);
+          return { ...q, options: shuffledOptions };
+        } else if (q.type === 'matching' && q.pairs) {
+          const shuffledPairs = shuffleArray([...q.pairs]);
+          return { ...q, pairs: shuffledPairs };
         }
         return q;
       });
@@ -1964,7 +1939,7 @@ app.get('/test', checkAuth, async (req, res) => {
     const testStartTime = Date.now();
     const testSessionId = `${req.user}_${testNumber}_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
 
-    // === ЗБЕРЕЖЕННЯ СТАНУ ТЕСТУ ===
+    // Збереження стану тесту в MongoDB
     const testData = {
       user: req.user,
       testNumber,
@@ -1972,17 +1947,15 @@ app.get('/test', checkAuth, async (req, res) => {
       answers: {},
       currentQuestion: 0,
       startTime: testStartTime,
-      timeLimit: testInfo.timeLimit || 3600000,
+      timeLimit: testNames[testNumber].timeLimit * 1000,
       variant: userVariant,
-      isQuickTest: testInfo.isQuickTest || false,
-      timePerQuestion: testInfo.timePerQuestion || 60,
+      isQuickTest: testNames[testNumber].isQuickTest,
+      timePerQuestion: testNames[testNumber].timePerQuestion,
       testSessionId: testSessionId,
-      suspiciousActivity: {
-        timeAway: 0,
-        switchCount: 0,
-        responseTimes: [],
-        activityCounts: []
-      }
+      isSavingResult: false,
+      answerTimestamps: {},
+      questionStartTime: {},
+      suspiciousActivity: { timeAway: 0, switchCount: 0, responseTimes: [], activityCounts: [] }
     };
 
     await db.collection('active_tests').updateOne(
@@ -1992,22 +1965,14 @@ app.get('/test', checkAuth, async (req, res) => {
     );
 
     const ipAddress = req.headers['x-forwarded-for'] || req.socket.remoteAddress;
-    await logActivity(req.user, `розпочав тест ${testInfo.name || testNumber}`, ipAddress);
-
-    logger.info(`Тест ${testNumber} запущено для ${req.user}, варіант ${userVariant}, питань: ${questions.length}`);
-
+    await logActivity(req.user, `розпочав тест ${testNames[testNumber].name.replace(/"/g, '\\"')}`, ipAddress);
     res.redirect(`/test/question?index=0`);
-
   } catch (error) {
-    logger.error('Помилка в /test', { 
-      message: error.message, 
-      stack: error.stack,
-      user: req.user,
-      testNumber: req.query.test 
-    });
-    res.status(500).send('Щось пішло не так! Спробуйте ще раз або зверніться до адміністратора.');
+    logger.error('Помилка в /test', { message: error.message, stack: error.stack });
+    res.status(500).send('Помилка при завантаженні тесту: ' + error.message);
   } finally {
-    logger.info('Маршрут /test виконано', { duration: `${Date.now() - startTime} мс` });
+    const endTime = Date.now();
+    logger.info('Маршрут /test виконано', { duration: `${endTime - startTime} мс` });
   }
 });
 
@@ -2020,7 +1985,7 @@ app.get('/instructions', checkAuth, (req, res) => {
         <head>
           <meta charset="UTF-8">
           <meta name="viewport" content="width=device-width, initial-scale=1.0">
-          <title>Інструкція з проходження тестів</title>
+          <title>Інструкція до тестів</title>
           <style>
             body {
               font-family: Arial, sans-serif;
@@ -2047,10 +2012,8 @@ app.get('/instructions', checkAuth, (req, res) => {
             h2 {
               font-size: 22px;
               color: #34495e;
-              margin-top: 30px;
+              margin-top: 20px;
               margin-bottom: 10px;
-              border-bottom: 1px solid #eee;
-              padding-bottom: 5px;
             }
             p, li {
               font-size: 16px;
@@ -2058,39 +2021,45 @@ app.get('/instructions', checkAuth, (req, res) => {
             }
             ul {
               list-style-type: disc;
-              padding-left: 25px;
-              margin: 10px 0;
+              padding-left: 20px;
             }
-            li {
-              margin-bottom: 8px;
-            }
-            strong {
-              color: #2c3e50;
+            img {
+              max-width: 100%;
+              max-height: 400px;
+              margin: 15px auto;
+              display: block;
+              border-radius: 8px;
+              object-fit: contain;
             }
             .nav-btn {
               display: inline-block;
-              padding: 12px 24px;
-              margin-top: 30px;
+              padding: 10px 20px;
+              margin-top: 20px;
               cursor: pointer;
               border: none;
-              border-radius: 6px;
+              border-radius: 5px;
               background-color: #4CAF50;
               color: white;
               text-decoration: none;
-              font-size: 17px;
+              font-size: 16px;
               text-align: center;
-              transition: background 0.2s;
             }
             .nav-btn:hover {
               background-color: #45a049;
             }
             @media (max-width: 600px) {
               .container {
-                padding: 20px 15px;
+                padding: 15px;
               }
-              h1 { font-size: 24px; }
-              h2 { font-size: 20px; }
-              p, li { font-size: 15px; }
+              h1 {
+                font-size: 24px;
+              }
+              h2 {
+                font-size: 18px;
+              }
+              p, li {
+                font-size: 14px;
+              }
               .nav-btn {
                 width: 100%;
                 box-sizing: border-box;
@@ -2100,96 +2069,50 @@ app.get('/instructions', checkAuth, (req, res) => {
         </head>
         <body>
           <div class="container">
-            <h1>Інструкція з проходження тестів</h1>
-            <p>Вітаємо Вас у Центрі тестування! Щоб отримати максимально точні результати та зручно пройти тест, будь ласка, дотримуйтесь цих простих рекомендацій:</p>
-
+            <h1>Інструкція для користувачів: Як правильно проходити тести</h1>
+            <p>Вітаємо Вас в Центрі тестування! Щоб забезпечити найкращий досвід і отримати точні результати, будь ласка, дотримуйтесь цих рекомендацій:</p>
+            
             <h2>1. Підготовка до тесту</h2>
             <ul>
-              <li>Перевірте стабільне інтернет-з’єднання (Wi-Fi або мобільний інтернет).</li>
-              <li>Використовуйте актуальну версію браузера: Google Chrome, Mozilla Firefox або Microsoft Edge.</li>
-              <li>Закрийте зайві вкладки та програми, щоб тест працював швидко.</li>
+              <li><strong>Перевірте з’єднання з Інтернетом:</strong> Переконайтеся, що ваше інтернет-з’єднання стабільне, щоб уникнути перерв під час тесту.</li>
+              <li><strong>Використовуйте сумісний браузер:</strong> Рекомендуємо використовувати актуальні версії браузерів, таких як Google Chrome, Mozilla Firefox або Microsoft Edge.</li>
+              <li><strong>Закрийте зайві вкладки та програми:</strong> Це допоможе уникнути відволікань і зменшить навантаження на пристрій.</li>
+              <li><strong>Ознайомтеся з інструкціями:</strong> Перед початком тесту уважно прочитайте цю інструкцію.</li>
             </ul>
 
             <h2>2. Початок тесту</h2>
             <ul>
-              <li>Оберіть потрібний тест зі списку.</li>
-              <li>Уважно прочитайте назву та інструкцію до тесту перед початком.</li>
-              <li>Пам’ятайте: кількість спроб на день може бути обмежена (залежить від правил Вашого курсу/групи). Якщо спроби закінчилися — дочекайтеся наступного дня або зверніться до адміністратора.</li>
+              <li><strong>Оберіть тест:</strong> На сторінці вибору тесту виберіть тест із доступного списку.</li>
+              <li><strong>Не залишайте сторінку без потреби:</strong> Якщо Ви плануєте перерву, завершіть тест перед тим, як закривати вкладку, щоб уникнути втрати прогресу.</li>
             </ul>
 
-            <h2>3. Процес проходження тесту</h2>
+            <h2>3. Проведення тесту</h2>
             <ul>
-              <li><strong>Типи питань та як відповідати:</strong>
-                <ul>
-                  <li><strong>Одинарний вибір</strong> — оберіть лише одну правильну відповідь. В цих типах питань лише одна правильна відповідь.</li>
-                  <li><strong>Множинний вибір</strong> — оберіть усі правильні відповіді. В цих типах питань може бути кілька правильних відповідей.</li>
-                  <li><strong>Введення тексту</strong> — введіть відповідь вручну (враховується регістр і пробіли).</li>
-                  <li><strong>Заповнення пропусків</strong> — заповніть усі пропуски в реченні.</li>
-                  <li><strong>Впорядкування</strong> — перетягніть варіанти у правильну послідовність.</li>
-                  <li><strong>Встановлення відповідностей (matching)</strong> — зіставте елементи лівої колонки до відповідних елементів правої.</li>
-                </ul>
-                Завжди читайте інструкцію під текстом питання — вона підказує, скільки відповідей потрібно обрати.
-              </li>
-
-              <li><strong>Полоса прогресу (кружечки зверху)</strong><br>
-                Кожен кружечок — це окреме питання.<br>
-                <strong>Клікніть на будь-який кружечок</strong> — система збереже поточну відповідь і перенесе Вас на це питання. Це зручно, щоб швидко повернутися до пропущених або сумнівних питань.<br>
-                <strong>Що означають кольори кружечків під час проходження:</strong>
-                <ul>
-                  <li><strong>Червоний</strong> — питання не отримано жодної відповіді (пропущене).</li>
-                  <li><strong>Зелений</strong> — на питання дано відповідь.</li>
-                </ul>
-              </li>
-
-              <li><strong>Таймер</strong><br>
-                Слідкуйте за таймером у верхній частині екрана. Якщо час закінчиться — тест автоматично завершиться.
-              </li>
-
-              <li><strong>Перехід між питаннями</strong><br>
-                Використовуйте кнопки «Назад» / «Далі» або клікайте на кружечки прогресу.
-              </li>
+              <li><strong>Відповідайте на питання послідовно:</strong> Пересувайтеся між питаннями за допомогою кнопок "Назад" і "Далі". Ви можете пропускати деякі питання і рухатись далі. Якщо Ви пропустили питання і не дали на нього відповідь, то в полосі прогресу кружечок з цим питанням буде червоного кольору і Ви зможете швидко знайти пропущене питання.</li>
+              <li><strong>Перевіряйте відповіді:</strong> Перед завершенням тесту переконайтеся, що всі питання заповнені. Ви можете повертатися до попередніх питань, якщо це дозволено.</li>
+              <li><strong>Дотримуйтесь таймера:</strong> Звертайте увагу на таймер у верхній частині екрана. Якщо час закінчиться, тест завершиться автоматично.</li>
+              <li><strong>Увага до інструкцій під питаннями:</strong> Звертайте увагу на написи під текстом кожного питання, адже тести містять питання різних типів. Деякі питання мають лише одну правильну відповідь (питання типу "singlechoice"), напис під такими питаннями буде «Виберіть правильну відповідь». Питання мультивибору (типу "multiple") мають декілька правильних відповідей. Напис під цими питанням буде «Виберіть усі правильні відповіді». Вибір правильної кількості відповідей критично важливий для точного результату. Також є питання типу "input", в яких Вам необхідно у вікні відповіді ввести власноручно відповідь. У питаннях типу "fillblank" Вам необхідно буде заповнити пропуски у реченні. У питаннях типу "ordering" Вам будуть представлені варіанти відповідей (пункти), які необхідно буде розташувати у правильній послідовності переміщаючи (перетягуючи) їх. У питаннях типу "matching" Вам необхідно буде скласти пари, перетягуючи елементи і зіставляючи їх один навпроти іншого. Якщо Ви проходите тести з телефону, в яких зазвичай екрани мають невелике розширення, то на питаннях цього типу Вам необхідно буде розвернути телефон в альбомну розкладку, тоді Ви зможете коректно виконати такі пункти тесту.</li>
+              <img src="/images/image1.jpg" alt="Інструкція для користувачів" onerror="this.style.display='none';">
             </ul>
 
-            <h2>4. Підрахунок балів</h2>
+            <h2>4. Завершення тесту</h2>
             <ul>
-              <li>Кожне питання має свою вагу (кількість балів).</li>
-              <li>Правильна відповідь дає повну кількість балів за питання.</li>
-              <li>Частково правильна відповідь (наприклад, обрано не всі варіанти) дає частину балів або 0 — залежить від типу питання.</li>
-              <li>Неправильна відповідь або пропущене питання = 0 балів.</li>
-              <li>Загальний відсоток = (набрані бали / максимально можливі бали) × 100%.</li>
+              <li><strong>Завершіть тест вручну:</strong> Натисніть кнопку "Завершити тест", коли закінчите, або дочекайтеся автоматичного завершення за таймером.</li>
+              <li><strong>Перегляньте результати:</strong> Після завершення тесту програма перенаправить Вас на сторінку з результатами, де буде відображено ваш бал, відсоток правильних відповідей та іншу основну інформацію.</li>
+              <li><strong>Експортуйте результати:</strong> Використовуйте кнопку "Експортувати в PDF", щоб зберегти результати тесту у зручному форматі.</li>
             </ul>
 
-            <h2>5. Завершення тесту</h2>
+            <h2>5. На що звертати увагу</h2>
             <ul>
-              <li>До самого завершення тесту Ви можете редагувати відповіді на питання.</li>
-              <li>Натисніть «Завершити тест», коли закінчите (або дочекайтеся таймера).</li>
-              <li>Після завершення Ви побачите сторінку результатів з відсотком, кількістю правильних відповідей, набраними балами та максимальною кількістю балів у тесті.</li>
-              <li>На сторінці результатів кружечки питань будуть показувати правильність відповідей:
-                <ul>
-                  <li><strong>Зелений</strong> — відповідь вірна.</li>
-                  <li><strong>Червоний</strong> — відповідь невірна.</li>
-                  <li><strong>Жовтий</strong> — дано часткову відповідь (наприклад, вибрано не всі правильні варіанти або є суміш правильних і неправильних).</li>
-                </ul>
-              </li>
-              <li>Натисніть «Експортувати в PDF», щоб зберегти результати у файл (ім’я файлу буде у форматі ваш_логін_результат.pdf).</li>
-              <li>Кнопка «Вихід» поверне Вас на сторінку вибору тестів.</li>
+              <li><strong>Помилки сервера:</strong> Якщо з’являється повідомлення "Внутрішня помилка сервера", спробуйте перезавантажити сторінку. Якщо проблема повторюється, зверніться до адміністратора.</li>
+              <li><strong>Збереження прогресу:</strong> Відповіді автоматично зберігаються під час переходу між питаннями, але при довгих перервах або збою з’єднання прогрес може бути втрачений. Завжди завершуйте тест у межах одного сеансу.</li>
+              <li><strong>Сумнівна активність:</strong> Якщо ви багато перемикаєтеся між вкладками або проводите значний час поза тестом, це може бути зафіксовано системою для аналізу адміністратором.</li>
             </ul>
 
-            <h2>6. Важливі моменти</h2>
-            <ul>
-              <li>Не перемикайтеся часто між вкладками та не залишайте сторінку надовго — система може зафіксувати підозрілу активність.</li>
-              <li>Якщо тест перервався (збій інтернету, закриття вкладки тощо) — спробуйте повернутися на сторінку тесту. Прогрес зазвичай зберігається.</li>
-              <li>Якщо з’являється помилка — оновіть сторінку. Якщо не допомагає — зверніться до адміністратора.</li>
-            </ul>
+            <h2>6. Контактна інформація</h2>
+            <p>Якщо у вас виникли труднощі або питання, зверніться до адміністратора через відповідний канал підтримки (наприклад, форму зворотного зв’язку).</p>
 
-            <h2>7. Підтримка</h2>
-            <p>Якщо у Вас є питання, щось не працює, питання тесту не завантажується або Ви не можете пройти тест — напишіть адміністратору (через пошту, Telegram або форму зворотного зв’язку).</p>
-
-            <p style="text-align: center; font-size: 18px; margin: 30px 0 20px; color: #2c3e50;">
-              Бажаємо успіхів у тестуванні! 💪<br>
-              Ваш результат — це Ваш прогрес! 😊
-            </p>
-
+            <p style="text-align: center; font-size: 18px; margin-top: 20px;">Бажаємо успіхів у проходженні тестів! 😊</p>
             <a href="/select-test" class="nav-btn">Назад до вибору тесту</a>
           </div>
         </body>
@@ -2438,11 +2361,9 @@ app.get('/test/question', checkAuth, async (req, res) => {
             }
             img {
               max-width: 100%;
-              max-height: 400px;
               margin: 15px auto;
               display: block;
               border-radius: 8px;
-              object-fit: contain;
             }
             .progress-bar {
               display: flex;
@@ -2499,10 +2420,10 @@ app.get('/test/question', checkAuth, async (req, res) => {
               max-width: 1100px;
               margin: 0 auto;
             }
-            .option-box,
-            .matching-item,
-            input[type="text"],
-            .blank-input {
+            #answers .option-box,
+            #answers .matching-item,
+            #answers input[type="text"],
+            #answers .blank-input {
               background: white;
               border: 2px solid #ddd;
               box-sizing: border-box;
@@ -2523,10 +2444,10 @@ app.get('/test/question', checkAuth, async (req, res) => {
               align-items: center;
               justify-content: flex-start;
               text-align: left;
-              white-space: normal;
-              overflow-wrap: break-word;
-              word-break: normal;
-              hyphens: none;
+              white-space: normal;              /* дозволити перенос */
+              overflow-wrap: break-word;        /* перенос цілими словами */
+              word-break: break-word;           /* розриває тільки дуже довгі слова */
+              hyphens: auto;                    /* автоматичні переноси за правилами мови */
               line-height: 1.45;
               overflow: visible;
             }
@@ -2539,6 +2460,24 @@ app.get('/test/question', checkAuth, async (req, res) => {
               border-color: #28a745 !important;
               box-shadow: 0 0 0 3px rgba(40,167,69,0.3) !important;
             }
+            @media (max-width: 600px) {
+              .option-box {
+                font-size: 15px;
+                padding: 14px 18px;
+                min-height: 60px;
+              }
+              .progress-circle {
+                width: 32px;
+                height: 32px;
+                font-size: 12px;
+                min-width: 32px;
+              }
+              .progress-line {
+                width: 5px;
+              }
+            }
+            .option-box.draggable { cursor: move; }
+            .option-box.dragging { opacity: 0.6; box-shadow: 0 4px 12px rgba(0,0,0,0.2); }
             .matching-container {
               display: grid;
               grid-template-columns: 1fr 1fr;
@@ -2554,6 +2493,7 @@ app.get('/test/question', checkAuth, async (req, res) => {
               border: 2px solid #ddd;
               padding: 16px 20px;
               border-radius: 10px;
+              cursor: move;
               font-size: 17px;
               min-height: 70px;
               height: auto;
@@ -2561,15 +2501,14 @@ app.get('/test/question', checkAuth, async (req, res) => {
               text-overflow: unset;
               white-space: normal;
               overflow-wrap: break-word;
-              word-break: normal;
-              hyphens: none;
+              word-break: break-word;
+              hyphens: auto;
               display: flex;
               align-items: center;
               justify-content: flex-start;
               background: white;
               transition: all 0.2s;
               box-sizing: border-box;
-              line-height: 1.45;
             }
             .button-container {
               position: fixed;
@@ -2581,6 +2520,20 @@ app.get('/test/question', checkAuth, async (req, res) => {
               gap: 12px;
               z-index: 100;
               flex-wrap: nowrap;
+            }
+            @media (max-width: 600px) {
+              .button-container {
+                gap: 8px;
+                padding: 0 10px;
+                flex-wrap: nowrap !important;
+                overflow-x: auto;
+                box-sizing: border-box;
+              }
+              button {
+                font-size: 15px;
+                padding: 12px 16px;
+                min-height: 55px;
+              }
             }
             button {
               flex: 1;
@@ -2614,6 +2567,25 @@ app.get('/test/question', checkAuth, async (req, res) => {
               margin: 15px 0 25px;
               color: #333;
             }
+            #question-timer {
+              position: relative;
+              width: 90px;
+              height: 90px;
+              margin: 0 auto 15px;
+            }
+            #question-timer svg { width: 100%; height: 100%; transform: rotate(-90deg); }
+            #question-timer circle { fill: none; stroke-width: 10; }
+            #question-timer .timer-circle-bg { stroke: #e0e0e0; }
+            #question-timer .timer-circle { stroke: #ff4d4d; stroke-dasharray: 280; transition: stroke-dashoffset 0.3s linear; }
+            #question-timer .timer-text {
+              position: absolute;
+              top: 50%;
+              left: 50%;
+              transform: translate(-50%, -50%);
+              font-size: 28px;
+              font-weight: bold;
+              color: #333;
+            }
             #confirm-modal {
               display: none;
               position: fixed;
@@ -2627,6 +2599,18 @@ app.get('/test/question', checkAuth, async (req, res) => {
               z-index: 1000;
               text-align: center;
               max-width: 90%;
+            }
+            #confirm-modal h2 { margin: 0 0 25px; font-size: 24px; }
+            #confirm-modal .buttons {
+              display: flex;
+              justify-content: center;
+              gap: 20px;
+              margin-top: 20px;
+            }
+            #confirm-modal button {
+              min-width: 120px;
+              padding: 14px 30px;
+              font-size: 18px;
             }
           </style>
         </head>
@@ -2664,7 +2648,7 @@ app.get('/test/question', checkAuth, async (req, res) => {
     if (q.picture && q.picture.trim() !== '') {
       html += `
         <div id="image-container">
-          <img src="${q.picture}" alt="Picture" style="max-height: 400px; object-fit: contain;" onerror="this.style.display='none'; document.getElementById('image-error').style.display='block';">
+          <img src="${q.picture}" alt="Picture" onerror="this.style.display='none'; document.getElementById('image-error').style.display='block';">
           <div id="image-error" class="image-error" style="display: none;">Зображення недоступне</div>
         </div>
       `;
@@ -2704,7 +2688,7 @@ app.get('/test/question', checkAuth, async (req, res) => {
             <div id="answers">
     `;
 
-    // ==================== MATCHING ====================
+        // ==================== MATCHING ====================
     if (q.type === 'matching' && q.pairs) {
       const leftItems = q.pairs.map(p => p.left);
       const rightItems = shuffleArray([...q.pairs.map(p => p.right)]);
@@ -2763,7 +2747,20 @@ app.get('/test/question', checkAuth, async (req, res) => {
             if (confirm('Скинути порядок?')) location.reload();
           }
 
-          window.addEventListener('load', updateMatchingPairs${index});
+          function equalizeMatchingHeights${index}() {
+            const items = document.querySelectorAll('#matching-${index} .matching-item');
+            let maxH = 0;
+            items.forEach(item => {
+              item.style.height = 'auto';
+              maxH = Math.max(maxH, item.getBoundingClientRect().height);
+            });
+            items.forEach(item => item.style.height = maxH + 'px');
+          }
+
+          window.addEventListener('load', () => {
+            equalizeMatchingHeights${index}();
+            updateMatchingPairs${index}();
+          });
         </script>
       `;
     } else if (!q.options || q.options.length === 0) {
@@ -2803,196 +2800,478 @@ app.get('/test/question', checkAuth, async (req, res) => {
     html += `
             </div>
           </div>
-
-          <!-- Кнопки навігації -->
           <div class="button-container">
             ${!isQuickTest ? `
-              <button class="back-btn" ${index === 0 ? 'disabled' : ''} 
-                      onclick="saveCurrentAnswer(${index}).then(() => window.location.href='/test/question?index=${index-1}')">
-                Назад
-              </button>
+              <button class="back-btn" ${index === 0 ? 'disabled' : ''} onclick="window.location.href='/test/question?index=${index - 1}'">Назад</button>
             ` : ''}
-            
-            <button id="submit-answer" class="next-btn" 
-                    ${index === questions.length - 1 ? 'disabled' : ''} 
-                    onclick="saveAndNext(${index})">
-              Далі
-            </button>
-            
-            <button class="finish-btn" onclick="showConfirm()">Завершити тест</button>
+            <button id="submit-answer" class="next-btn" ${index === questions.length - 1 ? 'disabled' : ''} onclick="saveAndNext(${index})">Далі</button>
+            <button class="finish-btn" onclick="showConfirm(${index})">Завершити тест</button>
           </div>
-
-          <!-- Модальне вікно -->
-          <div id="confirm-modal" class="fixed inset-0 z-50 flex items-center justify-center hidden bg-black bg-opacity-60">
-            <div class="bg-white p-8 rounded-2xl shadow-2xl max-w-md w-full mx-4">
-              <h2 class="text-2xl font-bold text-center mb-6">Ви дійсно бажаєте завершити тест?</h2>
-              <div class="flex justify-center gap-6">
-                <button onclick="finishTest(${index})" 
-                        class="px-10 py-4 text-lg font-semibold text-white bg-green-600 rounded-xl hover:bg-green-700">
-                  Так
-                </button>
-                <button onclick="hideConfirm()" 
-                        class="px-10 py-4 text-lg font-semibold text-white bg-red-600 rounded-xl hover:bg-red-700">
-                  Ні
-                </button>
-              </div>
+          <div id="confirm-modal">
+            <h2>Ви дійсно бажаєте завершити тест?</h2>
+            <div class="buttons">
+              <button onclick="finishTest(${index})">Так</button>
+              <button onclick="hideConfirm()">Ні</button>
             </div>
           </div>
 
           <script>
-            // Основні змінні
             const startTime = ${testStartTime};
+            const timeLimit = ${timeLimit};
             const totalTestTime = ${totalTestTime};
+            const timerElement = document.getElementById('timer');
             const isQuickTest = ${isQuickTest};
             const timePerQuestion = ${timePerQuestion || 0};
             const totalQuestions = ${questions.length};
-            const currentQuestionIndex = ${index};
-
             let timeAway = ${userTest.suspiciousActivity?.timeAway || 0};
-            let switchCount = ${userTest.suspiciousActivity?.switchCount || 0};
-            let activityCount = ${userTest.suspiciousActivity?.activityCounts?.[index] || 0};
             let lastBlurTime = 0;
+            let switchCount = ${userTest.suspiciousActivity?.switchCount || 0};
+            let lastActivityTime = Date.now();
+            let activityCount = ${userTest.suspiciousActivity?.activityCounts?.[index] || 0};
+            let lastMouseMoveTime = 0;
+            let lastKeydownTime = 0;
+            const debounceDelay = 100;
+            const blurDebounceDelay = 200;
+            let blurTimeout = null;
+            let selectedOptions = ${selectedOptionsString};
+            let matchingPairs = ${JSON.stringify(answers[index] || [])};
+            let questionTimeRemaining = timePerQuestion;
+            let currentQuestionIndex = ${index};
+            let lastGlobalUpdateTime = Date.now();
             let isSaving = false;
             let hasMovedToNext = false;
-            let questionStartTime = Date.now();
+            let questionStartTime = ${questionStartTimeObj[index]};
 
-            let selectedOptions = ${selectedOptionsString};
-            let currentMatchingPairs = ${JSON.stringify(answers[index] || [])};
+            // Функція переходу на інше питання
+            function goToQuestion(targetIndex) {
+              if (targetIndex === currentQuestionIndex) return;
+              saveCurrentAnswer(currentQuestionIndex).then(() => {
+                window.location.href = '/test/question?index=' + targetIndex;
+              }).catch(err => {
+                console.error('Помилка перед переходом:', err);
+                window.location.href = '/test/question?index=' + targetIndex;
+              });
+            }
 
-            // ====================== ЗБЕРЕЖЕННЯ ======================
+            // Вирівнювання висоти всіх matching-item
+            function equalizeMatchingHeights() {
+              const allItems = document.querySelectorAll('.matching-item');
+              if (allItems.length === 0) return;
+              let maxHeight = 0;
+              allItems.forEach(item => {
+                item.style.height = 'auto';
+                const height = item.getBoundingClientRect().height;
+                if (height > maxHeight) maxHeight = height;
+              });
+              allItems.forEach(item => {
+                item.style.height = maxHeight + 'px';
+              });
+            }
+
+            // Автозбереження відповіді
             async function saveCurrentAnswer(index) {
               if (isSaving) return;
               isSaving = true;
-
               try {
-                let answerData = [];
-
-                if (document.querySelector('.fillblank-question')) {
-                  answerData = Array.from(document.querySelectorAll('.blank-input'))
-                                    .map(el => el.value.trim());
-                } 
-                else if (document.getElementById('q' + index + '_input')) {
-                  answerData = [document.getElementById('q' + index + '_input').value.trim()];
-                } 
-                else if (document.getElementById('sortable-options')) {
-                  answerData = Array.from(document.querySelectorAll('#sortable-options .option-box'))
-                                    .map(el => el.dataset.value.trim());
-                } 
-                else if (document.getElementById('left-column-' + index)) {
-                  const leftItems = Array.from(document.querySelectorAll('#left-column-' + index + ' .matching-item'));
-                  const rightItems = Array.from(document.querySelectorAll('#right-column-' + index + ' .matching-item'));
-                  answerData = [];
-                  const minLen = Math.min(leftItems.length, rightItems.length);
-                  for (let i = 0; i < minLen; i++) {
-                    const l = (leftItems[i].dataset.value || '').trim();
-                    const r = (rightItems[i].dataset.value || '').trim();
-                    if (l || r) answerData.push([l, r]);
+                let answers = selectedOptions;
+                if (document.querySelector('input[name="q' + index + '"]')) {
+                  answers = document.getElementById('q' + index + '_input').value;
+                } else if (document.getElementById('sortable-options')) {
+                  answers = Array.from(document.querySelectorAll('#sortable-options .option-box')).map(el => el.dataset.value);
+                } else if (document.getElementById('left-column')) {
+                  answers = matchingPairs;
+                } else if ('${q.type}' === 'fillblank') {
+                  answers = [];
+                  for (let i = 0; i < ${q.blankCount || 1}; i++) {
+                    const input = document.getElementById('blank_' + i);
+                    answers.push(input ? input.value.trim() : '');
                   }
-                } 
-                else {
-                  answerData = Array.from(document.querySelectorAll('.option-box.selected'))
-                                    .map(el => el.dataset.value.trim());
                 }
-
                 const responseTime = (Date.now() - questionStartTime) / 1000;
-
                 const formData = new URLSearchParams();
                 formData.append('index', index);
-                formData.append('answer', JSON.stringify(answerData));
+                const safeAnswer = JSON.stringify(answers);
+                formData.append('answer', safeAnswer);
                 formData.append('timeAway', timeAway);
                 formData.append('switchCount', switchCount);
                 formData.append('responseTime', responseTime);
                 formData.append('activityCount', activityCount);
                 formData.append('_csrf', '${res.locals._csrf}');
-
-                const resp = await fetch('/answer', {
+                const response = await fetch('/answer', {
                   method: 'POST',
                   headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
                   body: formData
                 });
-
-                if (!resp.ok) throw new Error('HTTP ' + resp.status);
-              } catch (err) {
-                console.error('Помилка збереження:', err);
+                if (!response.ok) throw new Error('HTTP ' + response.status);
+                const result = await response.json();
+                if (!result.success) console.error('Помилка автозбереження:', result.error);
+              } catch (error) {
+                console.error('Помилка автозбереження:', error);
               } finally {
                 isSaving = false;
               }
             }
 
-            // ====================== НАВІГАЦІЯ ======================
+            // Збереження + наступне питання
             async function saveAndNext(index) {
-              await saveCurrentAnswer(index);
-              const nextIndex = index + 1;
-              if (nextIndex < totalQuestions) {
-                window.location.href = '/test/question?index=' + nextIndex;
-              } else {
-                finishTest(index);
-              }
-            }
-
-            async function finishTest(currentIdx) {
               if (isSaving) return;
               isSaving = true;
               try {
-                await saveCurrentAnswer(currentIdx);
-                await new Promise(r => setTimeout(r, 800));
-                window.location.href = '/result';
-              } catch (e) {
-                console.error(e);
-                window.location.href = '/result';
+                hasMovedToNext = true;
+                let answers = selectedOptions;
+                if (document.querySelector('input[name="q' + index + '"]')) {
+                  answers = document.getElementById('q' + index + '_input').value;
+                } else if (document.getElementById('sortable-options')) {
+                  answers = Array.from(document.querySelectorAll('#sortable-options .option-box')).map(el => el.dataset.value);
+                } else if (document.getElementById('left-column')) {
+                  answers = matchingPairs;
+                } else if ('${q.type}' === 'fillblank') {
+                  answers = [];
+                  for (let i = 0; i < ${q.blankCount || 1}; i++) {
+                    const input = document.getElementById('blank_' + i);
+                    answers.push(input ? input.value.trim() : '');
+                  }
+                }
+                const responseTime = (Date.now() - questionStartTime) / 1000;
+                const formData = new URLSearchParams();
+                formData.append('index', index);
+                const safeAnswer = JSON.stringify(answers);
+                formData.append('answer', safeAnswer);
+                formData.append('timeAway', timeAway);
+                formData.append('switchCount', switchCount);
+                formData.append('responseTime', responseTime);
+                formData.append('activityCount', activityCount);
+                formData.append('_csrf', '${res.locals._csrf}');
+                const response = await fetch('/answer', {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                  body: formData
+                });
+                if (!response.ok) throw new Error('HTTP ' + response.status);
+                const result = await response.json();
+                if (result.success) {
+                  const nextIndex = index + 1;
+                  fetch('/set-question-start-time?index=' + nextIndex, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                    body: new URLSearchParams({ '_csrf': '${res.locals._csrf}' })
+                  }).then(() => {
+                    if (nextIndex < ${questions.length}) {
+                      window.location.href = '/test/question?index=' + nextIndex;
+                    } else {
+                      setTimeout(() => window.location.href = '/result', 300);
+                    }
+                  });
+                } else {
+                  console.error('Помилка збереження:', result.error);
+                  alert('Помилка збереження відповіді');
+                }
+              } catch (error) {
+                console.error('Помилка в saveAndNext:', error);
+                alert('Не вдалося зберегти відповідь');
               } finally {
                 isSaving = false;
               }
             }
 
-            function showConfirm() {
-              document.getElementById('confirm-modal').classList.remove('hidden');
+            // Завершення тесту
+            async function finishTest(index) {
+              if (isSaving) return;
+              isSaving = true;
+              try {
+                await saveCurrentAnswer(index);
+                let answers = selectedOptions;
+                if (document.querySelector('input[name="q' + index + '"]')) {
+                  answers = document.getElementById('q' + index + '_input').value;
+                } else if (document.getElementById('sortable-options')) {
+                  answers = Array.from(document.querySelectorAll('#sortable-options .option-box')).map(el => el.dataset.value);
+                } else if (document.getElementById('left-column')) {
+                  answers = matchingPairs;
+                } else if ('${q.type}' === 'fillblank') {
+                  answers = [];
+                  for (let i = 0; i < ${q.blankCount || 1}; i++) {
+                    const input = document.getElementById('blank_' + i);
+                    answers.push(input ? input.value.trim() : '');
+                  }
+                }
+                const responseTime = (Date.now() - questionStartTime) / 1000;
+                const formData = new URLSearchParams();
+                formData.append('index', index);
+                const safeAnswer = JSON.stringify(answers);
+                formData.append('answer', safeAnswer);
+                formData.append('timeAway', timeAway);
+                formData.append('switchCount', switchCount);
+                formData.append('responseTime', responseTime);
+                formData.append('activityCount', activityCount);
+                formData.append('_csrf', '${res.locals._csrf}');
+                const response = await fetch('/answer', {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                  body: formData
+                });
+                if (!response.ok) throw new Error('HTTP ' + response.status);
+                const result = await response.json();
+                if (result.success) {
+                  setTimeout(() => window.location.href = '/result', 300);
+                } else {
+                  console.error('Помилка завершення:', result.error);
+                  alert('Помилка завершення тесту');
+                }
+              } catch (error) {
+                console.error('Помилка в finishTest:', error);
+                alert('Не вдалося завершити тест');
+              } finally {
+                isSaving = false;
+              }
+            }
+
+            function showConfirm(index) {
+              document.getElementById('confirm-modal').style.display = 'block';
             }
 
             function hideConfirm() {
-              document.getElementById('confirm-modal').classList.add('hidden');
+              document.getElementById('confirm-modal').style.display = 'none';
             }
 
-            // Таймери та інше (залишено без змін)
             function updateGlobalTimer() {
               const now = Date.now();
-              const elapsed = Math.floor((now - startTime) / 1000);
-              const remaining = Math.max(0, totalTestTime - elapsed);
-              const min = Math.floor(remaining / 60).toString().padStart(2, '0');
-              const sec = (remaining % 60).toString().padStart(2, '0');
-              const timerElement = document.getElementById('timer');
-              if (timerElement) timerElement.textContent = 'Залишилось часу: ' + min + ' хв ' + sec + ' с';
+              const elapsedTime = Math.floor((now - startTime) / 1000);
+              const remainingTime = Math.max(0, totalTestTime - elapsedTime);
+              const minutes = Math.floor(remainingTime / 60).toString().padStart(2, '0');
+              const seconds = (remainingTime % 60).toString().padStart(2, '0');
+              timerElement.textContent = 'Залишилось часу: ' + minutes + ' хв ' + seconds + ' с';
+              lastGlobalUpdateTime = now;
+              if (remainingTime <= 0) {
+                saveCurrentAnswer(currentQuestionIndex).then(() => {
+                  setTimeout(() => window.location.href = '/result', 1500);
+                });
+              }
             }
+            setInterval(updateGlobalTimer, 1000);
 
             if (isQuickTest) {
               function updateQuestionTimer() {
-                const elapsed = Math.floor((Date.now() - questionStartTime) / 1000);
-                const remaining = Math.max(0, timePerQuestion - elapsed);
+                const now = Date.now();
+                const elapsedSinceQuestionStart = Math.floor((now - questionStartTime) / 1000);
+                questionTimeRemaining = Math.max(0, timePerQuestion - elapsedSinceQuestionStart);
                 const timerText = document.getElementById('timer-text');
                 const timerCircle = document.querySelector('#question-timer .timer-circle');
-                if (timerText) timerText.textContent = Math.round(remaining);
-                if (timerCircle) {
-                  const offset = 251 * (1 - remaining / timePerQuestion);
+                if (timerText && timerCircle) {
+                  timerText.textContent = Math.round(questionTimeRemaining);
+                  const circumference = 251;
+                  const offset = (1 - questionTimeRemaining / timePerQuestion) * circumference;
                   timerCircle.style.strokeDashoffset = offset;
                 }
+                if (questionTimeRemaining <= 0 && currentQuestionIndex < totalQuestions - 1 && !hasMovedToNext) {
+                  hasMovedToNext = true;
+                  saveCurrentAnswer(currentQuestionIndex).then(() => {
+                    saveAndNext(currentQuestionIndex);
+                  });
+                }
               }
-              setInterval(updateQuestionTimer, 50);
+              const questionTimerInterval = setInterval(updateQuestionTimer, 50);
             }
 
-            document.addEventListener('DOMContentLoaded', () => {
-              updateGlobalTimer();
-              if (!isQuickTest) setInterval(updateGlobalTimer, 1000);
+            window.addEventListener('blur', () => {
+              if (!blurTimeout) {
+                blurTimeout = setTimeout(() => {
+                  if (lastBlurTime === 0) {
+                    lastBlurTime = performance.now();
+                    switchCount = Math.min(switchCount + 1, 1000);
+                  }
+                  blurTimeout = null;
+                }, blurDebounceDelay);
+              }
+            });
 
-              // Відновлення відповідей
-              const saved = <?= JSON.stringify(answers[index] || []) ?>;
-              if (Array.isArray(saved) && saved.length) {
-                if (document.querySelector('.fillblank-question')) {
-                  document.querySelectorAll('.blank-input').forEach((inp, i) => {
-                    if (saved[i]) inp.value = saved[i];
-                  });
-                } else if (document.getElementById('q' + currentQuestionIndex + '_input')) {
-                  document.getElementById('q' + currentQuestionIndex + '_input').value = saved[0] || '';
+            window.addEventListener('focus', () => {
+              if (blurTimeout) {
+                clearTimeout(blurTimeout);
+                blurTimeout = null;
+              }
+              if (lastBlurTime > 0) {
+                const now = performance.now();
+                const awayDuration = Math.min((now - lastBlurTime) / 1000, 60);
+                timeAway += awayDuration;
+                lastBlurTime = 0;
+                saveCurrentAnswer(currentQuestionIndex);
+              }
+            });
+
+            function debounceMouseMove() {
+              const now = Date.now();
+              if (now - lastMouseMoveTime >= debounceDelay) {
+                lastMouseMoveTime = now;
+                lastActivityTime = now;
+                activityCount++;
+              }
+            }
+
+            function debounceKeydown() {
+              const now = Date.now();
+              if (now - lastKeydownTime >= debounceDelay) {
+                lastKeydownTime = now;
+                lastActivityTime = now;
+                activityCount++;
+              }
+            }
+
+            document.addEventListener('mousemove', debounceMouseMove);
+            document.addEventListener('keydown', debounceKeydown);
+
+            document.querySelectorAll('.option-box:not(.draggable)').forEach(box => {
+              box.style.pointerEvents = 'auto';
+              box.style.cursor = 'pointer';
+
+              box.addEventListener('click', (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+
+                const questionType = '${q.type}';
+                const option = box.getAttribute('data-value');
+
+                if (['truefalse', 'multiple', 'singlechoice'].includes(questionType)) {
+                  if (questionType === 'multiple') {
+                    const idx = selectedOptions.indexOf(option);
+                    if (idx === -1) {
+                      selectedOptions.push(option);
+                      box.classList.add('selected');
+                    } else {
+                      selectedOptions.splice(idx, 1);
+                      box.classList.remove('selected');
+                    }
+                  } else {
+                    if (selectedOptions[0] === option) {
+                      // повторний клік — залишаємо
+                    } else {
+                      document.querySelectorAll('.option-box:not(.draggable)').forEach(b => {
+                        b.classList.remove('selected');
+                      });
+                      selectedOptions = [option];
+                      box.classList.add('selected');
+                    }
+                  }
                 }
+              });
+            });
+
+            const sortable = document.getElementById('sortable-options');
+            if (sortable) {
+              new Sortable(sortable, { animation: 150 });
+            }
+
+            const leftColumn = document.getElementById('left-column');
+            const rightColumn = document.getElementById('right-column');
+            if (leftColumn && rightColumn && '${q.type}' === 'matching') {
+              new Sortable(leftColumn, {
+                group: 'matching',
+                animation: 150,
+                onStart: function(evt) { evt.item.classList.add('dragging'); },
+                onEnd: function(evt) { evt.item.classList.remove('dragging'); updateMatchingPairs(); equalizeMatchingHeights(); }
+              });
+              new Sortable(rightColumn, {
+                group: 'matching',
+                animation: 150,
+                onStart: function(evt) { evt.item.classList.add('dragging'); },
+                onEnd: function(evt) { evt.item.classList.remove('dragging'); updateMatchingPairs(); equalizeMatchingHeights(); }
+              });
+
+              function updateMatchingPairs() {
+                matchingPairs = [];
+                const leftItems = Array.from(document.querySelectorAll('#left-column .draggable'));
+                const rightItems = Array.from(document.querySelectorAll('#right-column .droppable'));
+                rightItems.forEach((rightItem, idx) => {
+                  const rightValue = rightItem.dataset.value || '';
+                  const leftItem = leftItems[idx];
+                  const leftValue = leftItem ? leftItem.dataset.value || '' : '';
+                  if (leftValue && rightValue) {
+                    matchingPairs.push([leftValue, rightValue]);
+                  }
+                });
+              }
+
+              function resetMatchingPairs() {
+                matchingPairs = [];
+                const rightItems = document.querySelectorAll('#right-column .droppable');
+                rightItems.forEach(item => {
+                  const rightValue = item.dataset.value || '';
+                  item.innerHTML = rightValue;
+                });
+                equalizeMatchingHeights();
+              }
+
+              const droppableItems = document.querySelectorAll('.droppable');
+              droppableItems.forEach(item => {
+                item.addEventListener('dragover', (e) => e.preventDefault());
+                item.addEventListener('drop', (e) => {
+                  e.preventDefault();
+                  const draggable = document.querySelector('.dragging');
+                  if (draggable && draggable.classList.contains('draggable')) {
+                    const leftValue = draggable.dataset.value || '';
+                    const rightValue = item.dataset.value || '';
+                    if (leftValue && rightValue) {
+                      item.innerHTML = rightValue + ' <span class="matched"> (Зіставлено: ' + leftValue + ')</span>';
+                      const leftColumn = document.getElementById('left-column');
+                      const rightColumn = document.getElementById('right-column');
+                      const leftItems = Array.from(leftColumn.children);
+                      const rightItems = Array.from(rightColumn.children);
+                      const rightIndex = rightItems.indexOf(item);
+                      if (leftItems[rightIndex]) {
+                        leftColumn.insertBefore(draggable, leftItems[rightIndex]);
+                      } else {
+                        leftColumn.appendChild(draggable);
+                      }
+                      updateMatchingPairs();
+                      equalizeMatchingHeights();
+                    }
+                  }
+                });
+              });
+
+              window.addEventListener('load', equalizeMatchingHeights);
+            }
+
+            function equalizeMatchingHeights() {
+              const allItems = document.querySelectorAll('.matching-item');
+              if (allItems.length === 0) return;
+              let maxHeight = 0;
+              allItems.forEach(item => {
+                item.style.height = 'auto';
+                const height = item.getBoundingClientRect().height;
+                if (height > maxHeight) maxHeight = height;
+              });
+              allItems.forEach(item => {
+                item.style.height = maxHeight + 'px';
+              });
+            }
+
+            updateGlobalTimer();
+            if (isQuickTest) {
+              const questionTimerInterval = setInterval(() => {
+                const now = Date.now();
+                const elapsed = Math.floor((now - questionStartTime) / 1000);
+                questionTimeRemaining = Math.max(0, timePerQuestion - elapsed);
+                const timerText = document.getElementById('timer-text');
+                const timerCircle = document.querySelector('#question-timer .timer-circle');
+                if (timerText && timerCircle) {
+                  timerText.textContent = Math.round(questionTimeRemaining);
+                  const circumference = 251;
+                  const offset = (1 - questionTimeRemaining / timePerQuestion) * circumference;
+                  timerCircle.style.strokeDashoffset = offset;
+                }
+                if (questionTimeRemaining <= 0 && currentQuestionIndex < totalQuestions - 1 && !hasMovedToNext) {
+                  hasMovedToNext = true;
+                  saveCurrentAnswer(currentQuestionIndex).then(() => {
+                    saveAndNext(currentQuestionIndex);
+                  });
+                }
+              }, 50);
+            }
+
+            document.addEventListener('visibilitychange', () => {
+              if (!document.hidden) {
+                updateGlobalTimer();
+                if (isQuickTest) updateQuestionTimer();
               }
             });
           </script>
@@ -3040,62 +3319,69 @@ app.post('/set-question-start-time', checkAuth, async (req, res) => {
   }
 });
 
-// Збереження відповіді
+// Маршрут для збереження відповіді
 app.post('/answer', checkAuth, express.urlencoded({ extended: true }), async (req, res) => {
   const startTime = Date.now();
   try {
     if (req.user === 'admin') return res.redirect('/admin');
 
     const { index, answer, timeAway, switchCount, responseTime, activityCount } = req.body;
-    if (index === undefined || answer === undefined) {
-      return res.status(400).json({ success: false, error: 'Відсутні index або answer' });
+    if (!index || answer === undefined) {
+      logger.error('Відсутні параметри в /answer', { index, answer });
+      return res.status(400).json({ success: false, error: 'Необхідно index та answer' });
     }
 
     let parsedAnswer;
     try {
-      parsedAnswer = JSON.parse(answer);
-    } catch (e) {
-      parsedAnswer = typeof answer === 'string' ? [answer] : [];
-    }
-
-    // === СПЕЦІАЛЬНА ОБРОБКА MATCHING ===
-    const userTest = await db.collection('active_tests').findOne({ user: req.user });
-    if (userTest?.questions?.[index]?.type === 'matching') {
-      if (!Array.isArray(parsedAnswer) || parsedAnswer.length === 0 || 
-          !Array.isArray(parsedAnswer[0])) {
-        // Якщо прийшло щось неправильне — пробуємо відновити
-        parsedAnswer = parsedAnswer.map ? parsedAnswer : [];
+      if (typeof answer === 'string') {
+        if (answer.trim() === '') {
+          parsedAnswer = [];
+        } else {
+          parsedAnswer = JSON.parse(answer);
+          logger.info('[ANSWER] Успішно розпарсено рядок', { index, parsedType: typeof parsedAnswer, length: parsedAnswer.length });
+        }
+      } else if (Array.isArray(answer)) {
+        parsedAnswer = answer;
+      } else {
+        parsedAnswer = [];
       }
+
+      // Додаткове виправлення для matching (якщо прийшли об’єкти)
+      const userTest = await db.collection('active_tests').findOne({ user: req.user });
+      if (userTest?.questions?.[index]?.type === 'matching') {
+        if (Array.isArray(parsedAnswer) && parsedAnswer.length > 0 && typeof parsedAnswer[0] === 'object' && !Array.isArray(parsedAnswer[0])) {
+          logger.warn('[ANSWER] Matching: конвертуємо об’єкти в масиви пар');
+          parsedAnswer = parsedAnswer.map(p => [p.left || '', p.right || '']);
+        }
+      }
+    } catch (error) {
+      logger.error('[ANSWER] Помилка парсингу відповіді', { answer, error: error.message });
+      parsedAnswer = [];
     }
 
+    const userTest = await db.collection('active_tests').findOne({ user: req.user });
     if (!userTest) {
-      return res.json({ success: true });
+      logger.warn('[ANSWER] Активний тест не знайдено');
+      return res.json({ success: true }); // не падаємо, просто ігноруємо
     }
 
     userTest.answers[index] = parsedAnswer;
-
-    // Suspicious activity
-    userTest.suspiciousActivity = userTest.suspiciousActivity || {};
+    userTest.suspiciousActivity = userTest.suspiciousActivity || { timeAway: 0, switchCount: 0, responseTimes: [], activityCounts: [] };
     userTest.suspiciousActivity.timeAway = Math.max(0, parseFloat(timeAway) || 0);
     userTest.suspiciousActivity.switchCount = Math.min(Math.max(0, parseInt(switchCount) || 0), 1000);
-    userTest.suspiciousActivity.responseTimes = userTest.suspiciousActivity.responseTimes || [];
     userTest.suspiciousActivity.responseTimes[index] = Math.max(0, parseFloat(responseTime) || 0);
-    userTest.suspiciousActivity.activityCounts = userTest.suspiciousActivity.activityCounts || [];
     userTest.suspiciousActivity.activityCounts[index] = parseInt(activityCount) || 0;
 
     await db.collection('active_tests').updateOne(
       { user: req.user },
-      { $set: { 
-          answers: userTest.answers, 
-          suspiciousActivity: userTest.suspiciousActivity 
-      }}
+      { $set: { answers: userTest.answers, suspiciousActivity: userTest.suspiciousActivity } }
     );
 
-    logger.info(`[ANSWER] Збережено для ${req.user}, питання ${index}, тип ${userTest.questions?.[index]?.type}, довжина: ${parsedAnswer.length}`);
+    logger.info('[ANSWER] Відповідь збережена', { index, type: userTest.questions?.[index]?.type, parsedAnswerLength: parsedAnswer.length });
 
     res.json({ success: true });
   } catch (error) {
-    logger.error('[ANSWER] Помилка', { message: error.message, stack: error.stack });
+    logger.error('[ANSWER] Критична помилка', { message: error.message, stack: error.stack });
     res.status(500).json({ success: false, error: 'Помилка сервера' });
   } finally {
     logger.info('Маршрут /answer виконано', { duration: Date.now() - startTime });
@@ -3104,14 +3390,14 @@ app.post('/answer', checkAuth, express.urlencoded({ extended: true }), async (re
 
 /**
  * Обчислює точний бал за одне питання
- * Підтримує введення чисел як через кому (3,14), так і через крапку (3.14)
+ * Підтримує частковий підрахунок + м'яке порівняння для fillblank
  */
 function calculateQuestionScore(question, userAnswer) {
   let score = 0;
-  const maxPoints = parseFloat(question.points) || 1.0;
+  const maxPoints = parseFloat(question.points) || 1;
   const type = (question.type || '').toLowerCase().trim();
 
-  // Нормалізація для порівняння тексту
+  // Нормалізація
   const normalize = (val) => {
     if (val === null || val === undefined) return '';
     return String(val)
@@ -3128,19 +3414,15 @@ function calculateQuestionScore(question, userAnswer) {
   };
 
   switch (type) {
-    // ====================== SINGLECHOICE / TRUEFALSE ======================
     case 'singlechoice':
     case 'truefalse': {
-      if (!userAnswer) return 0;
-
       const userVal = Array.isArray(userAnswer) ? userAnswer[0] : userAnswer;
       const correctVal = question.correctAnswer || (question.correctAnswers && question.correctAnswers[0]);
-
       const isCorrect = normalize(userVal) === normalize(correctVal);
-      return isCorrect ? maxPoints : 0;
+      score = isCorrect ? maxPoints : 0;
+      break;
     }
 
-    // ====================== MULTIPLE ======================
     case 'multiple': {
       if (!Array.isArray(userAnswer)) return 0;
       const correctSet = new Set(question.correctAnswers.map(normalize));
@@ -3148,97 +3430,35 @@ function calculateQuestionScore(question, userAnswer) {
       const partial = maxPoints / correctSet.size;
 
       correctSet.forEach(c => { if (userSet.has(c)) score += partial; });
-      userSet.forEach(u => { if (!correctSet.has(u)) score -= partial; });
+      userSet.forEach(u => { if (!correctSet.has(u)) score -= partial / 2; });
       break;
     }
 
-    // ====================== MATCHING ======================
     case 'matching': {
-      if (!Array.isArray(userAnswer) || userAnswer.length === 0) return 0;
-
-      let userPairs = userAnswer;
-      // Якщо прийшли об'єкти {left, right}
-      if (userAnswer[0] && typeof userAnswer[0] === 'object' && !Array.isArray(userAnswer[0])) {
-        userPairs = userAnswer.map(p => [p.left || '', p.right || '']);
-      }
-
+      if (!Array.isArray(userAnswer)) return 0;
       const correctPairs = question.correctPairs || [];
-      const totalPairs = correctPairs.length || 1;
-      const partial = maxPoints / totalPairs;
+      const pairCount = correctPairs.length || 1;
+      const partial = maxPoints / pairCount;
 
-      let correctCount = 0;
       const correctSet = new Set(
         correctPairs.map(pair => `${normalize(pair[0])}|||${normalize(pair[1])}`)
       );
 
-      userPairs.forEach(pair => {
-        if (!Array.isArray(pair) || pair.length !== 2) {
+      userAnswer.forEach(userPair => {
+        if (!Array.isArray(userPair) || userPair.length !== 2) {
           score -= partial;
           return;
         }
-        const key = `${normalize(pair[0])}|||${normalize(pair[1])}`;
-        if (correctSet.has(key)) correctCount++;
-      });
-
-      const extra = userPairs.length - correctCount;
-
-      if (correctCount === totalPairs && extra === 0) {
-        return maxPoints;
-      }
-      if (correctCount > 0) {
-        score = (correctCount / totalPairs) * maxPoints;
-        if (extra > 0) score -= (extra / totalPairs) * maxPoints * 0.5;
-      }
-      break;
-    }
-
-    // ====================== FILLBLANK ======================
-    case 'fillblank': {
-      if (!Array.isArray(userAnswer)) return 0;
-
-      const partial = maxPoints / question.correctAnswers.length;
-      let correctCount = 0;
-
-      question.correctAnswers.forEach((correctRaw, i) => {
-        const userVal = userAnswer[i] || '';
-        if (!userVal) return;
-
-        const user = normalize(userVal);
-        const correct = normalize(correctRaw);
-
-        let isCorrect = false;
-
-        if (correctRaw.includes('-')) {
-          const [minStr, maxStr] = correctRaw.split('-').map(s => s.trim());
-          const min = normalizeNumber(minStr);
-          const max = normalizeNumber(maxStr);
-          const val = normalizeNumber(userVal);
-          isCorrect = !isNaN(val) && !isNaN(min) && !isNaN(max) && val >= min && val <= max;
+        const pairKey = `${normalize(userPair[0])}|||${normalize(userPair[1])}`;
+        if (correctSet.has(pairKey)) {
+          score += partial;
         } else {
-          if (user.includes(correct) || correct.includes(user)) {
-            isCorrect = true;
-          } else {
-            const correctLen = correct.length;
-            const userLen = user.length;
-            if (correctLen > 0 && userLen > 0) {
-              const minLen = Math.min(correctLen, userLen);
-              let similarity = 0;
-              for (let j = 0; j < minLen; j++) {
-                if (correct[j] === user[j]) similarity++;
-              }
-              if (similarity / minLen >= 0.5) isCorrect = true;
-            }
-          }
+          score -= partial;
         }
-
-        if (isCorrect) correctCount++;
       });
-
-      score = (correctCount / question.correctAnswers.length) * maxPoints;
       break;
     }
 
-    // ====================== ORDERING ======================
     case 'ordering': {
       if (!Array.isArray(userAnswer)) return 0;
       const correctOrder = question.correctAnswers.map(normalize);
@@ -3252,22 +3472,51 @@ function calculateQuestionScore(question, userAnswer) {
       break;
     }
 
-    // ====================== INPUT ======================
-    case 'input': {
-      const correct = question.correctAnswers?.[0] || '';
-      let isCorrect = false;
+    case 'input':
+    case 'fillblank': {
+      if (!Array.isArray(userAnswer)) return 0;
 
-      if (correct.includes('-')) {
-        const [minStr, maxStr] = correct.split('-').map(s => s.trim());
-        const min = normalizeNumber(minStr);
-        const max = normalizeNumber(maxStr);
-        const val = normalizeNumber(userAnswer);
-        isCorrect = !isNaN(val) && !isNaN(min) && !isNaN(max) && val >= min && val <= max;
-      } else {
-        isCorrect = normalize(userAnswer) === normalize(correct);
-      }
+      const correctAnswers = question.correctAnswers || [];
+      const numElements = correctAnswers.length || 1;
+      const partial = maxPoints / numElements;
 
-      score = isCorrect ? maxPoints : 0;
+      let correctCount = 0;
+
+      userAnswer.forEach((userRaw, i) => {
+        const user = normalize(userRaw);
+        const correctRaw = correctAnswers[i] || '';
+        const correct = normalize(correctRaw);
+
+        if (!user) return;
+
+        // 1. Діапазон чисел
+        if (correctRaw.includes('-')) {
+          const range = correctRaw.split('-', 2);
+          const min = parseFloat(range[0].trim());
+          const max = parseFloat(range[1].trim());
+          const num = parseFloat(user);
+          if (!isNaN(num) && num >= min && num <= max) correctCount++;
+        }
+        // 2. М'яке порівняння тексту
+        else {
+          if (user.includes(correct) || correct.includes(user)) {
+            correctCount++;
+          } else {
+            const correctLen = correct.length;
+            const userLen = user.length;
+            if (correctLen > 0 && userLen > 0) {
+              const minLen = Math.min(correctLen, userLen);
+              let similarity = 0;
+              for (let j = 0; j < minLen; j++) {
+                if (correct[j] === user[j]) similarity++;
+              }
+              if (similarity / minLen >= 0.5) correctCount++;
+            }
+          }
+        }
+      });
+
+      score = correctCount * partial;
       break;
     }
 
@@ -3278,9 +3527,9 @@ function calculateQuestionScore(question, userAnswer) {
   return Math.max(0, score);
 }
 
-// Маршрут для відображення результатів тесту — ФІНАЛЬНЕ ВИПРАВЛЕННЯ (-3 години)
+// Маршрут для відображення результатів тесту — ВИПРАВЛЕНО підрахунок балів + центр відсотка + робочі кнопки
 app.get('/result', checkAuth, async (req, res) => {
-  const routeStartTime = Date.now();
+  const startTime = Date.now();
   try {
     if (req.user === 'admin') return res.redirect('/admin');
 
@@ -3311,7 +3560,7 @@ app.get('/result', checkAuth, async (req, res) => {
     // 2. Витягуємо поля
     const testNumber     = testData.testNumber;
     const answers        = testData.answers || {};
-    let   startTimeMs    = testData.startTime || Date.now();
+    const startTimeMs    = testData.startTime || Date.now();
     const timeLimit      = testData.timeLimit || 3600000;
     const suspiciousActivity = testData.suspiciousActivity || {};
     let   variant        = testData.variant || '';
@@ -3322,15 +3571,6 @@ app.get('/result', checkAuth, async (req, res) => {
       return res.status(500).send('Помилка: не вдалося визначити номер тесту');
     }
 
-    // Жорстке виправлення startTimeMs (якщо він прийшов в локальному часі)
-    if (typeof startTimeMs === 'string') {
-      startTimeMs = new Date(startTimeMs).getTime();
-    }
-    if (typeof startTimeMs !== 'number' || isNaN(startTimeMs)) {
-      startTimeMs = Date.now() - timeLimit;
-      logger.warn('[RESULT] startTimeMs невалідний, використовуємо fallback');
-    }
-
     // Нормалізація варіанту
     if (variant) {
       variant = String(variant).trim().toLowerCase().replace(/\s+/g, ' ');
@@ -3338,9 +3578,15 @@ app.get('/result', checkAuth, async (req, res) => {
       if (variant.startsWith('варіант ')) variant = variant.replace('варіант ', '');
     }
 
-    logger.info('[RESULT] Основні дані', { dataSource, testNumber, variant: variant || '(немає)' });
+    logger.info('[RESULT] Основні дані', {
+      dataSource,
+      testNumber,
+      variant: variant || '(немає)',
+      answersCount: Object.keys(answers).length,
+      testSessionId
+    });
 
-    // 3. Питання
+    // 3. Завантаження питань + гнучка фільтрація
     let allQuestions = await db.collection('questions')
       .find({ testNumber })
       .sort({ order: 1 })
@@ -3352,11 +3598,19 @@ app.get('/result', checkAuth, async (req, res) => {
       return qVar === variant || qVar.includes(variant) || variant.includes(qVar);
     });
 
+    // Якщо після фільтрації питань 0 — беремо ВСІ (це найнадійніше)
     if (questions.length === 0 && allQuestions.length > 0) {
+      logger.warn('[RESULT] Фільтр за варіантом дав 0 питань — використовуємо ВСІ питання тесту');
       questions = [...allQuestions];
     }
 
-    // 4. Бали
+    logger.info('[RESULT] Питання після фільтрації', {
+      allCount: allQuestions.length,
+      filteredCount: questions.length,
+      variantUsed: variant || '(немає)'
+    });
+
+    // 4. Розрахунок балів
     const scoresPerQuestion = questions.map((q, index) => {
       const userAnswer = answers[index];
       return calculateQuestionScore(q, userAnswer);
@@ -3369,29 +3623,21 @@ app.get('/result', checkAuth, async (req, res) => {
     const totalQuestions = questions.length;
     const correctClicks = scoresPerQuestion.filter(s => s > 0).length;
 
-    // 5. ЧАС — найжорсткіше виправлення
-    let endTimeMs = Date.now();
+    logger.info('[RESULT] Розраховано бали', {
+      score: score.toFixed(2),
+      totalPoints: totalPoints.toFixed(2),
+      percentage: percentage.toFixed(1) + '%',
+      totalQuestions,
+      correctClicks,
+      answered: Object.keys(answers).length
+    });
 
-    if (testData.endTime) {
-      let parsed = testData.endTime;
-      if (typeof parsed === 'string') parsed = new Date(parsed);
-      if (parsed && !isNaN(parsed.getTime())) {
-        endTimeMs = parsed.getTime();
-      }
-    }
+    // 5. Час та підозріла активність
+    let endTime = testData.endTime ? new Date(testData.endTime).getTime() : Date.now();
+    const maxEndTime = startTimeMs + timeLimit;
+    if (endTime > maxEndTime) endTime = maxEndTime;
 
-    // Додаємо 3 години, якщо різниця негативна (тимчасовий "костиль", поки не виправимо збереження)
-    const rawDuration = (endTimeMs - startTimeMs) / 1000;
-    if (rawDuration < 0) {
-      logger.warn('[RESULT] Виявлено негативну тривалість, додаємо 3 години (UTC+3)');
-      endTimeMs += 3 * 60 * 60 * 1000;   // +3 години
-    }
-
-    const maxEndTimeMs = startTimeMs + timeLimit;
-    if (endTimeMs > maxEndTimeMs) endTimeMs = maxEndTimeMs;
-
-    const duration = Math.round((endTimeMs - startTimeMs) / 1000);
-
+    const duration = Math.round((endTime - startTimeMs) / 1000);
     const timeAway = suspiciousActivity.timeAway || 0;
     const correctedTimeAway = Math.min(timeAway, duration);
     const timeAwayPercent = duration > 0 ? Math.round((correctedTimeAway / duration) * 100) : 0;
@@ -3399,11 +3645,11 @@ app.get('/result', checkAuth, async (req, res) => {
 
     const ipAddress = req.headers['x-forwarded-for'] || req.socket.remoteAddress;
 
-    // 6. Збереження (якщо потрібно)
+    // 6. Збереження результату (якщо потрібно)
     const existingResult = await db.collection('test_results').findOne({ testSessionId });
 
     if (!existingResult) {
-      logger.info('[RESULT] Зберігаємо новий результат', { testSessionId });
+      logger.info('[RESULT] Результат ще не збережений — запускаємо saveResult', { testSessionId });
 
       if (userTest && !testData.isSaved) {
         await db.collection('active_tests').updateOne(
@@ -3413,23 +3659,38 @@ app.get('/result', checkAuth, async (req, res) => {
       }
 
       await saveResult(
-        req.user, testNumber, score, totalPoints, startTimeMs, endTimeMs,
-        Object.keys(answers).length, correctClicks, totalQuestions, percentage,
+        req.user,
+        testNumber,
+        score,
+        totalPoints,
+        startTimeMs,
+        endTime,
+        Object.keys(answers).length,
+        correctClicks,
+        totalQuestions,
+        percentage,
         { timeAway: correctedTimeAway, switchCount, responseTimes: suspiciousActivity.responseTimes || [], activityCounts: suspiciousActivity.activityCounts || [] },
-        answers, scoresPerQuestion, variant, ipAddress, testSessionId
+        answers,
+        scoresPerQuestion,
+        variant,
+        ipAddress,
+        testSessionId
       );
+
+      logger.info('[RESULT] Результат збережено успішно');
     }
 
+    // 7. Видаляємо активний тест
     if (userTest) {
       await db.collection('active_tests').deleteOne({ user: req.user });
     }
 
-    // 8. Форматування
-    const endDateTime = new Date(endTimeMs);
+    // 8. Форматування дати/часу
+    const endDateTime = new Date(endTime);
     const formattedTime = endDateTime.toLocaleTimeString('uk-UA', { hour12: false });
     const formattedDate = endDateTime.toLocaleDateString('uk-UA');
 
-    // 9. Зображення A.png
+    // 9. Зображення
     const imagePath = path.join(__dirname, 'public', 'images', 'A.png');
     let imageBase64 = '';
     try {
@@ -3439,7 +3700,7 @@ app.get('/result', checkAuth, async (req, res) => {
       logger.error('[RESULT] Помилка читання A.png', { message: error.message });
     }
 
-    // 10. Повний HTML (без жодного скорочення)
+    // 10. HTML-результат з центрованим відсотком і робочими кнопками
     const resultHtml = `
       <!DOCTYPE html>
       <html lang="uk">
@@ -3466,16 +3727,19 @@ app.get('/result', checkAuth, async (req, res) => {
             .result-circle-bg { stroke: #e0e0e0; stroke-width: 12; fill: none; }
             .result-circle { stroke: #4CAF50; stroke-width: 12; fill: none; stroke-dasharray: 530; stroke-dashoffset: 530; animation: fillCircle 1.8s ease-out forwards; }
             .result-text {
+              position: absolute;
+              top: 50%;
+              left: 50%;
+              transform: translate(-50%, -50%);
               font-size: 48px;
               font-weight: bold;
               fill: #333;
               pointer-events: none;
               text-anchor: middle;
-              dominant-baseline: central;
-              alignment-baseline: central;
+              dominant-baseline: middle;
+              alignment-baseline: middle;
               width: 100%;
               text-align: center;
-              line-height: 1;
             }
             .progress-circles {
               display: flex;
@@ -3553,7 +3817,7 @@ app.get('/result', checkAuth, async (req, res) => {
               <svg width="100%" height="100%" viewBox="0 0 180 180" preserveAspectRatio="xMidYMid meet">
                 <circle class="result-circle-bg" cx="90" cy="90" r="78" />
                 <circle class="result-circle" cx="90" cy="90" r="78" />
-                <text x="90" y="92" class="result-text" text-anchor="middle" dominant-baseline="middle" alignment-baseline="middle">
+                <text x="90" y="90" class="result-text" text-anchor="middle" dominant-baseline="middle" alignment-baseline="middle">
                   ${Math.round(percentage)}%
                 </text>
               </svg>
@@ -3582,16 +3846,17 @@ app.get('/result', checkAuth, async (req, res) => {
           </div>
 
           <script>
+            // Змінні для PDF — винесені в глобальний scope
             const user = "${req.user.replace(/"/g, '\\"')}";
             const testName = "${testNames[testNumber]?.name?.replace(/"/g, '\\"') || 'Невідомий тест'}";
-            const totalQuestionsVal = ${totalQuestions};
-            const correctClicksVal = ${correctClicks};
-            const scoreVal = ${Math.round(score)};
-            const totalPointsVal = ${Math.round(totalPoints)};
-            const percentageVal = ${Math.round(percentage)};
-            const timeVal = "${formattedTime.replace(/"/g, '\\"')}";
-            const dateVal = "${formattedDate.replace(/"/g, '\\"')}";
-            const imageBase64Val = "${imageBase64.replace(/"/g, '\\"')}";
+            const totalQuestions = ${totalQuestions};
+            const correctClicks = ${correctClicks};
+            const score = ${Math.round(score)};
+            const totalPoints = ${Math.round(totalPoints)};
+            const percentage = ${Math.round(percentage)};
+            const time = "${formattedTime.replace(/"/g, '\\"')}";
+            const date = "${formattedDate.replace(/"/g, '\\"')}";
+            const imageBase64 = "${imageBase64.replace(/"/g, '\\"')}";
 
             document.addEventListener('DOMContentLoaded', () => {
               const exportBtn = document.getElementById('exportPDF');
@@ -3606,21 +3871,21 @@ app.get('/result', checkAuth, async (req, res) => {
 
                   const docDefinition = {
                     content: [
-                      imageBase64Val ? {
-                        image: 'data:image/png;base64,' + imageBase64Val,
+                      imageBase64 ? {
+                        image: 'data:image/png;base64,' + imageBase64,
                         width: 50,
                         alignment: 'center',
                         margin: [0, 0, 0, 20]
                       } : { text: 'Логотип відсутній', alignment: 'center', margin: [0, 0, 0, 20] },
-                      { text: 'Результат тесту користувача ' + user + ' з тесту ' + testName + ' складає ' + percentageVal + '%', style: 'header' },
-                      { text: 'Кількість питань: ' + totalQuestionsVal, lineHeight: 2 },
-                      { text: 'Правильних відповідей: ' + correctClicksVal, lineHeight: 2 },
-                      { text: 'Набрано балів: ' + scoreVal, lineHeight: 2 },
-                      { text: 'Максимально можлива кількість балів: ' + totalPointsVal, lineHeight: 2 },
+                      { text: 'Результат тесту користувача ' + user + ' з тесту ' + testName + ' складає ' + percentage + '%', style: 'header' },
+                      { text: 'Кількість питань: ' + totalQuestions, lineHeight: 2 },
+                      { text: 'Правильних відповідей: ' + correctClicks, lineHeight: 2 },
+                      { text: 'Набрано балів: ' + score, lineHeight: 2 },
+                      { text: 'Максимально можлива кількість балів: ' + totalPoints, lineHeight: 2 },
                       {
                         columns: [
-                          { text: 'Час: ' + timeVal, width: '50%', lineHeight: 2 },
-                          { text: 'Дата: ' + dateVal, width: '50%', alignment: 'right', lineHeight: 2 }
+                          { text: 'Час: ' + time, width: '50%', lineHeight: 2 },
+                          { text: 'Дата: ' + date, width: '50%', alignment: 'right', lineHeight: 2 }
                         ],
                         margin: [0, 10, 0, 0]
                       }
@@ -3630,14 +3895,18 @@ app.get('/result', checkAuth, async (req, res) => {
                     }
                   };
 
-                  pdfMake.createPdf(docDefinition).download(user + '_результат.pdf');                  
+                  pdfMake.createPdf(docDefinition).download('результат.pdf');
                 });
+              } else {
+                console.error('Кнопка #exportPDF не знайдена');
               }
 
               if (restartBtn) {
                 restartBtn.addEventListener('click', () => {
                   window.location.href = '/select-test';
                 });
+              } else {
+                console.error('Кнопка #restart не знайдена');
               }
             });
           </script>
@@ -3651,7 +3920,7 @@ app.get('/result', checkAuth, async (req, res) => {
     logger.error('[RESULT] Помилка', { message: error.message, stack: error.stack });
     res.status(500).send('Помилка при завантаженні результатів');
   } finally {
-    logger.info('Маршрут /result виконано', { duration: Date.now() - routeStartTime });
+    logger.info('Маршрут /result виконано', { duration: Date.now() - startTime });
   }
 });
 
@@ -3800,7 +4069,7 @@ app.get('/results', checkAuth, async (req, res) => {
                   header: { fontSize: 18, bold: true, margin: [0, 0, 0, 10] }
                 }
               };
-              pdfMake.createPdf(docDefinition).download(user + '_результат.pdf');
+              pdfMake.createPdf(docDefinition).download('результат.pdf');
             });
           </script>
         </body>
@@ -5683,7 +5952,7 @@ app.post('/admin/import-questions', ensureInitialized, checkAuth, checkAdmin, up
   }
 });
 
-// Маршрут для перегляду результатів тестів (адмін/інструктор) — оновлено формат часу поза вкладкою
+// Маршрут для перегляду результатів тестів (адмін/інструктор)
 app.get('/admin/results', checkAuth, async (req, res) => {
   const startTime = Date.now();
   try {
@@ -5711,7 +5980,7 @@ app.get('/admin/results', checkAuth, async (req, res) => {
             .container { max-width: 1400px; margin: 0 auto; background: white; padding: 30px; border-radius: 12px; box-shadow: 0 4px 20px rgba(0,0,0,0.1); }
             h1 { text-align: center; color: #333; margin-bottom: 25px; }
             table { border-collapse: collapse; width: 100%; margin-top: 20px; }
-            th, td { border: 1px solid #ddd; padding: 12px; text-align: left; vertical-align: top; }
+            th, td { border: 1px solid #ddd; padding: 12px; text-align: left; }
             th { background: #f2f2f2; font-weight: bold; }
             .nav-btn, .action-btn, .search-btn { padding: 12px 24px; margin: 10px 5px; cursor: pointer; border: none; border-radius: 8px; font-size: 16px; }
             .nav-btn { background: #007bff; color: white; }
@@ -5719,16 +5988,14 @@ app.get('/admin/results', checkAuth, async (req, res) => {
             .search-btn { background: #28a745; color: white; }
             .action-btn.view { background: #4CAF50; color: white; }
             .action-btn.delete { background: #ef5350; color: white; }
-            .suspicious { color: #d32f2f; font-weight: bold; background: #ffebee; }
-            .normal { color: #388e3c; }
+            .suspicious { color: #d32f2f; font-weight: bold; }
             input[type="text"] { padding: 10px; width: 250px; font-size: 16px; }
             form { display: inline-block; margin: 10px 0; }
-            .activity-details { font-size: 14px; line-height: 1.5; }
           </style>
         </head>
         <body>
           <div class="container">
-            <h1>Результати тестів (${results.length})</h1>
+            <h1>Результати тестів</h1>
 
             <button class="nav-btn" onclick="window.location.href='/select-test'">Повернутися до вибору тесту</button>
 
@@ -5747,7 +6014,7 @@ app.get('/admin/results', checkAuth, async (req, res) => {
                 <th>Початок</th>
                 <th>Кінець</th>
                 <th>Тривалість</th>
-                <th>Підозріла активність</th>
+                <th>Підозріла активність (%)</th>
                 <th>Дія</th>
               </tr>
     `;
@@ -5756,63 +6023,54 @@ app.get('/admin/results', checkAuth, async (req, res) => {
       html += '<tr><td colspan="10">Немає результатів</td></tr>';
     } else {
       for (const result of results) {
-        // Перерахунок балів
+        // Завантажуємо питання для цього результату
         let allQuestions = await db.collection('questions')
           .find({ testNumber: result.testNumber })
           .sort({ order: 1 })
           .toArray();
 
+        // Фільтруємо за варіантом
         const questions = allQuestions.filter(q => 
           !q.variant || q.variant === '' || q.variant === result.variant
         );
 
+        // Перерахунок балів за допомогою функції
         const scoresPerQuestion = questions.map((q, idx) => {
-          const userAnswer = result.answers ? result.answers[idx] : null;
+          const userAnswer = result.answers[idx];
           return calculateQuestionScore(q, userAnswer);
         });
 
         const exactScore = scoresPerQuestion.reduce((sum, s) => sum + s, 0);
         const roundedScore = Math.round(exactScore * 10) / 10;
-        const totalPoints = questions.reduce((sum, q) => sum + (q.points || 0), 0);
+        const totalPoints = questions.reduce((sum, q) => sum + q.points, 0);
         const percentage = totalPoints > 0 ? (exactScore / totalPoints) * 100 : 0;
         const roundedPercentage = Math.round(percentage * 10) / 10;
 
-        const startTimeStr = result.startTime ? new Date(result.startTime).toLocaleString('uk-UA') : '—';
-        const endTimeStr = result.endTime ? new Date(result.endTime).toLocaleString('uk-UA') : '—';
+        const totalQuestions = questions.length;
+        const correctClicks = scoresPerQuestion.filter(s => s > 0).length;
 
-        const durationSec = result.duration || 
-          (result.endTime && result.startTime ? 
-            Math.round((new Date(result.endTime) - new Date(result.startTime)) / 1000) : 0);
+        const startTimeStr = new Date(result.startTime).toLocaleString('uk-UA');
+        const endTimeStr = new Date(result.endTime).toLocaleString('uk-UA');
 
+        const durationSec = result.duration || Math.round((new Date(result.endTime) - new Date(result.startTime)) / 1000);
         const minutes = Math.floor(durationSec / 60).toString().padStart(2, '0');
         const seconds = (durationSec % 60).toString().padStart(2, '0');
 
-        // Підозріла активність
-        const susp = result.suspiciousActivity || {};
-        const timeAwaySeconds = susp.timeAway || 0;
-        const timeAwayPercent = durationSec > 0 
-          ? Math.round((timeAwaySeconds / durationSec) * 100) 
+        const timeAwayPercent = result.suspiciousActivity?.timeAway && result.duration
+          ? Math.round((result.suspiciousActivity.timeAway / result.duration) * 100)
           : 0;
-        const switchCount = susp.switchCount || 0;
 
-        // === НОВЕ ФОРМАТУВАННЯ ЧАСУ ПОЗА ВКЛАДКОЮ ===
-        let timeAwayFormatted = '';
-        if (timeAwaySeconds < 60) {
-          // менше хвилини — показуємо з десятими
-          timeAwayFormatted = timeAwaySeconds.toFixed(1) + ' сек';
-        } else {
-          // 1 хвилина і більше
-          const awayMinutes = Math.floor(timeAwaySeconds / 60);
-          const awaySeconds = timeAwaySeconds % 60;
-          timeAwayFormatted = `${awayMinutes} хв ${awaySeconds} сек`;
-        }
+        const switchCount = result.suspiciousActivity?.switchCount || 0;
+        const avgResponseTime = result.suspiciousActivity?.responseTimes?.length
+          ? (result.suspiciousActivity.responseTimes.reduce((sum, t) => sum + (t || 0), 0) / result.suspiciousActivity.responseTimes.length).toFixed(2)
+          : 0;
 
-        const isSuspicious = timeAwayPercent > (config?.suspiciousActivity?.timeAwayThreshold || 15) || 
-                            switchCount > (config?.suspiciousActivity?.switchCountThreshold || 5);
+        const isSuspicious = timeAwayPercent > config.suspiciousActivity.timeAwayThreshold ||
+                            switchCount > config.suspiciousActivity.switchCountThreshold;
 
         html += `
           <tr class="${isSuspicious ? 'suspicious' : ''}">
-            <td>${result.user || '—'}</td>
+            <td>${result.user}</td>
             <td>${testNames[result.testNumber]?.name?.replace(/"/g, '\\"') || 'Невідомий тест'}</td>
             <td>${result.variant || 'Немає'}</td>
             <td>${roundedScore.toFixed(1)} / ${roundedPercentage.toFixed(1)}%</td>
@@ -5820,16 +6078,10 @@ app.get('/admin/results', checkAuth, async (req, res) => {
             <td>${startTimeStr}</td>
             <td>${endTimeStr}</td>
             <td>${minutes} хв ${seconds} сек</td>
-            <td>
-              <div class="activity-details">
-                <strong>${timeAwayPercent}%</strong> поза вкладкою<br>
-                Перемикань: <strong>${switchCount}</strong><br>
-                Час поза: <strong>${timeAwayFormatted}</strong>
-              </div>
-            </td>
+            <td>${timeAwayPercent}%</td>
             <td>
               <button class="action-btn view" onclick="viewResult('${result._id}')">Перегляд</button>
-              ${req.userRole === 'admin' ? `<button class="action-btn delete" onclick="deleteResult('${result._id}')">🗑️ Видалити</button>` : ''}
+              ${req.userRole === 'admin' ? '<button class="action-btn delete" onclick="deleteResult(\'' + result._id + '\')">🗑️ Видалити</button>' : ''}
             </td>
           </tr>
         `;
@@ -5838,47 +6090,46 @@ app.get('/admin/results', checkAuth, async (req, res) => {
 
     html += `
             </table>
-          </div>
 
-          <script>
-            async function viewResult(id) {
-              window.location.href = '/admin/view-result?id=' + id;
-            }
+            <script>
+              async function viewResult(id) {
+                window.location.href = '/admin/view-result?id=' + id;
+              }
 
-            async function deleteResult(id) {
-              if (confirm('Видалити цей результат?')) {
-                const formData = new URLSearchParams();
-                formData.append('id', id);
-                formData.append('_csrf', '${res.locals._csrf || ''}');
-                try {
-                  const response = await fetch('/admin/delete-result', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-                    body: formData
-                  });
-                  if (response.ok) {
-                    location.reload();
-                  } else {
-                    alert('Помилка видалення');
+              async function deleteResult(id) {
+                if (confirm('Видалити цей результат?')) {
+                  const formData = new URLSearchParams();
+                  formData.append('id', id);
+                  formData.append('_csrf', '${res.locals._csrf}');
+                  try {
+                    const response = await fetch('/admin/delete-result', {
+                      method: 'POST',
+                      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                      body: formData
+                    });
+                    if (response.ok) {
+                      location.reload();
+                    } else {
+                      alert('Помилка видалення: ' + response.status);
+                    }
+                  } catch (error) {
+                    alert('Не вдалося видалити');
                   }
-                } catch (error) {
-                  alert('Не вдалося видалити результат');
                 }
               }
-            }
 
-            document.getElementById('search-form')?.addEventListener('submit', e => {
-              e.preventDefault();
-              const searchValue = e.target.search.value;
-              window.location.href = '/admin/results?search=' + encodeURIComponent(searchValue);
-            });
-          </script>
+              document.getElementById('search-form')?.addEventListener('submit', e => {
+                e.preventDefault();
+                const search = e.target.search.value;
+                window.location.href = '/admin/results?search=' + encodeURIComponent(search);
+              });
+            </script>
+          </div>
         </body>
       </html>
     `;
 
     res.send(html);
-
   } catch (error) {
     logger.error('Помилка в /admin/results', { message: error.message, stack: error.stack });
     res.status(500).send('Помилка при завантаженні результатів');
@@ -6094,7 +6345,7 @@ app.get('/admin/view-result', checkAuth, async (req, res) => {
                   }
                 };
 
-                pdfMake.createPdf(docDefinition).download(viewResultData.user + '_деталі_результату_' + '.pdf');
+                pdfMake.createPdf(docDefinition).download(viewResultData.user + 'деталі_результату_' + '.pdf');
               }
 
               // Додаємо обробник після повного завантаження сторінки
