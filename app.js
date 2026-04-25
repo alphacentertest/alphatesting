@@ -2209,7 +2209,7 @@ app.get('/instructions', checkAuth, (req, res) => {
   }
 });
 
-// Відображення питання тесту
+// Відображення питання тесту — з правильним переносом тексту цілими словами
 app.get('/test/question', checkAuth, async (req, res) => {
   const startTime = Date.now();
   try {
@@ -2346,6 +2346,7 @@ app.get('/test/question', checkAuth, async (req, res) => {
           ipAddress,
           testSessionId
         );
+        logger.info(`Результат збережено для testSessionId: ${testSessionId} через недоступність тесту`);
       }
       await db.collection('active_tests').deleteOne({ user: req.user });
       return res.send(`
@@ -2500,7 +2501,10 @@ app.get('/test/question', checkAuth, async (req, res) => {
               max-width: 1100px;
               margin: 0 auto;
             }
-            .option-box, .matching-item, .blank-input {
+            #answers .option-box,
+            #answers .matching-item,
+            #answers input[type="text"],
+            #answers .blank-input {
               background: white;
               border: 2px solid #ddd;
               box-sizing: border-box;
@@ -2514,15 +2518,24 @@ app.get('/test/question', checkAuth, async (req, res) => {
               font-size: 17px;
               user-select: none;
               transition: all 0.2s;
+              background: white;
               min-height: 64px;
+              height: auto;
               display: flex;
               align-items: center;
+              justify-content: flex-start;
               text-align: left;
               white-space: normal;
               overflow-wrap: break-word;
+              word-break: normal;
+              hyphens: none;
               line-height: 1.45;
+              overflow: visible;
             }
-            .option-box:hover { background: #f8f9fa; border-color: #bbb; }
+            .option-box:hover {
+              background: #f8f9fa;
+              border-color: #bbb;
+            }
             .option-box.selected {
               background: #d4edda !important;
               border-color: #28a745 !important;
@@ -2531,7 +2544,7 @@ app.get('/test/question', checkAuth, async (req, res) => {
             .matching-container {
               display: grid;
               grid-template-columns: 1fr 1fr;
-              gap: 20px;
+              gap: 12px;
               margin: 20px 0;
             }
             .matching-column {
@@ -2543,16 +2556,25 @@ app.get('/test/question', checkAuth, async (req, res) => {
               border: 2px solid #ddd;
               padding: 16px 20px;
               border-radius: 10px;
+              cursor: move;
               font-size: 17px;
               min-height: 70px;
+              height: auto;
+              overflow: visible;
+              text-overflow: unset;
+              white-space: normal;
+              overflow-wrap: break-word;
+              word-break: normal;
+              hyphens: none;
               display: flex;
               align-items: center;
+              justify-content: flex-start;
               background: white;
+              transition: all 0.2s;
+              box-sizing: border-box;
               line-height: 1.45;
             }
-            .static { cursor: default; }
-            .draggable { cursor: move; }
-            .sortable-ghost { opacity: 0.4; }
+            .static { cursor: default; background: #f8f9fa; }
             .button-container {
               position: fixed;
               bottom: 20px;
@@ -2562,6 +2584,7 @@ app.get('/test/question', checkAuth, async (req, res) => {
               justify-content: space-between;
               gap: 12px;
               z-index: 100;
+              flex-wrap: nowrap;
             }
             button {
               flex: 1;
@@ -2572,13 +2595,29 @@ app.get('/test/question', checkAuth, async (req, res) => {
               border-radius: 10px;
               cursor: pointer;
               min-height: 60px;
+              display: flex;
+              align-items: center;
+              justify-content: center;
+              box-shadow: 0 4px 10px rgba(0,0,0,0.15);
+              transition: all 0.2s;
             }
-            button:hover { transform: translateY(-2px); }
+            button:hover { transform: translateY(-2px); box-shadow: 0 6px 14px rgba(0,0,0,0.2); }
             .back-btn   { background: #dc3545; color: white; }
             .next-btn   { background: #007bff; color: white; }
             .finish-btn { background: #28a745; color: white; }
-            button:disabled { background: #ccc; cursor: not-allowed; }
-            #timer { font-size: 26px; font-weight: bold; text-align: center; margin: 15px 0 25px; color: #333; }
+            button:disabled {
+              background: #ccc !important;
+              cursor: not-allowed;
+              transform: none;
+              box-shadow: none;
+            }
+            #timer {
+              font-size: 26px;
+              font-weight: bold;
+              text-align: center;
+              margin: 15px 0 25px;
+              color: #333;
+            }
           </style>
         </head>
         <body>
@@ -2587,10 +2626,12 @@ app.get('/test/question', checkAuth, async (req, res) => {
 
           <div class="progress-bar">
             ${progress.map((p, j) => `
-              <div class="progress-circle ${p.answered ? 'answered' : 'unanswered'}" 
-                   data-index="${j}" onclick="goToQuestion(${j})">
-                ${p.number}
-              </div>
+              <div 
+                class="progress-circle ${p.answered ? 'answered' : 'unanswered'}" 
+                data-index="${j}"
+                onclick="goToQuestion(${j})"
+                title="Перейти до питання ${p.number}"
+              >${p.number}</div>
               ${j < progress.length - 1 ? '<div class="progress-line ' + (p.answered ? 'answered' : '') + '"></div>' : ''}
             `).join('')}
           </div>
@@ -2620,24 +2661,24 @@ app.get('/test/question', checkAuth, async (req, res) => {
 
     const instructionText = q.type === 'multiple' ? 'Виберіть усі правильні відповіді' :
                            q.type === 'singlechoice' ? 'Виберіть одну правильну відповідь' :
-                           q.type === 'input' ? 'Введіть відповідь' :
-                           q.type === 'ordering' ? 'Розташуйте у правильній послідовності' :
-                           q.type === 'matching' ? 'Сортуйте праву колонку' :
-                           q.type === 'fillblank' ? 'Заповніть пропуски' : '';
+                           q.type === 'input' ? 'Введіть правильну відповідь' :
+                           q.type === 'ordering' ? 'Розташуйте відповіді у правильній послідовності' :
+                           q.type === 'matching' ? 'Сортуйте елементи в правій колонці' :
+                           q.type === 'fillblank' ? 'Заповніть пропуски у реченні' : '';
 
     html += `
             <div class="question-box">
               <h2 id="question-text">${index + 1}. `;
 
     if (q.type === 'fillblank') {
-      const parts = q.text.split('___');
       const userAnswers = Array.isArray(answers[index]) ? answers[index] : [];
+      const parts = q.text.split('___');
       let inputHtml = '';
       parts.forEach((part, i) => {
-        inputHtml += part;
+        inputHtml += `<span class="question-text">${part}</span>`;
         if (i < parts.length - 1) {
-          const val = userAnswers[i] || '';
-          inputHtml += `<input type="text" class="blank-input" id="blank_${i}" value="${val.replace(/"/g, '\\"')}" placeholder="..." autocomplete="off">`;
+          const userAnswer = userAnswers[i] || '';
+          inputHtml += `<input type="text" class="blank-input" id="blank_${i}" value="${userAnswer.replace(/"/g, '\\"')}" placeholder="Введіть відповідь" autocomplete="off">`;
         }
       });
       html += inputHtml;
@@ -2645,41 +2686,56 @@ app.get('/test/question', checkAuth, async (req, res) => {
       html += q.text;
     }
 
-    html += `</h2></div>
-            <p class="instruction">${instructionText}</p>
+    html += `
+              </h2>
+            </div>
+            <p id="instruction" class="instruction">${instructionText}</p>
             <div id="answers">
     `;
 
     // ==================== MATCHING ====================
     if (q.type === 'matching' && q.pairs) {
-      const leftItems = q.pairs.map(p => p.left);
-      const rightItems = shuffleArray([...q.pairs.map(p => p.right)]);
+      const leftItems = q.pairs.map(p => p.left);           // Ліва колонка — статична
+      const rightItems = shuffleArray([...q.pairs.map(p => p.right)]); // Права — перемішуємо
+
       const userAnswer = Array.isArray(answers[index]) ? answers[index] : [];
 
       html += `
         <div class="matching-container" id="matching-${index}">
+          <!-- Ліва колонка (статична) -->
           <div class="matching-column" id="left-column-${index}">
-            <h4 style="margin-bottom:15px;color:#333;">Терміни</h4>
-            ${leftItems.map(item => `<div class="matching-item static">${item}</div>`).join('')}
+            <h4 style="margin-bottom: 15px; color: #333;">Терміни</h4>
+            ${leftItems.map(item => `
+              <div class="matching-item static">
+                ${item}
+              </div>
+            `).join('')}
           </div>
+
+          <!-- Права колонка (sortable) -->
           <div class="matching-column" id="right-column-${index}">
-            <h4 style="margin-bottom:15px;color:#333;">Відповіді (сортуйте)</h4>
+            <h4 style="margin-bottom: 15px; color: #333;">Відповіді (сортуйте)</h4>
             <div class="sortable-right" id="sortable-right-${index}">
-              ${rightItems.map(item => {
+              ${rightItems.map((item, i) => {
                 const escaped = item.replace(/'/g, "\\'").replace(/"/g, '\\"');
-                return `<div class="matching-item draggable" data-value="${escaped}">${item}</div>`;
+                return `
+                  <div class="matching-item draggable" data-value="${escaped}">
+                    ${item}
+                  </div>`;
               }).join('')}
             </div>
           </div>
         </div>
 
-        <button onclick="resetMatching(${index})" style="margin-top:10px;">Скинути порядок</button>
+        <button onclick="resetMatching(${index})" style="margin-top: 10px;">Скинути порядок</button>
 
         <script>
           new Sortable(document.getElementById('sortable-right-${index}'), {
             animation: 150,
             ghostClass: 'sortable-ghost',
-            onEnd: () => saveMatchingAnswer(${index})
+            onEnd: function () {
+              saveMatchingAnswer(${index});
+            }
           });
 
           function saveMatchingAnswer(idx) {
@@ -2687,100 +2743,545 @@ app.get('/test/question', checkAuth, async (req, res) => {
             const answer = Array.from(items).map(el => el.getAttribute('data-value'));
             window.currentAnswers = window.currentAnswers || {};
             window.currentAnswers[idx] = answer;
-            if (typeof saveAnswer === 'function') saveAnswer(idx, answer);
+            if (typeof saveAnswer === 'function') {
+              saveAnswer(idx, answer);
+            }
           }
 
           function resetMatching(idx) {
-            if (confirm('Скинути порядок?')) location.reload();
+            if (confirm('Скинути порядок у правій колонці?')) {
+              location.reload();
+            }
           }
         </script>
       `;
     } 
-    // ==================== FILLBLANK ====================
-    else if (q.type === 'fillblank') {
-      const parts = q.text.split('___');
-      const userAnswers = Array.isArray(answers[index]) ? answers[index] : [];
-      let inputHtml = '';
-      parts.forEach((part, i) => {
-        inputHtml += `<span>${part}</span>`;
-        if (i < parts.length - 1) {
-          const val = userAnswers[i] || '';
-          inputHtml += `<input type="text" class="blank-input" id="blank_${i}" value="${val.replace(/"/g, '\\"')}" placeholder="..." autocomplete="off">`;
-        }
-      });
-      html += `<div class="question-text">${inputHtml}</div>`;
-    }
     // ==================== ORDERING ====================
     else if (q.type === 'ordering') {
       const optionsToShow = answers[index] || q.options || [];
       html += `
         <div id="sortable-options">
-          ${optionsToShow.map(option => {
-            const escaped = option.replace(/'/g, "\\'").replace(/"/g, '\\"');
-            return `<div class="option-box draggable" data-value="${escaped}">${option}</div>`;
+          ${optionsToShow.map((option, optIndex) => {
+            const escapedOption = option.replace(/'/g, "\\'").replace(/"/g, '\\"');
+            return `
+              <div class="option-box draggable" data-index="${optIndex}" data-value="${escapedOption}">
+                ${option}
+              </div>
+            `;
           }).join('')}
         </div>
       `;
     } 
-    // ==================== MULTIPLE / SINGLE / TRUEFALSE ====================
+    // ==================== SINGLECHOICE, MULTIPLE, TRUEFALSE ====================
     else if (q.options && q.options.length > 0) {
-      q.options.forEach(option => {
+      q.options.forEach((option, optIndex) => {
         const selected = selectedOptions.includes(option) ? 'selected' : '';
-        const escaped = option.replace(/'/g, "\\'").replace(/"/g, '\\"');
-        html += `<div class="option-box ${selected}" data-value="${escaped}">${option}</div>`;
+        const escapedOption = option.replace(/'/g, "\\'").replace(/"/g, '\\"');
+        html += `
+          <div class="option-box ${selected}" data-value="${escapedOption}">
+            ${option}
+          </div>
+        `;
       });
     } 
     // ==================== INPUT ====================
     else if (q.type === 'input') {
-      const val = answers[index] || '';
+      const userAnswer = answers[index] || '';
       html += `
-        <input type="text" id="q${index}_input" value="${val}" 
-               placeholder="Введіть відповідь" class="answer-option" autocomplete="off">
+        <input type="text" name="q${index}" id="q${index}_input" value="${userAnswer}" placeholder="Введіть відповідь" class="answer-option" autocomplete="off"><br>
       `;
     }
 
     html += `
             </div>
           </div>
-
           <div class="button-container">
-            ${!isQuickTest ? `<button class="back-btn" ${index === 0 ? 'disabled' : ''} onclick="goToQuestion(${index-1})">Назад</button>` : ''}
-            <button class="next-btn" onclick="saveAndNext(${index})">${index === questions.length - 1 ? 'Завершити тест' : 'Далі'}</button>
+            ${!isQuickTest ? `
+              <button class="back-btn" ${index === 0 ? 'disabled' : ''} onclick="window.location.href='/test/question?index=${index - 1}'">Назад</button>
+            ` : ''}
+            <button id="submit-answer" class="next-btn" ${index === questions.length - 1 ? 'disabled' : ''} onclick="saveAndNext(${index})">Далі</button>
+            <button class="finish-btn" onclick="showConfirm(${index})">Завершити тест</button>
           </div>
-
-          <!-- Модальне вікно підтвердження -->
-          <div id="confirm-modal" style="display:none;">
-            <h2>Завершити тест?</h2>
-            <button onclick="finishTest(${index})">Так</button>
-            <button onclick="hideConfirm()">Ні</button>
+          <div id="confirm-modal">
+            <h2>Ви дійсно бажаєте завершити тест?</h2>
+            <div class="buttons">
+              <button onclick="finishTest(${index})">Так</button>
+              <button onclick="hideConfirm()">Ні</button>
+            </div>
           </div>
 
           <script>
-            // ... (твій старий скрипт залишається, тільки додаємо/корегуємо функції)
-            function goToQuestion(target) {
-              if (target < 0 || target >= ${questions.length}) return;
+            const startTime = ${testStartTime};
+            const timeLimit = ${timeLimit};
+            const totalTestTime = ${totalTestTime};
+            const timerElement = document.getElementById('timer');
+            const isQuickTest = ${isQuickTest};
+            const timePerQuestion = ${timePerQuestion || 0};
+            const totalQuestions = ${questions.length};
+            let timeAway = ${userTest.suspiciousActivity?.timeAway || 0};
+            let lastBlurTime = 0;
+            let switchCount = ${userTest.suspiciousActivity?.switchCount || 0};
+            let lastActivityTime = Date.now();
+            let activityCount = ${userTest.suspiciousActivity?.activityCounts?.[index] || 0};
+            let lastMouseMoveTime = 0;
+            let lastKeydownTime = 0;
+            const debounceDelay = 100;
+            const blurDebounceDelay = 200;
+            let blurTimeout = null;
+            let selectedOptions = ${selectedOptionsString};
+            let matchingPairs = ${JSON.stringify(answers[index] || [])};
+            let questionTimeRemaining = timePerQuestion;
+            let currentQuestionIndex = ${index};
+            let lastGlobalUpdateTime = Date.now();
+            let isSaving = false;
+            let hasMovedToNext = false;
+            let questionStartTime = ${questionStartTimeObj[index]};
+
+            // Функція переходу на інше питання
+            function goToQuestion(targetIndex) {
+              if (targetIndex === currentQuestionIndex) return;
               saveCurrentAnswer(currentQuestionIndex).then(() => {
-                window.location.href = '/test/question?index=' + target;
+                window.location.href = '/test/question?index=' + targetIndex;
+              }).catch(err => {
+                console.error('Помилка перед переходом:', err);
+                window.location.href = '/test/question?index=' + targetIndex;
               });
             }
 
-            function saveMatchingAnswer(idx) {
-              // вже є в блоці matching
+            // Вирівнювання висоти всіх matching-item
+            function equalizeMatchingHeights() {
+              const allItems = document.querySelectorAll('.matching-item');
+              if (allItems.length === 0) return;
+              let maxHeight = 0;
+              allItems.forEach(item => {
+                item.style.height = 'auto';
+                const height = item.getBoundingClientRect().height;
+                if (height > maxHeight) maxHeight = height;
+              });
+              allItems.forEach(item => {
+                item.style.height = maxHeight + 'px';
+              });
             }
 
-            // інші функції (saveCurrentAnswer, saveAndNext, finishTest і т.д.) залишаються як у тебе
+            // Автозбереження відповіді
+            async function saveCurrentAnswer(index) {
+              if (isSaving) return;
+              isSaving = true;
+              try {
+                let answers = selectedOptions;
+                if (document.querySelector('input[name="q' + index + '"]')) {
+                  answers = document.getElementById('q' + index + '_input').value;
+                } else if (document.getElementById('sortable-options')) {
+                  answers = Array.from(document.querySelectorAll('#sortable-options .option-box')).map(el => el.dataset.value);
+                } else if (document.getElementById('left-column')) {
+                  answers = matchingPairs;
+                } else if ('${q.type}' === 'fillblank') {
+                  answers = [];
+                  for (let i = 0; i < ${q.blankCount || 1}; i++) {
+                    const input = document.getElementById('blank_' + i);
+                    answers.push(input ? input.value.trim() : '');
+                  }
+                }
+                const responseTime = (Date.now() - questionStartTime) / 1000;
+                const formData = new URLSearchParams();
+                formData.append('index', index);
+                const safeAnswer = JSON.stringify(answers);
+                formData.append('answer', safeAnswer);
+                formData.append('timeAway', timeAway);
+                formData.append('switchCount', switchCount);
+                formData.append('responseTime', responseTime);
+                formData.append('activityCount', activityCount);
+                formData.append('_csrf', '${res.locals._csrf}');
+                const response = await fetch('/answer', {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                  body: formData
+                });
+                if (!response.ok) throw new Error('HTTP ' + response.status);
+                const result = await response.json();
+                if (!result.success) console.error('Помилка автозбереження:', result.error);
+              } catch (error) {
+                console.error('Помилка автозбереження:', error);
+              } finally {
+                isSaving = false;
+              }
+            }
+
+            // Збереження + наступне питання
+            async function saveAndNext(index) {
+              if (isSaving) return;
+              isSaving = true;
+              try {
+                hasMovedToNext = true;
+                let answers = selectedOptions;
+                if (document.querySelector('input[name="q' + index + '"]')) {
+                  answers = document.getElementById('q' + index + '_input').value;
+                } else if (document.getElementById('sortable-options')) {
+                  answers = Array.from(document.querySelectorAll('#sortable-options .option-box')).map(el => el.dataset.value);
+                } else if (document.getElementById('left-column')) {
+                  answers = matchingPairs;
+                } else if ('${q.type}' === 'fillblank') {
+                  answers = [];
+                  for (let i = 0; i < ${q.blankCount || 1}; i++) {
+                    const input = document.getElementById('blank_' + i);
+                    answers.push(input ? input.value.trim() : '');
+                  }
+                }
+                const responseTime = (Date.now() - questionStartTime) / 1000;
+                const formData = new URLSearchParams();
+                formData.append('index', index);
+                const safeAnswer = JSON.stringify(answers);
+                formData.append('answer', safeAnswer);
+                formData.append('timeAway', timeAway);
+                formData.append('switchCount', switchCount);
+                formData.append('responseTime', responseTime);
+                formData.append('activityCount', activityCount);
+                formData.append('_csrf', '${res.locals._csrf}');
+                const response = await fetch('/answer', {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                  body: formData
+                });
+                if (!response.ok) throw new Error('HTTP ' + response.status);
+                const result = await response.json();
+                if (result.success) {
+                  const nextIndex = index + 1;
+                  fetch('/set-question-start-time?index=' + nextIndex, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                    body: new URLSearchParams({ '_csrf': '${res.locals._csrf}' })
+                  }).then(() => {
+                    if (nextIndex < ${questions.length}) {
+                      window.location.href = '/test/question?index=' + nextIndex;
+                    } else {
+                      setTimeout(() => window.location.href = '/result', 300);
+                    }
+                  });
+                } else {
+                  console.error('Помилка збереження:', result.error);
+                  alert('Помилка збереження відповіді');
+                }
+              } catch (error) {
+                console.error('Помилка в saveAndNext:', error);
+                alert('Не вдалося зберегти відповідь');
+              } finally {
+                isSaving = false;
+              }
+            }
+
+            // Завершення тесту
+            async function finishTest(index) {
+              if (isSaving) return;
+              isSaving = true;
+              try {
+                await saveCurrentAnswer(index);
+                let answers = selectedOptions;
+                if (document.querySelector('input[name="q' + index + '"]')) {
+                  answers = document.getElementById('q' + index + '_input').value;
+                } else if (document.getElementById('sortable-options')) {
+                  answers = Array.from(document.querySelectorAll('#sortable-options .option-box')).map(el => el.dataset.value);
+                } else if (document.getElementById('left-column')) {
+                  answers = matchingPairs;
+                } else if ('${q.type}' === 'fillblank') {
+                  answers = [];
+                  for (let i = 0; i < ${q.blankCount || 1}; i++) {
+                    const input = document.getElementById('blank_' + i);
+                    answers.push(input ? input.value.trim() : '');
+                  }
+                }
+                const responseTime = (Date.now() - questionStartTime) / 1000;
+                const formData = new URLSearchParams();
+                formData.append('index', index);
+                const safeAnswer = JSON.stringify(answers);
+                formData.append('answer', safeAnswer);
+                formData.append('timeAway', timeAway);
+                formData.append('switchCount', switchCount);
+                formData.append('responseTime', responseTime);
+                formData.append('activityCount', activityCount);
+                formData.append('_csrf', '${res.locals._csrf}');
+                const response = await fetch('/answer', {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                  body: formData
+                });
+                if (!response.ok) throw new Error('HTTP ' + response.status);
+                const result = await response.json();
+                if (result.success) {
+                  setTimeout(() => window.location.href = '/result', 300);
+                } else {
+                  console.error('Помилка завершення:', result.error);
+                  alert('Помилка завершення тесту');
+                }
+              } catch (error) {
+                console.error('Помилка в finishTest:', error);
+                alert('Не вдалося завершити тест');
+              } finally {
+                isSaving = false;
+              }
+            }
+
+            function showConfirm(index) {
+              document.getElementById('confirm-modal').style.display = 'block';
+            }
+
+            function hideConfirm() {
+              document.getElementById('confirm-modal').style.display = 'none';
+            }
+
+            function updateGlobalTimer() {
+              const now = Date.now();
+              const elapsedTime = Math.floor((now - startTime) / 1000);
+              const remainingTime = Math.max(0, totalTestTime - elapsedTime);
+              const minutes = Math.floor(remainingTime / 60).toString().padStart(2, '0');
+              const seconds = (remainingTime % 60).toString().padStart(2, '0');
+              timerElement.textContent = 'Залишилось часу: ' + minutes + ' хв ' + seconds + ' с';
+              lastGlobalUpdateTime = now;
+              if (remainingTime <= 0) {
+                saveCurrentAnswer(currentQuestionIndex).then(() => {
+                  setTimeout(() => window.location.href = '/result', 1500);
+                });
+              }
+            }
+            setInterval(updateGlobalTimer, 1000);
+
+            if (isQuickTest) {
+              function updateQuestionTimer() {
+                const now = Date.now();
+                const elapsedSinceQuestionStart = Math.floor((now - questionStartTime) / 1000);
+                questionTimeRemaining = Math.max(0, timePerQuestion - elapsedSinceQuestionStart);
+                const timerText = document.getElementById('timer-text');
+                const timerCircle = document.querySelector('#question-timer .timer-circle');
+                if (timerText && timerCircle) {
+                  timerText.textContent = Math.round(questionTimeRemaining);
+                  const circumference = 251;
+                  const offset = (1 - questionTimeRemaining / timePerQuestion) * circumference;
+                  timerCircle.style.strokeDashoffset = offset;
+                }
+                if (questionTimeRemaining <= 0 && currentQuestionIndex < totalQuestions - 1 && !hasMovedToNext) {
+                  hasMovedToNext = true;
+                  saveCurrentAnswer(currentQuestionIndex).then(() => {
+                    saveAndNext(currentQuestionIndex);
+                  });
+                }
+              }
+              const questionTimerInterval = setInterval(updateQuestionTimer, 50);
+            }
+
+            window.addEventListener('blur', () => {
+              if (!blurTimeout) {
+                blurTimeout = setTimeout(() => {
+                  if (lastBlurTime === 0) {
+                    lastBlurTime = performance.now();
+                    switchCount = Math.min(switchCount + 1, 1000);
+                  }
+                  blurTimeout = null;
+                }, blurDebounceDelay);
+              }
+            });
+
+            window.addEventListener('focus', () => {
+              if (blurTimeout) {
+                clearTimeout(blurTimeout);
+                blurTimeout = null;
+              }
+              if (lastBlurTime > 0) {
+                const now = performance.now();
+                const awayDuration = Math.min((now - lastBlurTime) / 1000, 60);
+                timeAway += awayDuration;
+                lastBlurTime = 0;
+                saveCurrentAnswer(currentQuestionIndex);
+              }
+            });
+
+            function debounceMouseMove() {
+              const now = Date.now();
+              if (now - lastMouseMoveTime >= debounceDelay) {
+                lastMouseMoveTime = now;
+                lastActivityTime = now;
+                activityCount++;
+              }
+            }
+
+            function debounceKeydown() {
+              const now = Date.now();
+              if (now - lastKeydownTime >= debounceDelay) {
+                lastKeydownTime = now;
+                lastActivityTime = now;
+                activityCount++;
+              }
+            }
+
+            document.addEventListener('mousemove', debounceMouseMove);
+            document.addEventListener('keydown', debounceKeydown);
+
+            document.querySelectorAll('.option-box:not(.draggable)').forEach(box => {
+              box.style.pointerEvents = 'auto';
+              box.style.cursor = 'pointer';
+
+              box.addEventListener('click', (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+
+                const questionType = '${q.type}';
+                const option = box.getAttribute('data-value');
+
+                if (['truefalse', 'multiple', 'singlechoice'].includes(questionType)) {
+                  if (questionType === 'multiple') {
+                    const idx = selectedOptions.indexOf(option);
+                    if (idx === -1) {
+                      selectedOptions.push(option);
+                      box.classList.add('selected');
+                    } else {
+                      selectedOptions.splice(idx, 1);
+                      box.classList.remove('selected');
+                    }
+                  } else {
+                    if (selectedOptions[0] === option) {
+                      // повторний клік — залишаємо
+                    } else {
+                      document.querySelectorAll('.option-box:not(.draggable)').forEach(b => {
+                        b.classList.remove('selected');
+                      });
+                      selectedOptions = [option];
+                      box.classList.add('selected');
+                    }
+                  }
+                }
+              });
+            });
+
+            const sortable = document.getElementById('sortable-options');
+            if (sortable) {
+              new Sortable(sortable, { animation: 150 });
+            }
+
+            const leftColumn = document.getElementById('left-column');
+            const rightColumn = document.getElementById('right-column');
+            if (leftColumn && rightColumn && '${q.type}' === 'matching') {
+              new Sortable(leftColumn, {
+                group: 'matching',
+                animation: 150,
+                onStart: function(evt) { evt.item.classList.add('dragging'); },
+                onEnd: function(evt) { evt.item.classList.remove('dragging'); updateMatchingPairs(); equalizeMatchingHeights(); }
+              });
+              new Sortable(rightColumn, {
+                group: 'matching',
+                animation: 150,
+                onStart: function(evt) { evt.item.classList.add('dragging'); },
+                onEnd: function(evt) { evt.item.classList.remove('dragging'); updateMatchingPairs(); equalizeMatchingHeights(); }
+              });
+
+              function updateMatchingPairs() {
+                matchingPairs = [];
+                const leftItems = Array.from(document.querySelectorAll('#left-column .draggable'));
+                const rightItems = Array.from(document.querySelectorAll('#right-column .droppable'));
+                rightItems.forEach((rightItem, idx) => {
+                  const rightValue = rightItem.dataset.value || '';
+                  const leftItem = leftItems[idx];
+                  const leftValue = leftItem ? leftItem.dataset.value || '' : '';
+                  if (leftValue && rightValue) {
+                    matchingPairs.push([leftValue, rightValue]);
+                  }
+                });
+              }
+
+              function resetMatchingPairs() {
+                matchingPairs = [];
+                const rightItems = document.querySelectorAll('#right-column .droppable');
+                rightItems.forEach(item => {
+                  const rightValue = item.dataset.value || '';
+                  item.innerHTML = rightValue;
+                });
+                equalizeMatchingHeights();
+              }
+
+              const droppableItems = document.querySelectorAll('.droppable');
+              droppableItems.forEach(item => {
+                item.addEventListener('dragover', (e) => e.preventDefault());
+                item.addEventListener('drop', (e) => {
+                  e.preventDefault();
+                  const draggable = document.querySelector('.dragging');
+                  if (draggable && draggable.classList.contains('draggable')) {
+                    const leftValue = draggable.dataset.value || '';
+                    const rightValue = item.dataset.value || '';
+                    if (leftValue && rightValue) {
+                      item.innerHTML = rightValue + ' <span class="matched"> (Зіставлено: ' + leftValue + ')</span>';
+                      const leftColumn = document.getElementById('left-column');
+                      const rightColumn = document.getElementById('right-column');
+                      const leftItems = Array.from(leftColumn.children);
+                      const rightItems = Array.from(rightColumn.children);
+                      const rightIndex = rightItems.indexOf(item);
+                      if (leftItems[rightIndex]) {
+                        leftColumn.insertBefore(draggable, leftItems[rightIndex]);
+                      } else {
+                        leftColumn.appendChild(draggable);
+                      }
+                      updateMatchingPairs();
+                      equalizeMatchingHeights();
+                    }
+                  }
+                });
+              });
+
+              window.addEventListener('load', equalizeMatchingHeights);
+            }
+
+            function equalizeMatchingHeights() {
+              const allItems = document.querySelectorAll('.matching-item');
+              if (allItems.length === 0) return;
+              let maxHeight = 0;
+              allItems.forEach(item => {
+                item.style.height = 'auto';
+                const height = item.getBoundingClientRect().height;
+                if (height > maxHeight) maxHeight = height;
+              });
+              allItems.forEach(item => {
+                item.style.height = maxHeight + 'px';
+              });
+            }
+
+            updateGlobalTimer();
+            if (isQuickTest) {
+              const questionTimerInterval = setInterval(() => {
+                const now = Date.now();
+                const elapsed = Math.floor((now - questionStartTime) / 1000);
+                questionTimeRemaining = Math.max(0, timePerQuestion - elapsed);
+                const timerText = document.getElementById('timer-text');
+                const timerCircle = document.querySelector('#question-timer .timer-circle');
+                if (timerText && timerCircle) {
+                  timerText.textContent = Math.round(questionTimeRemaining);
+                  const circumference = 251;
+                  const offset = (1 - questionTimeRemaining / timePerQuestion) * circumference;
+                  timerCircle.style.strokeDashoffset = offset;
+                }
+                if (questionTimeRemaining <= 0 && currentQuestionIndex < totalQuestions - 1 && !hasMovedToNext) {
+                  hasMovedToNext = true;
+                  saveCurrentAnswer(currentQuestionIndex).then(() => {
+                    saveAndNext(currentQuestionIndex);
+                  });
+                }
+              }, 50);
+            }
+
+            document.addEventListener('visibilitychange', () => {
+              if (!document.hidden) {
+                updateGlobalTimer();
+                if (isQuickTest) updateQuestionTimer();
+              }
+            });
           </script>
         </body>
       </html>
     `;
 
     res.send(html);
-
   } catch (error) {
     logger.error('Помилка в /test/question', { message: error.message, stack: error.stack });
-    res.status(500).send('Внутрішня помилка сервера.');
+    res.status(500).send('Внутрішня помилка сервера. Спробуйте ще раз або зверніться до адміністратора.');
   } finally {
-    logger.info('Маршрут /test/question виконано', { duration: `${Date.now() - startTime} мс` });
+    logger.info('Маршрут /test/question виконано', { 
+      duration: (Date.now() - startTime) + ' мс' 
+    });
   }
 });
 
@@ -2934,7 +3435,7 @@ function calculateQuestionScore(question, userAnswer) {
     }
 
     case 'fillblank': {
-      if (!Array.isArray(userAnswer) || userAnswer.length === 0) {
+      if (!Array.isArray(userAnswer)) {
         return 0;
       }
 
@@ -2943,14 +3444,14 @@ function calculateQuestionScore(question, userAnswer) {
 
       question.correctAnswers.forEach((correctRaw, i) => {
         const userVal = userAnswer[i] || '';
-        if (!userVal.trim()) return;
+        if (!userVal) return;
 
-        const user = normalize(userVal);
+        const user = normalize(userVal);           // вже є у твоїй функції
         const correct = normalize(correctRaw);
 
         let isCorrect = false;
 
-        // 1. Діапазон чисел
+        // 1. Діапазон чисел (12-15, 99-101 і т.д.)
         if (correctRaw.includes('-')) {
           const [minStr, maxStr] = correctRaw.split('-').map(s => s.trim());
           const min = normalizeNumber(minStr);
@@ -2961,32 +3462,42 @@ function calculateQuestionScore(question, userAnswer) {
             isCorrect = val >= min && val <= max;
           }
         } 
-        // 2. Текст — м'яке співпадіння (як у PHP)
+        // 2. Звичайний текст — М'ЯКЕ СПІВПАДІННЯ
         else {
-          // Варіант А: слово повністю входить
+          // Варіант А: одне слово повністю входить в інше
           if (user.includes(correct) || correct.includes(user)) {
             isCorrect = true;
           } 
           // Варіант Б: схожість ≥ 50%
-          else if (correct.length > 0 && user.length > 0) {
-            const minLen = Math.min(correct.length, user.length);
-            let similarity = 0;
+          else {
+            const correctLen = correct.length;
+            const userLen = user.length;
 
-            for (let j = 0; j < minLen; j++) {
-              if (correct[j] === user[j]) similarity++;
-            }
+            if (correctLen > 0 && userLen > 0) {
+              const minLen = Math.min(correctLen, userLen);
+              let similarity = 0;
 
-            if (similarity / minLen >= 0.5) {
-              isCorrect = true;
+              for (let j = 0; j < minLen; j++) {
+                if (correct[j] === user[j]) {
+                  similarity++;
+                }
+              }
+
+              if (similarity / minLen >= 0.5) {   // 50% співпадіння
+                isCorrect = true;
+              }
             }
           }
         }
 
-        if (isCorrect) correctCount++;
+        if (isCorrect) {
+          correctCount++;
+          // score += partial;   // можна залишити, але краще рахувати в кінці
+        }
       });
 
-      // Повертаємо пропорційний бал
-      return (correctCount / question.correctAnswers.length) * question.points;
+      score = (correctCount / question.correctAnswers.length) * question.points;
+      break;
     }
 
     case 'input': {
