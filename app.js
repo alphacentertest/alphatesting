@@ -2868,7 +2868,7 @@ app.get('/test/question', checkAuth, async (req, res) => {
               });
             }
 
-// ====================== ЗБЕРЕЖЕННЯ ВІДПОВІДІ ======================
+            // ====================== ОСНОВНЕ ЗБЕРЕЖЕННЯ ======================
             async function saveCurrentAnswer(index) {
               if (isSaving) return;
               isSaving = true;
@@ -2876,19 +2876,22 @@ app.get('/test/question', checkAuth, async (req, res) => {
               try {
                 let answerData = [];
 
-                if (document.querySelector('.fillblank-question')) {
+                // fillblank
+                if (document.querySelector('.fillblank-question') || '${q.type}' === 'fillblank') {
                   answerData = Array.from(document.querySelectorAll('.blank-input'))
                                     .map(el => el.value.trim());
                 } 
+                // input
                 else if (document.getElementById('q' + index + '_input')) {
                   answerData = [document.getElementById('q' + index + '_input').value.trim()];
                 } 
+                // ordering
                 else if (document.getElementById('sortable-options')) {
                   answerData = Array.from(document.querySelectorAll('#sortable-options .option-box'))
                                     .map(el => el.dataset.value.trim());
                 } 
+                // MATCHING — НАЙВАЖЛИВІШЕ
                 else if (document.getElementById('left-column-' + index)) {
-                  // === MATCHING — ОСНОВНЕ ЗБЕРЕЖЕННЯ ===
                   const leftItems = Array.from(document.querySelectorAll('#left-column-' + index + ' .matching-item'));
                   const rightItems = Array.from(document.querySelectorAll('#right-column-' + index + ' .matching-item'));
                   
@@ -2903,6 +2906,7 @@ app.get('/test/question', checkAuth, async (req, res) => {
                     }
                   }
                 } 
+                // single / multiple / truefalse
                 else {
                   answerData = Array.from(document.querySelectorAll('.option-box.selected'))
                                     .map(el => el.dataset.value.trim());
@@ -2927,7 +2931,7 @@ app.get('/test/question', checkAuth, async (req, res) => {
 
                 if (!resp.ok) throw new Error('HTTP ' + resp.status);
               } catch (err) {
-                console.error('Помилка збереження:', err);
+                console.error('Помилка збереження answer для index ' + index, err);
               } finally {
                 isSaving = false;
               }
@@ -2939,7 +2943,7 @@ app.get('/test/question', checkAuth, async (req, res) => {
               isSaving = true;
               try {
                 hasMovedToNext = true;
-                await saveCurrentAnswer(index);   // <-- використовуємо єдину функцію
+                await saveCurrentAnswer(index);
 
                 const nextIndex = index + 1;
                 if (nextIndex < ${questions.length}) {
@@ -2960,7 +2964,7 @@ app.get('/test/question', checkAuth, async (req, res) => {
               if (isSaving) return;
               isSaving = true;
               try {
-                await saveCurrentAnswer(index);   // <-- використовуємо єдину функцію
+                await saveCurrentAnswer(index);
                 setTimeout(() => window.location.href = '/result', 300);
               } catch (error) {
                 console.error('Помилка в finishTest:', error);
