@@ -2772,14 +2772,13 @@ app.get('/test/question', checkAuth, async (req, res) => {
             <div id="answers">
     `;
 
-        // ==================== MATCHING ====================
+    // ==================== MATCHING ====================
     if (q.type === 'matching' && q.pairs) {
       const leftItems = q.pairs.map(p => p.left);
       const rightItems = shuffleArray([...q.pairs.map(p => p.right)]);
 
       html += `
         <div class="matching-container" id="matching-${index}">
-          <!-- Ліва колонка (сортується, але без перетягування в іншу колонку) -->
           <div class="matching-column" id="left-column-${index}">
             <h4 style="margin-bottom:15px;color:#333;text-align:center;">Терміни</h4>
             ${leftItems.map(item => {
@@ -2788,77 +2787,74 @@ app.get('/test/question', checkAuth, async (req, res) => {
             }).join('')}
           </div>
 
-          <!-- Права колонка (сортується тільки всередині себе) -->
           <div class="matching-column" id="right-column-${index}">
             <h4 style="margin-bottom:15px;color:#333;text-align:center;">Відповіді (сортуйте)</h4>
-            <div id="sortable-right-${index}">
-              ${rightItems.map(item => {
-                const escaped = item.replace(/'/g, "\\'").replace(/"/g, '\\"');
-                return `<div class="matching-item draggable" data-value="${escaped}">${item}</div>`;
-              }).join('')}
-            </div>
+            ${rightItems.map(item => {
+              const escaped = item.replace(/'/g, "\\'").replace(/"/g, '\\"');
+              return `<div class="matching-item draggable" data-value="${escaped}">${item}</div>`;
+            }).join('')}
           </div>
         </div>
 
         <button onclick="resetMatching(${index})" style="margin-top:15px;">Скинути порядок</button>
 
         <script>
-          // Сортування тільки всередині своєї колонки (без group — немає перетягування між колонками)
+          let currentMatchingPairs = [];
+
           new Sortable(document.getElementById('left-column-${index}'), {
             animation: 150,
             ghostClass: 'sortable-ghost',
-            onEnd: () => saveMatchingAnswer(${index})
+            onEnd: updateMatchingPairs
           });
 
-          new Sortable(document.getElementById('sortable-right-${index}'), {
+          new Sortable(document.getElementById('right-column-${index}'), {
             animation: 150,
             ghostClass: 'sortable-ghost',
-            onEnd: () => saveMatchingAnswer(${index})
+            onEnd: updateMatchingPairs
           });
 
-          function saveMatchingAnswer(idx) {
-            const leftEls = document.querySelectorAll('#left-column-' + idx + ' .matching-item');
-            const rightEls = document.querySelectorAll('#sortable-right-' + idx + ' .matching-item');
-            
-            const pairs = [];
-            leftEls.forEach((leftEl, i) => {
-              const rightEl = rightEls[i];
-              if (leftEl && rightEl) {
-                pairs.push([
-                  leftEl.getAttribute('data-value'),
-                  rightEl.getAttribute('data-value')
-                ]);
+          function updateMatchingPairs() {
+            const leftItems = Array.from(document.querySelectorAll('#left-column-${index} .matching-item'));
+            const rightItems = Array.from(document.querySelectorAll('#right-column-${index} .matching-item'));
+
+            currentMatchingPairs = [];
+            const minLen = Math.min(leftItems.length, rightItems.length);
+
+            for (let i = 0; i < minLen; i++) {
+              const leftVal = leftItems[i].getAttribute('data-value') || '';
+              const rightVal = rightItems[i].getAttribute('data-value') || '';
+              if (leftVal || rightVal) {
+                currentMatchingPairs.push([leftVal, rightVal]);
               }
-            });
+            }
 
             window.currentAnswers = window.currentAnswers || {};
-            window.currentAnswers[idx] = pairs;
+            window.currentAnswers[${index}] = currentMatchingPairs;
 
             if (typeof saveAnswer === 'function') {
-              saveAnswer(idx, pairs);
+              saveAnswer(${index}, currentMatchingPairs);
             }
           }
 
           function resetMatching(idx) {
-            if (confirm('Скинути порядок?')) location.reload();
+            if (confirm('Скинути порядок у колонках?')) location.reload();
           }
 
-          // Вирівнювання висоти блоків
+          // Вирівнювання висоти
           function equalizeMatchingHeights() {
-            const allItems = document.querySelectorAll('#matching-' + idx + ' .matching-item');
-            if (allItems.length === 0) return;
-            let maxHeight = 0;
-            allItems.forEach(item => {
+            const items = document.querySelectorAll('#matching-${index} .matching-item');
+            let maxH = 0;
+            items.forEach(item => {
               item.style.height = 'auto';
-              const height = item.getBoundingClientRect().height;
-              if (height > maxHeight) maxHeight = height;
+              maxH = Math.max(maxH, item.getBoundingClientRect().height);
             });
-            allItems.forEach(item => {
-              item.style.height = maxHeight + 'px';
-            });
+            items.forEach(item => item.style.height = maxH + 'px');
           }
 
-          window.addEventListener('load', equalizeMatchingHeights);
+          window.addEventListener('load', () => {
+            equalizeMatchingHeights();
+            updateMatchingPairs();
+          });
         </script>
       `;
     } else if (!q.options || q.options.length === 0) {
@@ -2957,39 +2953,43 @@ app.get('/test/question', checkAuth, async (req, res) => {
               isSaving = true;
               try {
                 let answers = selectedOptions;
+
                 if (document.querySelector('input[name="q' + index + '"]')) {
-                  answers = document.getElementById('q' + index + '_input').value;
-                } else if (document.getElementById('sortable-options')) {
-                  answers = Array.from(document.querySelectorAll('#sortable-options .option-box')).map(el => el.dataset.value);
-                } else if (document.getElementById('left-column')) {
-                  answers = matchingPairs;
-                } else if ('${q.type}' === 'fillblank') {
-                  answers = [];
-                  for (let i = 0; i < ${q.blankCount || 1}; i++) {
-                    const input = document.getElementById('blank_' + i);
-                    answers.push(input ? input.value.trim() : '');
-                  }
+                  answers = [document.getElementById('q' + index + '_input').value.trim()];
+                } 
+                else if (document.getElementById('sortable-options')) {
+                  answers = Array.from(document.querySelectorAll('#sortable-options .option-box'))
+                                 .map(el => el.dataset.value.trim());
+                } 
+                else if (document.getElementById('left-column-' + index)) {
+                  // matching — беремо пари
+                  answers = currentMatchingPairs || window.currentAnswers?.[index] || [];
+                } 
+                else if ('${q.type}' === 'fillblank') {
+                  answers = Array.from(document.querySelectorAll('.blank-input'))
+                                 .map(el => el.value.trim());
                 }
+
                 const responseTime = (Date.now() - questionStartTime) / 1000;
+
                 const formData = new URLSearchParams();
                 formData.append('index', index);
-                const safeAnswer = JSON.stringify(answers);
-                formData.append('answer', safeAnswer);
+                formData.append('answer', JSON.stringify(answers));
                 formData.append('timeAway', timeAway);
                 formData.append('switchCount', switchCount);
                 formData.append('responseTime', responseTime);
                 formData.append('activityCount', activityCount);
                 formData.append('_csrf', '${res.locals._csrf}');
+
                 const response = await fetch('/answer', {
                   method: 'POST',
                   headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
                   body: formData
                 });
+
                 if (!response.ok) throw new Error('HTTP ' + response.status);
-                const result = await response.json();
-                if (!result.success) console.error('Помилка автозбереження:', result.error);
               } catch (error) {
-                console.error('Помилка автозбереження:', error);
+                console.error('Помилка збереження відповіді:', error);
               } finally {
                 isSaving = false;
               }
