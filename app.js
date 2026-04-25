@@ -2868,7 +2868,7 @@ app.get('/test/question', checkAuth, async (req, res) => {
               });
             }
 
-            // ====================== ОСНОВНЕ ЗБЕРЕЖЕННЯ ======================
+            // Автозбереження відповіді
             async function saveCurrentAnswer(index) {
               if (isSaving) return;
               isSaving = true;
@@ -2876,37 +2876,46 @@ app.get('/test/question', checkAuth, async (req, res) => {
               try {
                 let answerData = [];
 
-                if (document.getElementById('left-column-' + index)) {
-                  // MATCHING
-                  const leftItems = Array.from(document.querySelectorAll('#left-column-' + index + ' .matching-item'));
-                  const rightItems = Array.from(document.querySelectorAll('#right-column-' + index + ' .matching-item'));
-                  answerData = [];
-                  const minLen = Math.min(leftItems.length, rightItems.length);
-                  for (let i = 0; i < minLen; i++) {
-                    const l = (leftItems[i].dataset.value || '').trim();
-                    const r = (rightItems[i].dataset.value || '').trim();
-                    if (l || r) answerData.push([l, r]);
-                  }
-                } 
-                else if (document.querySelector('.fillblank-question') || '${q.type}' === 'fillblank') {
-                  answerData = Array.from(document.querySelectorAll('.blank-input')).map(el => el.value.trim());
+                if (document.querySelector('.fillblank-question')) {
+                  answerData = Array.from(document.querySelectorAll('.blank-input'))
+                                    .map(el => el.value.trim());
                 } 
                 else if (document.getElementById('q' + index + '_input')) {
                   answerData = [document.getElementById('q' + index + '_input').value.trim()];
                 } 
                 else if (document.getElementById('sortable-options')) {
-                  answerData = Array.from(document.querySelectorAll('#sortable-options .option-box')).map(el => el.dataset.value.trim());
+                  answerData = Array.from(document.querySelectorAll('#sortable-options .option-box'))
+                                    .map(el => el.dataset.value.trim());
+                } 
+                else if (document.getElementById('left-column-' + index)) {
+                  // === MATCHING — ВАЖЛИВЕ ВИПРАВЛЕННЯ ===
+                  const leftItems = Array.from(document.querySelectorAll('#left-column-' + index + ' .matching-item'));
+                  const rightItems = Array.from(document.querySelectorAll('#right-column-' + index + ' .matching-item'));
+                  
+                  answerData = [];
+                  const minLen = Math.min(leftItems.length, rightItems.length);
+
+                  for (let i = 0; i < minLen; i++) {
+                    const leftVal = (leftItems[i].dataset.value || '').trim();
+                    const rightVal = (rightItems[i].dataset.value || '').trim();
+                    if (leftVal || rightVal) {
+                      answerData.push([leftVal, rightVal]);   // <-- Масив пар!
+                    }
+                  }
                 } 
                 else {
-                  answerData = Array.from(document.querySelectorAll('.option-box.selected')).map(el => el.dataset.value.trim());
+                  answerData = Array.from(document.querySelectorAll('.option-box.selected'))
+                                    .map(el => el.dataset.value.trim());
                 }
+
+                const responseTime = (Date.now() - questionStartTime) / 1000;
 
                 const formData = new URLSearchParams();
                 formData.append('index', index);
                 formData.append('answer', JSON.stringify(answerData));
                 formData.append('timeAway', timeAway);
                 formData.append('switchCount', switchCount);
-                formData.append('responseTime', (Date.now() - questionStartTime) / 1000);
+                formData.append('responseTime', responseTime);
                 formData.append('activityCount', activityCount);
                 formData.append('_csrf', '${res.locals._csrf}');
 
@@ -2916,7 +2925,7 @@ app.get('/test/question', checkAuth, async (req, res) => {
                   body: formData
                 });
 
-                if (!resp.ok) console.error('HTTP error:', resp.status);
+                if (!resp.ok) throw new Error('HTTP ' + resp.status);
               } catch (err) {
                 console.error('Помилка збереження:', err);
               } finally {
@@ -2930,13 +2939,53 @@ app.get('/test/question', checkAuth, async (req, res) => {
               isSaving = true;
               try {
                 hasMovedToNext = true;
-                await saveCurrentAnswer(index);
-
-                const nextIndex = index + 1;
-                if (nextIndex < ${questions.length}) {
-                  window.location.href = '/test/question?index=' + nextIndex;
+                let answers = selectedOptions;
+                if (document.querySelector('input[name="q' + index + '"]')) {
+                  answers = document.getElementById('q' + index + '_input').value;
+                } else if (document.getElementById('sortable-options')) {
+                  answers = Array.from(document.querySelectorAll('#sortable-options .option-box')).map(el => el.dataset.value);
+                } else if (document.getElementById('left-column')) {
+                  answers = matchingPairs;
+                } else if ('${q.type}' === 'fillblank') {
+                  answers = [];
+                  for (let i = 0; i < ${q.blankCount || 1}; i++) {
+                    const input = document.getElementById('blank_' + i);
+                    answers.push(input ? input.value.trim() : '');
+                  }
+                }
+                const responseTime = (Date.now() - questionStartTime) / 1000;
+                const formData = new URLSearchParams();
+                formData.append('index', index);
+                const safeAnswer = JSON.stringify(answers);
+                formData.append('answer', safeAnswer);
+                formData.append('timeAway', timeAway);
+                formData.append('switchCount', switchCount);
+                formData.append('responseTime', responseTime);
+                formData.append('activityCount', activityCount);
+                formData.append('_csrf', '${res.locals._csrf}');
+                const response = await fetch('/answer', {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                  body: formData
+                });
+                if (!response.ok) throw new Error('HTTP ' + response.status);
+                const result = await response.json();
+                if (result.success) {
+                  const nextIndex = index + 1;
+                  fetch('/set-question-start-time?index=' + nextIndex, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                    body: new URLSearchParams({ '_csrf': '${res.locals._csrf}' })
+                  }).then(() => {
+                    if (nextIndex < ${questions.length}) {
+                      window.location.href = '/test/question?index=' + nextIndex;
+                    } else {
+                      setTimeout(() => window.location.href = '/result', 300);
+                    }
+                  });
                 } else {
-                  setTimeout(() => window.location.href = '/result', 300);
+                  console.error('Помилка збереження:', result.error);
+                  alert('Помилка збереження відповіді');
                 }
               } catch (error) {
                 console.error('Помилка в saveAndNext:', error);
@@ -2952,7 +3001,43 @@ app.get('/test/question', checkAuth, async (req, res) => {
               isSaving = true;
               try {
                 await saveCurrentAnswer(index);
-                setTimeout(() => window.location.href = '/result', 300);
+                let answers = selectedOptions;
+                if (document.querySelector('input[name="q' + index + '"]')) {
+                  answers = document.getElementById('q' + index + '_input').value;
+                } else if (document.getElementById('sortable-options')) {
+                  answers = Array.from(document.querySelectorAll('#sortable-options .option-box')).map(el => el.dataset.value);
+                } else if (document.getElementById('left-column')) {
+                  answers = matchingPairs;
+                } else if ('${q.type}' === 'fillblank') {
+                  answers = [];
+                  for (let i = 0; i < ${q.blankCount || 1}; i++) {
+                    const input = document.getElementById('blank_' + i);
+                    answers.push(input ? input.value.trim() : '');
+                  }
+                }
+                const responseTime = (Date.now() - questionStartTime) / 1000;
+                const formData = new URLSearchParams();
+                formData.append('index', index);
+                const safeAnswer = JSON.stringify(answers);
+                formData.append('answer', safeAnswer);
+                formData.append('timeAway', timeAway);
+                formData.append('switchCount', switchCount);
+                formData.append('responseTime', responseTime);
+                formData.append('activityCount', activityCount);
+                formData.append('_csrf', '${res.locals._csrf}');
+                const response = await fetch('/answer', {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                  body: formData
+                });
+                if (!response.ok) throw new Error('HTTP ' + response.status);
+                const result = await response.json();
+                if (result.success) {
+                  setTimeout(() => window.location.href = '/result', 300);
+                } else {
+                  console.error('Помилка завершення:', result.error);
+                  alert('Помилка завершення тесту');
+                }
               } catch (error) {
                 console.error('Помилка в finishTest:', error);
                 alert('Не вдалося завершити тест');
@@ -3333,11 +3418,20 @@ function calculateQuestionScore(question, userAnswer) {
   const maxPoints = parseFloat(question.points) || 1;
   const type = (question.type || '').toLowerCase().trim();
 
+  // Нормалізація
   const normalize = (val) => {
     if (val === null || val === undefined) return '';
-    return String(val).trim().toLowerCase()
+    return String(val)
+      .trim()
+      .toLowerCase()
       .replace(/\s+/g, ' ')
       .replace(/[^a-z0-9а-яіїєґ\s.,-]/gi, '');
+  };
+
+  const normalizeNumber = (val) => {
+    if (val === null || val === undefined) return NaN;
+    let str = String(val).trim().replace(/,/g, '.').replace(/\s+/g, '');
+    return parseFloat(str);
   };
 
   switch (type) {
@@ -3345,7 +3439,8 @@ function calculateQuestionScore(question, userAnswer) {
     case 'truefalse': {
       const userVal = Array.isArray(userAnswer) ? userAnswer[0] : userAnswer;
       const correctVal = question.correctAnswer || (question.correctAnswers && question.correctAnswers[0]);
-      score = normalize(userVal) === normalize(correctVal) ? maxPoints : 0;
+      const isCorrect = normalize(userVal) === normalize(correctVal);
+      score = isCorrect ? maxPoints : 0;
       break;
     }
 
@@ -3354,12 +3449,13 @@ function calculateQuestionScore(question, userAnswer) {
       const correctSet = new Set(question.correctAnswers.map(normalize));
       const userSet = new Set(userAnswer.map(normalize));
       const partial = maxPoints / correctSet.size;
+
       correctSet.forEach(c => { if (userSet.has(c)) score += partial; });
       userSet.forEach(u => { if (!correctSet.has(u)) score -= partial / 2; });
       break;
     }
 
-    case 'matching': {
+        case 'matching': {
       if (!Array.isArray(userAnswer) || userAnswer.length === 0) return 0;
 
       const correctPairs = question.correctPairs || [];
@@ -3370,29 +3466,46 @@ function calculateQuestionScore(question, userAnswer) {
         correctPairs.map(pair => `${normalize(pair[0])}|||${normalize(pair[1])}`)
       );
 
+      let correctCount = 0;
+
       userAnswer.forEach(userPair => {
         if (!Array.isArray(userPair) || userPair.length !== 2) {
-          score -= partial;
+          score -= partial;   // штраф за неправильну пару
           return;
         }
         const pairKey = `${normalize(userPair[0])}|||${normalize(userPair[1])}`;
         if (correctSet.has(pairKey)) {
+          correctCount++;
           score += partial;
         } else {
-          score -= partial;
+          score -= partial;   // штраф за невірну пару
         }
+      });
+
+      break;
+    }
+
+    case 'ordering': {
+      if (!Array.isArray(userAnswer)) return 0;
+      const correctOrder = question.correctAnswers.map(normalize);
+      const userOrder = userAnswer.map(normalize);
+      const partial = maxPoints / correctOrder.length;
+
+      correctOrder.forEach((correct, i) => {
+        if (userOrder[i] === correct) score += partial;
+        else score -= partial;
       });
       break;
     }
 
-    case 'ordering':
     case 'input':
     case 'fillblank': {
-      // (твій поточний код для цих типів залишаємо без змін)
       if (!Array.isArray(userAnswer)) return 0;
+
       const correctAnswers = question.correctAnswers || [];
       const numElements = correctAnswers.length || 1;
       const partial = maxPoints / numElements;
+
       let correctCount = 0;
 
       userAnswer.forEach((userRaw, i) => {
@@ -3402,21 +3515,30 @@ function calculateQuestionScore(question, userAnswer) {
 
         if (!user) return;
 
+        // 1. Діапазон чисел
         if (correctRaw.includes('-')) {
           const range = correctRaw.split('-', 2);
           const min = parseFloat(range[0].trim());
           const max = parseFloat(range[1].trim());
           const num = parseFloat(user);
           if (!isNaN(num) && num >= min && num <= max) correctCount++;
-        } else if (user.includes(correct) || correct.includes(user)) {
-          correctCount++;
-        } else if (correct.length > 0 && user.length > 0) {
-          const minLen = Math.min(correct.length, user.length);
-          let similarity = 0;
-          for (let j = 0; j < minLen; j++) {
-            if (correct[j] === user[j]) similarity++;
+        }
+        // 2. М'яке порівняння тексту
+        else {
+          if (user.includes(correct) || correct.includes(user)) {
+            correctCount++;
+          } else {
+            const correctLen = correct.length;
+            const userLen = user.length;
+            if (correctLen > 0 && userLen > 0) {
+              const minLen = Math.min(correctLen, userLen);
+              let similarity = 0;
+              for (let j = 0; j < minLen; j++) {
+                if (correct[j] === user[j]) similarity++;
+              }
+              if (similarity / minLen >= 0.5) correctCount++;
+            }
           }
-          if (similarity / minLen >= 0.5) correctCount++;
         }
       });
 
@@ -5969,24 +6091,18 @@ app.get('/admin/results', checkAuth, async (req, res) => {
       html += '<tr><td colspan="10">Немає результатів</td></tr>';
     } else {
       for (const result of results) {
-        // === ВИПРАВЛЕНО: Правильне завантаження питань (як у /result) ===
-        let questions = [];
+        // Завантажуємо питання для цього результату
+        let allQuestions = await db.collection('questions')
+          .find({ testNumber: result.testNumber })
+          .sort({ order: 1 })
+          .toArray();
 
-        if (result.questions && Array.isArray(result.questions) && result.questions.length > 0) {
-          questions = result.questions;
-          logger.info('[ADMIN/RESULTS] Використано збережені питання з result.questions', { count: questions.length });
-        } else {
-          let allQuestions = await db.collection('questions')
-            .find({ testNumber: result.testNumber })
-            .sort({ order: 1 })
-            .toArray();
+        // Фільтруємо за варіантом
+        const questions = allQuestions.filter(q => 
+          !q.variant || q.variant === '' || q.variant === result.variant
+        );
 
-          questions = allQuestions.filter(q => 
-            !q.variant || q.variant === '' || q.variant === result.variant
-          );
-        }
-
-        // Перерахунок балів
+        // Перерахунок балів за допомогою функції
         const scoresPerQuestion = questions.map((q, idx) => {
           const userAnswer = result.answers[idx];
           return calculateQuestionScore(q, userAnswer);
@@ -5994,7 +6110,7 @@ app.get('/admin/results', checkAuth, async (req, res) => {
 
         const exactScore = scoresPerQuestion.reduce((sum, s) => sum + s, 0);
         const roundedScore = Math.round(exactScore * 10) / 10;
-        const totalPoints = questions.reduce((sum, q) => sum + (q.points || 0), 0);
+        const totalPoints = questions.reduce((sum, q) => sum + q.points, 0);
         const percentage = totalPoints > 0 ? (exactScore / totalPoints) * 100 : 0;
         const roundedPercentage = Math.round(percentage * 10) / 10;
 
@@ -6013,8 +6129,12 @@ app.get('/admin/results', checkAuth, async (req, res) => {
           : 0;
 
         const switchCount = result.suspiciousActivity?.switchCount || 0;
+        const avgResponseTime = result.suspiciousActivity?.responseTimes?.length
+          ? (result.suspiciousActivity.responseTimes.reduce((sum, t) => sum + (t || 0), 0) / result.suspiciousActivity.responseTimes.length).toFixed(2)
+          : 0;
 
-        const isSuspicious = timeAwayPercent > 50 || switchCount > 10;
+        const isSuspicious = timeAwayPercent > config.suspiciousActivity.timeAwayThreshold ||
+                            switchCount > config.suspiciousActivity.switchCountThreshold;
 
         html += `
           <tr class="${isSuspicious ? 'suspicious' : ''}">
@@ -6104,22 +6224,13 @@ app.get('/admin/view-result', checkAuth, async (req, res) => {
       return res.status(404).send('Результат не знайдено');
     }
 
-    // === ВИПРАВЛЕНО: Правильне завантаження питань ===
-    let questions = [];
+    let questions = allQuestions.filter(q => 
+      !q.variant || q.variant === '' || q.variant === result.variant
+    );
 
-    if (result.questions && Array.isArray(result.questions) && result.questions.length > 0) {
-      questions = result.questions;
-      logger.info('[VIEW-RESULT] Використано збережені питання з result.questions', { count: questions.length });
-    } else {
-      let allQuestions = await db.collection('questions')
-        .find({ testNumber: result.testNumber })
-        .sort({ order: 1 })
-        .toArray();
-
-      questions = allQuestions.filter(q => 
-        !q.variant || q.variant === '' || q.variant === result.variant
-      );
-      logger.info('[VIEW-RESULT] Використано питання з бази даних', { count: questions.length });
+    // Якщо це Quick Test — використовуємо збережені питання з active_tests (вони містять саме ті, що були показані)
+    if (result.isQuickTest && result.questions && result.questions.length > 0) {
+      questions = result.questions;   // <-- Беремо точний набір питань з тесту користувача
     }
 
     // Використовуємо функцію для підрахунку
@@ -6130,7 +6241,7 @@ app.get('/admin/view-result', checkAuth, async (req, res) => {
 
     const exactScore = scoresPerQuestion.reduce((sum, s) => sum + s, 0);
     const roundedScore = Math.round(exactScore * 10) / 10;
-    const totalPoints = questions.reduce((sum, q) => sum + (q.points || 0), 0);
+    const totalPoints = questions.reduce((sum, q) => sum + q.points, 0);
     const percentage = totalPoints > 0 ? (exactScore / totalPoints) * 100 : 0;
     const roundedPercentage = Math.round(percentage * 10) / 10;
 
@@ -6168,7 +6279,6 @@ app.get('/admin/view-result', checkAuth, async (req, res) => {
             .nav-btn { padding: 12px 24px; margin: 10px 5px; cursor: pointer; border: none; border-radius: 8px; background: #007bff; color: white; }
             .nav-btn:hover { background: #0056b3; }
             .correct-answer { color: #166534; font-weight: bold; }
-            .details { white-space: pre-line; }
           </style>
           <!-- Підключення pdfMake -->
           <script src="/pdfmake/pdfmake.min.js"></script>
@@ -6279,7 +6389,7 @@ app.get('/admin/view-result', checkAuth, async (req, res) => {
                           ...viewResultData.questionsTable.map(row => [
                             row.text,
                             row.userAnswer,
-                            '', 
+                            '', // Тут буде правильна відповідь (додано порожнє поле)
                             { text: row.score + ' / ' + row.maxPoints, alignment: 'center' }
                           ])
                         ]
