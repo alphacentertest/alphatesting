@@ -2872,41 +2872,62 @@ app.get('/test/question', checkAuth, async (req, res) => {
             async function saveCurrentAnswer(index) {
               if (isSaving) return;
               isSaving = true;
+
               try {
-                let answers = selectedOptions;
-                if (document.querySelector('input[name="q' + index + '"]')) {
-                  answers = document.getElementById('q' + index + '_input').value;
-                } else if (document.getElementById('sortable-options')) {
-                  answers = Array.from(document.querySelectorAll('#sortable-options .option-box')).map(el => el.dataset.value);
-                } else if (document.getElementById('left-column')) {
-                  answers = matchingPairs;
-                } else if ('${q.type}' === 'fillblank') {
-                  answers = [];
-                  for (let i = 0; i < ${q.blankCount || 1}; i++) {
-                    const input = document.getElementById('blank_' + i);
-                    answers.push(input ? input.value.trim() : '');
+                let answerData = [];
+
+                if (document.querySelector('.fillblank-question')) {
+                  answerData = Array.from(document.querySelectorAll('.blank-input'))
+                                    .map(el => el.value.trim());
+                } 
+                else if (document.getElementById('q' + index + '_input')) {
+                  answerData = [document.getElementById('q' + index + '_input').value.trim()];
+                } 
+                else if (document.getElementById('sortable-options')) {
+                  answerData = Array.from(document.querySelectorAll('#sortable-options .option-box'))
+                                    .map(el => el.dataset.value.trim());
+                } 
+                else if (document.getElementById('left-column-' + index)) {
+                  // === MATCHING — ВАЖЛИВЕ ВИПРАВЛЕННЯ ===
+                  const leftItems = Array.from(document.querySelectorAll('#left-column-' + index + ' .matching-item'));
+                  const rightItems = Array.from(document.querySelectorAll('#right-column-' + index + ' .matching-item'));
+                  
+                  answerData = [];
+                  const minLen = Math.min(leftItems.length, rightItems.length);
+
+                  for (let i = 0; i < minLen; i++) {
+                    const leftVal = (leftItems[i].dataset.value || '').trim();
+                    const rightVal = (rightItems[i].dataset.value || '').trim();
+                    if (leftVal || rightVal) {
+                      answerData.push([leftVal, rightVal]);   // <-- Масив пар!
+                    }
                   }
+                } 
+                else {
+                  answerData = Array.from(document.querySelectorAll('.option-box.selected'))
+                                    .map(el => el.dataset.value.trim());
                 }
+
                 const responseTime = (Date.now() - questionStartTime) / 1000;
+
                 const formData = new URLSearchParams();
                 formData.append('index', index);
-                const safeAnswer = JSON.stringify(answers);
-                formData.append('answer', safeAnswer);
+                formData.append('answer', JSON.stringify(answerData));
                 formData.append('timeAway', timeAway);
                 formData.append('switchCount', switchCount);
                 formData.append('responseTime', responseTime);
                 formData.append('activityCount', activityCount);
                 formData.append('_csrf', '${res.locals._csrf}');
-                const response = await fetch('/answer', {
+
+                const resp = await fetch('/answer', {
                   method: 'POST',
                   headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
                   body: formData
                 });
-                if (!response.ok) throw new Error('HTTP ' + response.status);
-                const result = await response.json();
-                if (!result.success) console.error('Помилка автозбереження:', result.error);
-              } catch (error) {
-                console.error('Помилка автозбереження:', error);
+
+                if (!resp.ok) throw new Error('HTTP ' + resp.status);
+              } catch (err) {
+                console.error('Помилка збереження:', err);
               } finally {
                 isSaving = false;
               }
@@ -3434,8 +3455,9 @@ function calculateQuestionScore(question, userAnswer) {
       break;
     }
 
-    case 'matching': {
-      if (!Array.isArray(userAnswer)) return 0;
+        case 'matching': {
+      if (!Array.isArray(userAnswer) || userAnswer.length === 0) return 0;
+
       const correctPairs = question.correctPairs || [];
       const pairCount = correctPairs.length || 1;
       const partial = maxPoints / pairCount;
@@ -3444,18 +3466,22 @@ function calculateQuestionScore(question, userAnswer) {
         correctPairs.map(pair => `${normalize(pair[0])}|||${normalize(pair[1])}`)
       );
 
+      let correctCount = 0;
+
       userAnswer.forEach(userPair => {
         if (!Array.isArray(userPair) || userPair.length !== 2) {
-          score -= partial;
+          score -= partial;   // штраф за неправильну пару
           return;
         }
         const pairKey = `${normalize(userPair[0])}|||${normalize(userPair[1])}`;
         if (correctSet.has(pairKey)) {
+          correctCount++;
           score += partial;
         } else {
-          score -= partial;
+          score -= partial;   // штраф за невірну пару
         }
       });
+
       break;
     }
 
@@ -3700,7 +3726,7 @@ app.get('/result', checkAuth, async (req, res) => {
       logger.error('[RESULT] Помилка читання A.png', { message: error.message });
     }
 
-    // 10. HTML-результат з центрованим відсотком і робочими кнопками
+    // 10. Повний HTML (без жодного скорочення)
     const resultHtml = `
       <!DOCTYPE html>
       <html lang="uk">
@@ -3727,19 +3753,16 @@ app.get('/result', checkAuth, async (req, res) => {
             .result-circle-bg { stroke: #e0e0e0; stroke-width: 12; fill: none; }
             .result-circle { stroke: #4CAF50; stroke-width: 12; fill: none; stroke-dasharray: 530; stroke-dashoffset: 530; animation: fillCircle 1.8s ease-out forwards; }
             .result-text {
-              position: absolute;
-              top: 50%;
-              left: 50%;
-              transform: translate(-50%, -50%);
               font-size: 48px;
               font-weight: bold;
               fill: #333;
               pointer-events: none;
               text-anchor: middle;
-              dominant-baseline: middle;
-              alignment-baseline: middle;
+              dominant-baseline: central;
+              alignment-baseline: central;
               width: 100%;
               text-align: center;
+              line-height: 1;
             }
             .progress-circles {
               display: flex;
@@ -3817,7 +3840,7 @@ app.get('/result', checkAuth, async (req, res) => {
               <svg width="100%" height="100%" viewBox="0 0 180 180" preserveAspectRatio="xMidYMid meet">
                 <circle class="result-circle-bg" cx="90" cy="90" r="78" />
                 <circle class="result-circle" cx="90" cy="90" r="78" />
-                <text x="90" y="90" class="result-text" text-anchor="middle" dominant-baseline="middle" alignment-baseline="middle">
+                <text x="90" y="92" class="result-text" text-anchor="middle" dominant-baseline="middle" alignment-baseline="middle">
                   ${Math.round(percentage)}%
                 </text>
               </svg>
@@ -3846,17 +3869,16 @@ app.get('/result', checkAuth, async (req, res) => {
           </div>
 
           <script>
-            // Змінні для PDF — винесені в глобальний scope
             const user = "${req.user.replace(/"/g, '\\"')}";
             const testName = "${testNames[testNumber]?.name?.replace(/"/g, '\\"') || 'Невідомий тест'}";
-            const totalQuestions = ${totalQuestions};
-            const correctClicks = ${correctClicks};
-            const score = ${Math.round(score)};
-            const totalPoints = ${Math.round(totalPoints)};
-            const percentage = ${Math.round(percentage)};
-            const time = "${formattedTime.replace(/"/g, '\\"')}";
-            const date = "${formattedDate.replace(/"/g, '\\"')}";
-            const imageBase64 = "${imageBase64.replace(/"/g, '\\"')}";
+            const totalQuestionsVal = ${totalQuestions};
+            const correctClicksVal = ${correctClicks};
+            const scoreVal = ${Math.round(score)};
+            const totalPointsVal = ${Math.round(totalPoints)};
+            const percentageVal = ${Math.round(percentage)};
+            const timeVal = "${formattedTime.replace(/"/g, '\\"')}";
+            const dateVal = "${formattedDate.replace(/"/g, '\\"')}";
+            const imageBase64Val = "${imageBase64.replace(/"/g, '\\"')}";
 
             document.addEventListener('DOMContentLoaded', () => {
               const exportBtn = document.getElementById('exportPDF');
@@ -3871,21 +3893,21 @@ app.get('/result', checkAuth, async (req, res) => {
 
                   const docDefinition = {
                     content: [
-                      imageBase64 ? {
-                        image: 'data:image/png;base64,' + imageBase64,
+                      imageBase64Val ? {
+                        image: 'data:image/png;base64,' + imageBase64Val,
                         width: 50,
                         alignment: 'center',
                         margin: [0, 0, 0, 20]
                       } : { text: 'Логотип відсутній', alignment: 'center', margin: [0, 0, 0, 20] },
-                      { text: 'Результат тесту користувача ' + user + ' з тесту ' + testName + ' складає ' + percentage + '%', style: 'header' },
-                      { text: 'Кількість питань: ' + totalQuestions, lineHeight: 2 },
-                      { text: 'Правильних відповідей: ' + correctClicks, lineHeight: 2 },
-                      { text: 'Набрано балів: ' + score, lineHeight: 2 },
-                      { text: 'Максимально можлива кількість балів: ' + totalPoints, lineHeight: 2 },
+                      { text: 'Результат тесту користувача ' + user + ' з тесту ' + testName + ' складає ' + percentageVal + '%', style: 'header' },
+                      { text: 'Кількість питань: ' + totalQuestionsVal, lineHeight: 2 },
+                      { text: 'Правильних відповідей: ' + correctClicksVal, lineHeight: 2 },
+                      { text: 'Набрано балів: ' + scoreVal, lineHeight: 2 },
+                      { text: 'Максимально можлива кількість балів: ' + totalPointsVal, lineHeight: 2 },
                       {
                         columns: [
-                          { text: 'Час: ' + time, width: '50%', lineHeight: 2 },
-                          { text: 'Дата: ' + date, width: '50%', alignment: 'right', lineHeight: 2 }
+                          { text: 'Час: ' + timeVal, width: '50%', lineHeight: 2 },
+                          { text: 'Дата: ' + dateVal, width: '50%', alignment: 'right', lineHeight: 2 }
                         ],
                         margin: [0, 10, 0, 0]
                       }
@@ -3895,18 +3917,14 @@ app.get('/result', checkAuth, async (req, res) => {
                     }
                   };
 
-                  pdfMake.createPdf(docDefinition).download('результат.pdf');
+                  pdfMake.createPdf(docDefinition).download(user + '_результат.pdf');                  
                 });
-              } else {
-                console.error('Кнопка #exportPDF не знайдена');
               }
 
               if (restartBtn) {
                 restartBtn.addEventListener('click', () => {
                   window.location.href = '/select-test';
                 });
-              } else {
-                console.error('Кнопка #restart не знайдена');
               }
             });
           </script>
@@ -6210,6 +6228,7 @@ app.get('/admin/view-result', checkAuth, async (req, res) => {
             .summary { font-size: 20px; margin: 20px 0 40px; padding: 20px; background: #f8f9fa; border-radius: 8px; }
             .nav-btn { padding: 12px 24px; margin: 10px 5px; cursor: pointer; border: none; border-radius: 8px; background: #007bff; color: white; }
             .nav-btn:hover { background: #0056b3; }
+            .correct-answer { color: #166534; font-weight: bold; }
           </style>
           <!-- Підключення pdfMake -->
           <script src="/pdfmake/pdfmake.min.js"></script>
@@ -6309,16 +6328,18 @@ app.get('/admin/view-result', checkAuth, async (req, res) => {
                     {
                       table: {
                         headerRows: 1,
-                        widths: ['*', '*', 'auto'],
+                        widths: ['*', '*', '*', 'auto'],
                         body: [
                           [
                             { text: 'Питання', bold: true, fillColor: '#f2f2f2' },
                             { text: 'Ваша відповідь', bold: true, fillColor: '#f2f2f2' },
+                            { text: 'Правильна відповідь', bold: true, fillColor: '#f2f2f2' },
                             { text: 'Бали', bold: true, fillColor: '#f2f2f2', alignment: 'center' }
                           ],
                           ...viewResultData.questionsTable.map(row => [
                             row.text,
                             row.userAnswer,
+                            '', // Тут буде правильна відповідь (додано порожнє поле)
                             { text: row.score + ' / ' + row.maxPoints, alignment: 'center' }
                           ])
                         ]
@@ -6379,6 +6400,7 @@ app.get('/admin/view-result', checkAuth, async (req, res) => {
               <tr>
                 <th>Питання</th>
                 <th>Ваша відповідь</th>
+                <th>Правильна відповідь</th>
                 <th>Бали</th>
               </tr>
     `;
@@ -6400,10 +6422,21 @@ app.get('/admin/view-result', checkAuth, async (req, res) => {
         userAnswerDisplay = userAnswer;
       }
 
+      // === ПРАВИЛЬНА ВІДПОВІДЬ ===
+      let correctAnswerDisplay = '—';
+      if (question.type === 'matching' && question.correctPairs) {
+        correctAnswerDisplay = question.correctPairs.map(pair => `${pair[0]} → ${pair[1]}`).join('<br>');
+      } else if (question.correctAnswers && Array.isArray(question.correctAnswers)) {
+        correctAnswerDisplay = question.correctAnswers.join(', ');
+      } else if (question.correctAnswer) {
+        correctAnswerDisplay = question.correctAnswer;
+      }
+
       html += `
         <tr>
           <td>${question.text.replace(/</g, '&lt;').replace(/>/g, '&gt;')}</td>
           <td class="details">${userAnswerDisplay}</td>
+          <td class="details">${correctAnswerDisplay}</td>
           <td>${questionScore.toFixed(3)} / ${question.points}</td>
         </tr>
       `;
