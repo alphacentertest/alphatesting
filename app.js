@@ -6091,12 +6091,11 @@ app.get('/admin/results', checkAuth, async (req, res) => {
       html += '<tr><td colspan="10">Немає результатів</td></tr>';
     } else {
       for (const result of results) {
-        // === ВИПРАВЛЕНО: Правильне завантаження питань (як у /result) ===
+        // === ВИПРАВЛЕНО: використовуємо збережені питання ===
         let questions = [];
 
         if (result.questions && Array.isArray(result.questions) && result.questions.length > 0) {
           questions = result.questions;
-          logger.info('[ADMIN/RESULTS] Використано збережені питання з result.questions', { count: questions.length });
         } else {
           let allQuestions = await db.collection('questions')
             .find({ testNumber: result.testNumber })
@@ -6108,7 +6107,6 @@ app.get('/admin/results', checkAuth, async (req, res) => {
           );
         }
 
-        // Перерахунок балів
         const scoresPerQuestion = questions.map((q, idx) => {
           const userAnswer = result.answers[idx];
           return calculateQuestionScore(q, userAnswer);
@@ -6135,7 +6133,6 @@ app.get('/admin/results', checkAuth, async (req, res) => {
           : 0;
 
         const switchCount = result.suspiciousActivity?.switchCount || 0;
-
         const isSuspicious = timeAwayPercent > 50 || switchCount > 10;
 
         html += `
@@ -6151,7 +6148,7 @@ app.get('/admin/results', checkAuth, async (req, res) => {
             <td>${timeAwayPercent}%</td>
             <td>
               <button class="action-btn view" onclick="viewResult('${result._id}')">Перегляд</button>
-              ${req.userRole === 'admin' ? '<button class="action-btn delete" onclick="deleteResult(\'' + result._id + '\')">🗑️ Видалити</button>' : ''}
+              ${req.userRole === 'admin' ? `<button class="action-btn delete" onclick="deleteResult('${result._id}')">🗑️ Видалити</button>` : ''}
             </td>
           </tr>
         `;
@@ -6162,29 +6159,20 @@ app.get('/admin/results', checkAuth, async (req, res) => {
             </table>
 
             <script>
-              async function viewResult(id) {
+              function viewResult(id) {
                 window.location.href = '/admin/view-result?id=' + id;
               }
 
-              async function deleteResult(id) {
+              function deleteResult(id) {
                 if (confirm('Видалити цей результат?')) {
                   const formData = new URLSearchParams();
                   formData.append('id', id);
                   formData.append('_csrf', '${res.locals._csrf}');
-                  try {
-                    const response = await fetch('/admin/delete-result', {
-                      method: 'POST',
-                      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-                      body: formData
-                    });
-                    if (response.ok) {
-                      location.reload();
-                    } else {
-                      alert('Помилка видалення: ' + response.status);
-                    }
-                  } catch (error) {
-                    alert('Не вдалося видалити');
-                  }
+                  fetch('/admin/delete-result', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                    body: formData
+                  }).then(() => location.reload());
                 }
               }
 
