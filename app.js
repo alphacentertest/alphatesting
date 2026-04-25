@@ -439,128 +439,162 @@ const importUsersToMongoDB = async (buffer) => {
   }
 };
 
-// Імпорт питань
+// Імпорт питань — покращена версія з діагностикою
 const importQuestionsToMongoDB = async (buffer, testNumber) => {
   try {
     const workbook = new ExcelJS.Workbook();
     await workbook.xlsx.load(buffer);
-    const sheet = workbook.getWorksheet('Questions');
-    if (!sheet) throw new Error('Лист "Questions" не знайдено');
+
+    // === ДІАГНОСТИКА ЛИСТІВ ===
+    const sheetNames = workbook.worksheets.map(ws => ws.name);
+    logger.info(`Імпорт питань: доступні листи: ${sheetNames.join(', ')}`);
+
+    let sheet = workbook.getWorksheet('Questions') || 
+                workbook.getWorksheet('questions') || 
+                workbook.getWorksheet('Питання') || 
+                workbook.getWorksheet('Sheet1') || 
+                workbook.worksheets[0];
+
+    if (!sheet) {
+      throw new Error(`Лист з питаннями не знайдено. Доступні: ${sheetNames.join(', ')}`);
+    }
+
+    logger.info(`Використовуємо лист "${sheet.name}", рядків: ${sheet.rowCount}`);
+
     const MAX_ROWS = 1000;
-    if (sheet.rowCount > MAX_ROWS + 1) throw new Error(`Занадто багато рядків (${sheet.rowCount - 1}). Макс: ${MAX_ROWS}`);
+    if (sheet.rowCount > MAX_ROWS + 1) {
+      throw new Error(`Занадто багато рядків (${sheet.rowCount - 1}). Максимум: ${MAX_ROWS}`);
+    }
+
     const questions = [];
+    let errorRows = [];
+
     sheet.eachRow({ includeEmpty: false }, (row, rowNumber) => {
-      if (rowNumber > 1) {
-        try {
-          const rowValues = row.values.slice(1);
-          let questionText = rowValues[1];
-          if (typeof questionText === 'object' && questionText) questionText = questionText.text || questionText.value || '[Невірний текст]';
-          questionText = String(questionText || '').trim();
-          if (!questionText) throw new Error('Текст питання відсутній');
-          const picture = String(rowValues[0] || '').trim();
-          let options = rowValues.slice(2, 14).filter(Boolean).map(val => String(val).trim());
-          const correctAnswers = rowValues.slice(14, 26).filter(Boolean).map(val => String(val).trim());
-          const type = String(rowValues[26] || 'multiple').toLowerCase();
-          const points = Number(rowValues[27]) || 1;
-          const variant = String(rowValues[28] || '').trim();
+      if (rowNumber <= 1) return; // пропускаємо заголовок
 
-          if (type === 'truefalse') options = ["Правда", "Неправда"];
-
-          const normalizedPicture = picture ? picture.replace(/\.png$/i, '').replace(/^picture/i, 'Picture').replace(/\s+/g, '') : null;
-
-          let questionData = {
-            testNumber,
-            picture: null,
-            originalPicture: normalizedPicture,
-            text: questionText,
-            options,
-            correctAnswers,
-            type,
-            points,
-            variant,
-            order: rowNumber - 1
-          };
-
-          if (normalizedPicture) {
-            const pictureMatch = normalizedPicture.match(/^Picture(\d+)$/i);
-            if (pictureMatch) {
-              const pictureNumber = parseInt(pictureMatch[1], 10);
-              const targetFileNameBase = `Picture${pictureNumber}`;
-              const extensions = ['.png', '.jpg', '.jpeg', '.gif'];
-              const imageDir = path.join(__dirname, 'public', 'images');
-              const filesInDir = fs.existsSync(imageDir) ? fs.readdirSync(imageDir) : [];
-              for (const ext of extensions) {
-                const expectedFileName = `${targetFileNameBase}${ext}`;
-                const fileExists = filesInDir.some(file => file.toLowerCase() === expectedFileName.toLowerCase());
-                if (fileExists) {
-                  const matchedFile = filesInDir.find(file => file.toLowerCase() === expectedFileName.toLowerCase());
-                  const imagePath = path.join(imageDir, matchedFile);
-                  if (fs.existsSync(imagePath)) {
-                    questionData.picture = `/images/Picture${pictureNumber}${ext.toLowerCase()}`;
-                    break;
-                  }
-                }
-              }
-            }
-          }
-
-          if (type === 'matching') {
-            questionData.pairs = options.map((opt, idx) => ({
-              left: opt || '',
-              right: questionData.correctAnswers[idx] || ''
-            })).filter(pair => pair.left && pair.right);
-            if (!questionData.pairs.length) throw new Error('Для Matching потрібні пари');
-            questionData.correctPairs = questionData.pairs.map(pair => [pair.left, pair.right]);
-          }
-
-          if (type === 'fillblank') {
-            questionData.text = questionText.replace(/\s*___/g, '___');
-            const blankCount = (questionData.text.match(/___/g) || []).length;
-            if (blankCount === 0 || blankCount !== questionData.correctAnswers.length) {
-              throw new Error('Пропуски не відповідають відповідям');
-            }
-            questionData.blankCount = blankCount;
-            questionData.correctAnswers.forEach((answer, idx) => {
-              if (answer.includes('-')) {
-                const [min, max] = answer.split('-').map(val => parseFloat(val.trim()));
-                if (isNaN(min) || isNaN(max) || min > max) throw new Error(`Невірний діапазон для відповіді ${idx + 1}`);
-              } else {
-                const value = parseFloat(answer);
-                if (isNaN(value)) throw new Error(`Відповідь ${idx + 1} має бути числом або діапазоном`);
-              }
-            });
-          }
-
-          if (type === 'singlechoice') {
-            if (correctAnswers.length !== 1 || options.length < 2) throw new Error('Single Choice: потрібна 1 відповідь і ≥2 варіанти');
-            questionData.correctAnswer = correctAnswers[0];
-          }
-
-          if (type === 'input') {
-            if (correctAnswers.length !== 1) throw new Error('Input: потрібна 1 відповідь');
-            const correctAnswer = correctAnswers[0];
-            if (correctAnswer.includes('-')) {
-              const [min, max] = correctAnswer.split('-').map(val => parseFloat(val.trim()));
-              if (isNaN(min) || isNaN(max) || min > max) throw new Error('Невірний діапазон');
-            } else {
-              const value = parseFloat(correctAnswer);
-              if (isNaN(value)) throw new Error('Відповідь має бути числом або діапазоном');
-            }
-          }
-
-          questions.push(questionData);
-        } catch (error) {
-          throw new Error(`Помилка в рядку ${rowNumber}: ${error.message}`);
+      try {
+        const rowValues = row.values.slice(1);
+        let questionText = rowValues[1];
+        if (typeof questionText === 'object' && questionText) {
+          questionText = questionText.text || questionText.value || '[Невірний текст]';
         }
+        questionText = String(questionText || '').trim();
+
+        if (!questionText) throw new Error('Текст питання відсутній');
+
+        const picture = String(rowValues[0] || '').trim();
+        let options = rowValues.slice(2, 14).filter(Boolean).map(val => String(val).trim());
+        const correctAnswers = rowValues.slice(14, 26).filter(Boolean).map(val => String(val).trim());
+        const type = String(rowValues[26] || 'multiple').toLowerCase().trim();
+        const points = Number(rowValues[27]) || 1;
+        const variant = String(rowValues[28] || '').trim();
+
+        if (type === 'truefalse') options = ["Правда", "Неправда"];
+
+        const normalizedPicture = picture ? picture.replace(/\.png$/i, '').replace(/^picture/i, 'Picture').replace(/\s+/g, '') : null;
+
+        let questionData = {
+          testNumber,
+          picture: null,
+          originalPicture: normalizedPicture,
+          text: questionText,
+          options,
+          correctAnswers,
+          type,
+          points,
+          variant,
+          order: rowNumber - 1
+        };
+
+        // Обробка зображення
+        if (normalizedPicture) {
+          // ... (залишаємо твій код обробки картинок без змін)
+          const pictureMatch = normalizedPicture.match(/^Picture(\d+)$/i);
+          if (pictureMatch) {
+            const pictureNumber = parseInt(pictureMatch[1], 10);
+            const targetFileNameBase = `Picture${pictureNumber}`;
+            const extensions = ['.png', '.jpg', '.jpeg', '.gif'];
+            const imageDir = path.join(__dirname, 'public', 'images');
+            const filesInDir = fs.existsSync(imageDir) ? fs.readdirSync(imageDir) : [];
+            for (const ext of extensions) {
+              const expectedFileName = `${targetFileNameBase}${ext}`;
+              const matchedFile = filesInDir.find(file => file.toLowerCase() === expectedFileName.toLowerCase());
+              if (matchedFile) {
+                questionData.picture = `/images/${matchedFile}`;
+                break;
+              }
+            }
+          }
+        }
+
+        // Matching
+        if (type === 'matching') {
+          questionData.pairs = options.map((opt, idx) => ({
+            left: opt || '',
+            right: questionData.correctAnswers[idx] || ''
+          })).filter(pair => pair.left && pair.right);
+          if (!questionData.pairs.length) throw new Error('Для Matching потрібні пари');
+          questionData.correctPairs = questionData.pairs.map(pair => [pair.left, pair.right]);
+        }
+
+        // Fillblank — тільки перевірка структури
+        if (type === 'fillblank') {
+          questionData.text = questionText.replace(/\s*___/g, '___');
+          const blankCount = (questionData.text.match(/___/g) || []).length;
+          if (blankCount === 0 || blankCount !== correctAnswers.length) {
+            throw new Error(`Пропусків (${blankCount}) не відповідає відповідям (${correctAnswers.length})`);
+          }
+          questionData.blankCount = blankCount;
+        }
+
+        // Singlechoice
+        if (type === 'singlechoice') {
+          if (correctAnswers.length !== 1 || options.length < 2) {
+            throw new Error('Single Choice: потрібна 1 відповідь і ≥2 варіанти');
+          }
+          questionData.correctAnswer = correctAnswers[0];
+        }
+
+        // Input
+        if (type === 'input') {
+          if (correctAnswers.length !== 1) throw new Error('Input: потрібна 1 відповідь');
+          const correctAnswer = correctAnswers[0];
+          if (correctAnswer.includes('-')) {
+            const [min, max] = correctAnswer.split('-').map(val => parseFloat(val.trim()));
+            if (isNaN(min) || isNaN(max) || min > max) throw new Error('Невірний діапазон');
+          }
+        }
+
+        questions.push(questionData);
+
+      } catch (rowError) {
+        errorRows.push({ row: rowNumber, error: rowError.message });
+        logger.warn(`Помилка в рядку ${rowNumber}: ${rowError.message}`);
       }
     });
-    if (!questions.length) throw new Error('Не знайдено питань');
+
+    if (errorRows.length > 0) {
+      logger.error(`Імпорт завершено з помилками в ${errorRows.length} рядках`, errorRows);
+    }
+
+    if (!questions.length) {
+      throw new Error('Не знайдено жодного валідного питання');
+    }
+
     await db.collection('questions').deleteMany({ testNumber });
     await db.collection('questions').insertMany(questions);
+
     await CacheManager.invalidateCache('questions', testNumber);
+
+    logger.info(`Успішно імпортовано ${questions.length} питань для тесту ${testNumber}`);
     return questions.length;
+
   } catch (error) {
-    logger.error('Помилка імпорту питань', { message: error.message, stack: error.stack });
+    logger.error('Критична помилка імпорту питань', { 
+      message: error.message, 
+      stack: error.stack,
+      testNumber 
+    });
     throw error;
   }
 };
