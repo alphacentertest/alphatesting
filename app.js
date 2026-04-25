@@ -2771,63 +2771,72 @@ app.get('/test/question', checkAuth, async (req, res) => {
     `;
 
     if (q.type === 'matching' && q.pairs) {
-      const leftItems = shuffleArray([...q.pairs.map(p => p.left)]);
-      const rightItems = shuffleArray([...q.pairs.map(p => p.right)]);
-      const userPairs = Array.isArray(answers[index]) ? answers[index] : [];
+      const leftItems = q.pairs.map(p => p.left);           // Ліва колонка — статична
+      const rightItems = shuffleArray([...q.pairs.map(p => p.right)]); // Права — перемішуємо
+
+      const userAnswer = Array.isArray(answers[index]) ? answers[index] : [];
+
       html += `
-        <div class="matching-container">
-          <div class="matching-column" id="left-column">
-            ${leftItems.map((item, idx) => {
-              const escapedItem = item.replace(/'/g, "\\'").replace(/"/g, '\\"');
-              return `<div class="matching-item draggable" data-value="${escapedItem}">${item}</div>`;
-            }).join('')}
+        <div class="matching-container" id="matching-${index}">
+          <!-- Ліва колонка (статична) -->
+          <div class="matching-column" id="left-column-${index}">
+            <h4 style="margin-bottom: 15px; color: #333;">Терміни</h4>
+            ${leftItems.map(item => `
+              <div class="matching-item static">
+                ${item}
+              </div>
+            `).join('')}
           </div>
-          <div class="matching-column" id="right-column">
-            ${rightItems.map((item, idx) => {
-              const escapedItem = item.replace(/'/g, "\\'").replace(/"/g, '\\"');
-              const matchedLeft = userPairs.find(pair => pair[1] === item)?.[0] || '';
-              return `
-                <div class="matching-item droppable" data-value="${escapedItem}">
-                  ${item}${matchedLeft ? `<span class="matched"> (Зіставлено: ${matchedLeft})</span>` : ''}
-                </div>
-              `;
-            }).join('')}
+
+          <!-- Права колонка (sortable) -->
+          <div class="matching-column" id="right-column-${index}">
+            <h4 style="margin-bottom: 15px; color: #333;">Відповіді (перетягуйте для сортування)</h4>
+            <div class="sortable-right" id="sortable-right-${index}">
+              ${rightItems.map((item, i) => {
+                const saved = userAnswer[i] || '';
+                const escaped = item.replace(/'/g, "\\'").replace(/"/g, '\\"');
+                return `
+                  <div class="matching-item draggable" data-value="${escaped}">
+                    ${item}
+                  </div>`;
+              }).join('')}
+            </div>
           </div>
         </div>
-        <button onclick="resetMatchingPairs()">Скинути зіставлення</button>
+
+        <button onclick="resetMatching(${index})" style="margin-top: 10px;">Скинути порядок</button>
+
+        <script src="https://cdnjs.cloudflare.com/ajax/libs/Sortable/1.15.0/Sortable.min.js"></script>
+        <script>
+          // Ініціалізація Sortable тільки для правої колонки
+          new Sortable(document.getElementById('sortable-right-${index}'), {
+            animation: 150,
+            ghostClass: 'sortable-ghost',
+            onEnd: function () {
+              saveMatchingAnswer(${index});
+            }
+          });
+
+          function saveMatchingAnswer(idx) {
+            const items = document.querySelectorAll('#sortable-right-' + idx + ' .matching-item');
+            const answer = Array.from(items).map(el => el.getAttribute('data-value'));
+            // Зберігаємо відповідь
+            window.currentAnswers = window.currentAnswers || {};
+            window.currentAnswers[idx] = answer;
+        
+            // Відправляємо на сервер (якщо у тебе є глобальна функція збереження)
+            if (typeof saveAnswer === 'function') {
+              saveAnswer(idx, answer);
+            }
+          }
+
+          function resetMatching(idx) {
+            if (confirm('Скинути порядок у правій колонці?')) {
+              location.reload(); // простий спосіб — перезавантажуємо питання
+            }
+          }
+        </script>
       `;
-    } else if (!q.options || q.options.length === 0) {
-      if (q.type !== 'fillblank') {
-        const userAnswer = answers[index] || '';
-        html += `
-          <input type="text" name="q${index}" id="q${index}_input" value="${userAnswer}" placeholder="Введіть відповідь" class="answer-option" autocomplete="off"><br>
-        `;
-      }
-    } else {
-      if (q.type === 'ordering') {
-        html += `
-          <div id="sortable-options">
-            ${(answers[index] || q.options).map((option, optIndex) => {
-              const escapedOption = option.replace(/'/g, "\\'").replace(/"/g, '\\"');
-              return `
-                <div class="option-box draggable" data-index="${optIndex}" data-value="${escapedOption}">
-                  ${option}
-                </div>
-              `;
-            }).join('')}
-          </div>
-        `;
-      } else {
-        q.options.forEach((option, optIndex) => {
-          const selected = selectedOptions.includes(option) ? 'selected' : '';
-          const escapedOption = option.replace(/'/g, "\\'").replace(/"/g, '\\"');
-          html += `
-            <div class="option-box ${selected}" data-value="${escapedOption}">
-              ${option}
-            </div>
-          `;
-        });
-      }
     }
 
     html += `
@@ -3473,7 +3482,7 @@ function calculateQuestionScore(question, userAnswer) {
     }
 
     case 'fillblank': {
-      if (!Array.isArray(userAnswer)) {
+      if (!Array.isArray(userAnswer) || userAnswer.length === 0) {
         return 0;
       }
 
@@ -3482,14 +3491,14 @@ function calculateQuestionScore(question, userAnswer) {
 
       question.correctAnswers.forEach((correctRaw, i) => {
         const userVal = userAnswer[i] || '';
-        if (!userVal) return;
+        if (!userVal.trim()) return;
 
-        const user = normalize(userVal);           // вже є у твоїй функції
+        const user = normalize(userVal);
         const correct = normalize(correctRaw);
 
         let isCorrect = false;
 
-        // 1. Діапазон чисел (12-15, 99-101 і т.д.)
+        // 1. Діапазон чисел
         if (correctRaw.includes('-')) {
           const [minStr, maxStr] = correctRaw.split('-').map(s => s.trim());
           const min = normalizeNumber(minStr);
@@ -3500,42 +3509,32 @@ function calculateQuestionScore(question, userAnswer) {
             isCorrect = val >= min && val <= max;
           }
         } 
-        // 2. Звичайний текст — М'ЯКЕ СПІВПАДІННЯ
+        // 2. Текст — м'яке співпадіння (як у PHP)
         else {
-          // Варіант А: одне слово повністю входить в інше
+          // Варіант А: слово повністю входить
           if (user.includes(correct) || correct.includes(user)) {
             isCorrect = true;
           } 
           // Варіант Б: схожість ≥ 50%
-          else {
-            const correctLen = correct.length;
-            const userLen = user.length;
+          else if (correct.length > 0 && user.length > 0) {
+            const minLen = Math.min(correct.length, user.length);
+            let similarity = 0;
 
-            if (correctLen > 0 && userLen > 0) {
-              const minLen = Math.min(correctLen, userLen);
-              let similarity = 0;
+            for (let j = 0; j < minLen; j++) {
+              if (correct[j] === user[j]) similarity++;
+            }
 
-              for (let j = 0; j < minLen; j++) {
-                if (correct[j] === user[j]) {
-                  similarity++;
-                }
-              }
-
-              if (similarity / minLen >= 0.5) {   // 50% співпадіння
-                isCorrect = true;
-              }
+            if (similarity / minLen >= 0.5) {
+              isCorrect = true;
             }
           }
         }
 
-        if (isCorrect) {
-          correctCount++;
-          // score += partial;   // можна залишити, але краще рахувати в кінці
-        }
+        if (isCorrect) correctCount++;
       });
 
-      score = (correctCount / question.correctAnswers.length) * question.points;
-      break;
+      // Повертаємо пропорційний бал
+      return (correctCount / question.correctAnswers.length) * question.points;
     }
 
     case 'input': {
