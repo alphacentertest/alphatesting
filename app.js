@@ -2433,10 +2433,10 @@ app.get('/test/question', checkAuth, async (req, res) => {
               align-items: center;
               justify-content: flex-start;
               text-align: left;
-              white-space: normal;              /* дозволити перенос */
-              overflow-wrap: break-word;        /* перенос цілими словами */
-              word-break: break-word;           /* розриває тільки дуже довгі слова */
-              hyphens: auto;                    /* автоматичні переноси за правилами мови */
+              white-space: normal;
+              overflow-wrap: break-word;
+              word-break: break-word;
+              hyphens: auto;
               line-height: 1.45;
               overflow: visible;
             }
@@ -2448,22 +2448,6 @@ app.get('/test/question', checkAuth, async (req, res) => {
               background: #d4edda !important;
               border-color: #28a745 !important;
               box-shadow: 0 0 0 3px rgba(40,167,69,0.3) !important;
-            }
-            @media (max-width: 600px) {
-              .option-box {
-                font-size: 15px;
-                padding: 14px 18px;
-                min-height: 60px;
-              }
-              .progress-circle {
-                width: 32px;
-                height: 32px;
-                font-size: 12px;
-                min-width: 32px;
-              }
-              .progress-line {
-                width: 5px;
-              }
             }
             .option-box.draggable { cursor: move; }
             .option-box.dragging { opacity: 0.6; box-shadow: 0 4px 12px rgba(0,0,0,0.2); }
@@ -2509,20 +2493,6 @@ app.get('/test/question', checkAuth, async (req, res) => {
               gap: 12px;
               z-index: 100;
               flex-wrap: nowrap;
-            }
-            @media (max-width: 600px) {
-              .button-container {
-                gap: 8px;
-                padding: 0 10px;
-                flex-wrap: nowrap !important;
-                overflow-x: auto;
-                box-sizing: border-box;
-              }
-              button {
-                font-size: 15px;
-                padding: 12px 16px;
-                min-height: 55px;
-              }
             }
             button {
               flex: 1;
@@ -2653,7 +2623,7 @@ app.get('/test/question', checkAuth, async (req, res) => {
     html += `
             <div class="question-box">
               <h2 id="question-text">${index + 1}. `;
-   
+
     if (q.type === 'fillblank') {
       const userAnswers = Array.isArray(answers[index]) ? answers[index] : [];
       const parts = q.text.split('___');
@@ -2677,7 +2647,7 @@ app.get('/test/question', checkAuth, async (req, res) => {
             <div id="answers">
     `;
 
-        // ==================== MATCHING ====================
+    // ==================== MATCHING ====================
     if (q.type === 'matching' && q.pairs) {
       const leftItems = q.pairs.map(p => p.left);
       const rightItems = shuffleArray([...q.pairs.map(p => p.right)]);
@@ -2701,56 +2671,6 @@ app.get('/test/question', checkAuth, async (req, res) => {
         </div>
 
         <button onclick="resetMatching(${index})" style="margin-top:15px;">Скинути порядок</button>
-
-        <script>
-          let currentMatchingPairs${index} = [];
-
-          new Sortable(document.getElementById('left-column-${index}'), {
-            animation: 150,
-            onEnd: () => updateMatchingPairs${index}()
-          });
-
-          new Sortable(document.getElementById('right-column-${index}'), {
-            animation: 150,
-            onEnd: () => updateMatchingPairs${index}()
-          });
-
-          function updateMatchingPairs${index}() {
-            const leftItems = Array.from(document.querySelectorAll('#left-column-${index} .matching-item'));
-            const rightItems = Array.from(document.querySelectorAll('#right-column-${index} .matching-item'));
-
-            currentMatchingPairs${index} = [];
-            const minLen = Math.min(leftItems.length, rightItems.length);
-
-            for (let i = 0; i < minLen; i++) {
-              const l = (leftItems[i].dataset.value || '').trim();
-              const r = (rightItems[i].dataset.value || '').trim();
-              if (l || r) currentMatchingPairs${index}.push([l, r]);
-            }
-
-            window.currentAnswers = window.currentAnswers || {};
-            window.currentAnswers[${index}] = currentMatchingPairs${index};
-          }
-
-          function resetMatching(idx) {
-            if (confirm('Скинути порядок?')) location.reload();
-          }
-
-          function equalizeMatchingHeights${index}() {
-            const items = document.querySelectorAll('#matching-${index} .matching-item');
-            let maxH = 0;
-            items.forEach(item => {
-              item.style.height = 'auto';
-              maxH = Math.max(maxH, item.getBoundingClientRect().height);
-            });
-            items.forEach(item => item.style.height = maxH + 'px');
-          }
-
-          window.addEventListener('load', () => {
-            equalizeMatchingHeights${index}();
-            updateMatchingPairs${index}();
-          });
-        </script>
       `;
     } else if (!q.options || q.options.length === 0) {
       if (q.type !== 'fillblank') {
@@ -2823,15 +2743,13 @@ app.get('/test/question', checkAuth, async (req, res) => {
             const blurDebounceDelay = 200;
             let blurTimeout = null;
             let selectedOptions = ${selectedOptionsString};
-            let matchingPairs = ${JSON.stringify(answers[index] || [])};
             let questionTimeRemaining = timePerQuestion;
             let currentQuestionIndex = ${index};
             let lastGlobalUpdateTime = Date.now();
             let isSaving = false;
             let hasMovedToNext = false;
-            let questionStartTime = ${questionStartTimeObj[index]};
+            let questionStartTime = ${questionStartTimeObj[index] || Date.now()};
 
-            // Функція переходу на інше питання
             function goToQuestion(targetIndex) {
               if (targetIndex === currentQuestionIndex) return;
               saveCurrentAnswer(currentQuestionIndex).then(() => {
@@ -2842,30 +2760,13 @@ app.get('/test/question', checkAuth, async (req, res) => {
               });
             }
 
-            // Вирівнювання висоти всіх matching-item
-            function equalizeMatchingHeights() {
-              const allItems = document.querySelectorAll('.matching-item');
-              if (allItems.length === 0) return;
-              let maxHeight = 0;
-              allItems.forEach(item => {
-                item.style.height = 'auto';
-                const height = item.getBoundingClientRect().height;
-                if (height > maxHeight) maxHeight = height;
-              });
-              allItems.forEach(item => {
-                item.style.height = maxHeight + 'px';
-              });
-            }
-
-            // Автозбереження відповіді
             async function saveCurrentAnswer(index) {
               if (isSaving) return;
               isSaving = true;
-
               try {
                 let answerData = [];
 
-                if (document.querySelector('.fillblank-question')) {
+                if (document.querySelector('.fillblank-question') || '${q.type}' === 'fillblank') {
                   answerData = Array.from(document.querySelectorAll('.blank-input'))
                                     .map(el => el.value.trim());
                 } 
@@ -2877,7 +2778,6 @@ app.get('/test/question', checkAuth, async (req, res) => {
                                     .map(el => el.dataset.value.trim());
                 } 
                 else if (document.getElementById('left-column-' + index)) {
-                  // === MATCHING — ВАЖЛИВЕ ВИПРАВЛЕННЯ ===
                   const leftItems = Array.from(document.querySelectorAll('#left-column-' + index + ' .matching-item'));
                   const rightItems = Array.from(document.querySelectorAll('#right-column-' + index + ' .matching-item'));
                   
@@ -2888,7 +2788,7 @@ app.get('/test/question', checkAuth, async (req, res) => {
                     const leftVal = (leftItems[i].dataset.value || '').trim();
                     const rightVal = (rightItems[i].dataset.value || '').trim();
                     if (leftVal || rightVal) {
-                      answerData.push([leftVal, rightVal]);   // <-- Масив пар!
+                      answerData.push([leftVal, rightVal]);
                     }
                   }
                 } 
@@ -2916,122 +2816,19 @@ app.get('/test/question', checkAuth, async (req, res) => {
 
                 if (!resp.ok) throw new Error('HTTP ' + resp.status);
               } catch (err) {
-                console.error('Помилка збереження:', err);
+                console.error('Помилка збереження для index ' + index, err);
               } finally {
                 isSaving = false;
               }
             }
 
-            // Збереження + наступне питання
             async function saveAndNext(index) {
-              if (isSaving) return;
-              isSaving = true;
-              try {
-                hasMovedToNext = true;
-                let answers = selectedOptions;
-                if (document.querySelector('input[name="q' + index + '"]')) {
-                  answers = document.getElementById('q' + index + '_input').value;
-                } else if (document.getElementById('sortable-options')) {
-                  answers = Array.from(document.querySelectorAll('#sortable-options .option-box')).map(el => el.dataset.value);
-                } else if (document.getElementById('left-column')) {
-                  answers = matchingPairs;
-                } else if ('${q.type}' === 'fillblank') {
-                  answers = [];
-                  for (let i = 0; i < ${q.blankCount || 1}; i++) {
-                    const input = document.getElementById('blank_' + i);
-                    answers.push(input ? input.value.trim() : '');
-                  }
-                }
-                const responseTime = (Date.now() - questionStartTime) / 1000;
-                const formData = new URLSearchParams();
-                formData.append('index', index);
-                const safeAnswer = JSON.stringify(answers);
-                formData.append('answer', safeAnswer);
-                formData.append('timeAway', timeAway);
-                formData.append('switchCount', switchCount);
-                formData.append('responseTime', responseTime);
-                formData.append('activityCount', activityCount);
-                formData.append('_csrf', '${res.locals._csrf}');
-                const response = await fetch('/answer', {
-                  method: 'POST',
-                  headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-                  body: formData
-                });
-                if (!response.ok) throw new Error('HTTP ' + response.status);
-                const result = await response.json();
-                if (result.success) {
-                  const nextIndex = index + 1;
-                  fetch('/set-question-start-time?index=' + nextIndex, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-                    body: new URLSearchParams({ '_csrf': '${res.locals._csrf}' })
-                  }).then(() => {
-                    if (nextIndex < ${questions.length}) {
-                      window.location.href = '/test/question?index=' + nextIndex;
-                    } else {
-                      setTimeout(() => window.location.href = '/result', 300);
-                    }
-                  });
-                } else {
-                  console.error('Помилка збереження:', result.error);
-                  alert('Помилка збереження відповіді');
-                }
-              } catch (error) {
-                console.error('Помилка в saveAndNext:', error);
-                alert('Не вдалося зберегти відповідь');
-              } finally {
-                isSaving = false;
-              }
-            }
-
-            // Завершення тесту
-            async function finishTest(index) {
-              if (isSaving) return;
-              isSaving = true;
-              try {
-                await saveCurrentAnswer(index);
-                let answers = selectedOptions;
-                if (document.querySelector('input[name="q' + index + '"]')) {
-                  answers = document.getElementById('q' + index + '_input').value;
-                } else if (document.getElementById('sortable-options')) {
-                  answers = Array.from(document.querySelectorAll('#sortable-options .option-box')).map(el => el.dataset.value);
-                } else if (document.getElementById('left-column')) {
-                  answers = matchingPairs;
-                } else if ('${q.type}' === 'fillblank') {
-                  answers = [];
-                  for (let i = 0; i < ${q.blankCount || 1}; i++) {
-                    const input = document.getElementById('blank_' + i);
-                    answers.push(input ? input.value.trim() : '');
-                  }
-                }
-                const responseTime = (Date.now() - questionStartTime) / 1000;
-                const formData = new URLSearchParams();
-                formData.append('index', index);
-                const safeAnswer = JSON.stringify(answers);
-                formData.append('answer', safeAnswer);
-                formData.append('timeAway', timeAway);
-                formData.append('switchCount', switchCount);
-                formData.append('responseTime', responseTime);
-                formData.append('activityCount', activityCount);
-                formData.append('_csrf', '${res.locals._csrf}');
-                const response = await fetch('/answer', {
-                  method: 'POST',
-                  headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-                  body: formData
-                });
-                if (!response.ok) throw new Error('HTTP ' + response.status);
-                const result = await response.json();
-                if (result.success) {
-                  setTimeout(() => window.location.href = '/result', 300);
-                } else {
-                  console.error('Помилка завершення:', result.error);
-                  alert('Помилка завершення тесту');
-                }
-              } catch (error) {
-                console.error('Помилка в finishTest:', error);
-                alert('Не вдалося завершити тест');
-              } finally {
-                isSaving = false;
+              await saveCurrentAnswer(index);
+              const nextIndex = index + 1;
+              if (nextIndex < totalQuestions) {
+                window.location.href = '/test/question?index=' + nextIndex;
+              } else {
+                window.location.href = '/result';
               }
             }
 
@@ -3043,6 +2840,11 @@ app.get('/test/question', checkAuth, async (req, res) => {
               document.getElementById('confirm-modal').style.display = 'none';
             }
 
+            async function finishTest(index) {
+              await saveCurrentAnswer(index);
+              window.location.href = '/result';
+            }
+
             function updateGlobalTimer() {
               const now = Date.now();
               const elapsedTime = Math.floor((now - startTime) / 1000);
@@ -3050,214 +2852,12 @@ app.get('/test/question', checkAuth, async (req, res) => {
               const minutes = Math.floor(remainingTime / 60).toString().padStart(2, '0');
               const seconds = (remainingTime % 60).toString().padStart(2, '0');
               timerElement.textContent = 'Залишилось часу: ' + minutes + ' хв ' + seconds + ' с';
-              lastGlobalUpdateTime = now;
-              if (remainingTime <= 0) {
-                saveCurrentAnswer(currentQuestionIndex).then(() => {
-                  setTimeout(() => window.location.href = '/result', 1500);
-                });
-              }
             }
+
             setInterval(updateGlobalTimer, 1000);
 
             if (isQuickTest) {
               function updateQuestionTimer() {
-                const now = Date.now();
-                const elapsedSinceQuestionStart = Math.floor((now - questionStartTime) / 1000);
-                questionTimeRemaining = Math.max(0, timePerQuestion - elapsedSinceQuestionStart);
-                const timerText = document.getElementById('timer-text');
-                const timerCircle = document.querySelector('#question-timer .timer-circle');
-                if (timerText && timerCircle) {
-                  timerText.textContent = Math.round(questionTimeRemaining);
-                  const circumference = 251;
-                  const offset = (1 - questionTimeRemaining / timePerQuestion) * circumference;
-                  timerCircle.style.strokeDashoffset = offset;
-                }
-                if (questionTimeRemaining <= 0 && currentQuestionIndex < totalQuestions - 1 && !hasMovedToNext) {
-                  hasMovedToNext = true;
-                  saveCurrentAnswer(currentQuestionIndex).then(() => {
-                    saveAndNext(currentQuestionIndex);
-                  });
-                }
-              }
-              const questionTimerInterval = setInterval(updateQuestionTimer, 50);
-            }
-
-            window.addEventListener('blur', () => {
-              if (!blurTimeout) {
-                blurTimeout = setTimeout(() => {
-                  if (lastBlurTime === 0) {
-                    lastBlurTime = performance.now();
-                    switchCount = Math.min(switchCount + 1, 1000);
-                  }
-                  blurTimeout = null;
-                }, blurDebounceDelay);
-              }
-            });
-
-            window.addEventListener('focus', () => {
-              if (blurTimeout) {
-                clearTimeout(blurTimeout);
-                blurTimeout = null;
-              }
-              if (lastBlurTime > 0) {
-                const now = performance.now();
-                const awayDuration = Math.min((now - lastBlurTime) / 1000, 60);
-                timeAway += awayDuration;
-                lastBlurTime = 0;
-                saveCurrentAnswer(currentQuestionIndex);
-              }
-            });
-
-            function debounceMouseMove() {
-              const now = Date.now();
-              if (now - lastMouseMoveTime >= debounceDelay) {
-                lastMouseMoveTime = now;
-                lastActivityTime = now;
-                activityCount++;
-              }
-            }
-
-            function debounceKeydown() {
-              const now = Date.now();
-              if (now - lastKeydownTime >= debounceDelay) {
-                lastKeydownTime = now;
-                lastActivityTime = now;
-                activityCount++;
-              }
-            }
-
-            document.addEventListener('mousemove', debounceMouseMove);
-            document.addEventListener('keydown', debounceKeydown);
-
-            document.querySelectorAll('.option-box:not(.draggable)').forEach(box => {
-              box.style.pointerEvents = 'auto';
-              box.style.cursor = 'pointer';
-
-              box.addEventListener('click', (e) => {
-                e.preventDefault();
-                e.stopPropagation();
-
-                const questionType = '${q.type}';
-                const option = box.getAttribute('data-value');
-
-                if (['truefalse', 'multiple', 'singlechoice'].includes(questionType)) {
-                  if (questionType === 'multiple') {
-                    const idx = selectedOptions.indexOf(option);
-                    if (idx === -1) {
-                      selectedOptions.push(option);
-                      box.classList.add('selected');
-                    } else {
-                      selectedOptions.splice(idx, 1);
-                      box.classList.remove('selected');
-                    }
-                  } else {
-                    if (selectedOptions[0] === option) {
-                      // повторний клік — залишаємо
-                    } else {
-                      document.querySelectorAll('.option-box:not(.draggable)').forEach(b => {
-                        b.classList.remove('selected');
-                      });
-                      selectedOptions = [option];
-                      box.classList.add('selected');
-                    }
-                  }
-                }
-              });
-            });
-
-            const sortable = document.getElementById('sortable-options');
-            if (sortable) {
-              new Sortable(sortable, { animation: 150 });
-            }
-
-            const leftColumn = document.getElementById('left-column');
-            const rightColumn = document.getElementById('right-column');
-            if (leftColumn && rightColumn && '${q.type}' === 'matching') {
-              new Sortable(leftColumn, {
-                group: 'matching',
-                animation: 150,
-                onStart: function(evt) { evt.item.classList.add('dragging'); },
-                onEnd: function(evt) { evt.item.classList.remove('dragging'); updateMatchingPairs(); equalizeMatchingHeights(); }
-              });
-              new Sortable(rightColumn, {
-                group: 'matching',
-                animation: 150,
-                onStart: function(evt) { evt.item.classList.add('dragging'); },
-                onEnd: function(evt) { evt.item.classList.remove('dragging'); updateMatchingPairs(); equalizeMatchingHeights(); }
-              });
-
-              function updateMatchingPairs() {
-                matchingPairs = [];
-                const leftItems = Array.from(document.querySelectorAll('#left-column .draggable'));
-                const rightItems = Array.from(document.querySelectorAll('#right-column .droppable'));
-                rightItems.forEach((rightItem, idx) => {
-                  const rightValue = rightItem.dataset.value || '';
-                  const leftItem = leftItems[idx];
-                  const leftValue = leftItem ? leftItem.dataset.value || '' : '';
-                  if (leftValue && rightValue) {
-                    matchingPairs.push([leftValue, rightValue]);
-                  }
-                });
-              }
-
-              function resetMatchingPairs() {
-                matchingPairs = [];
-                const rightItems = document.querySelectorAll('#right-column .droppable');
-                rightItems.forEach(item => {
-                  const rightValue = item.dataset.value || '';
-                  item.innerHTML = rightValue;
-                });
-                equalizeMatchingHeights();
-              }
-
-              const droppableItems = document.querySelectorAll('.droppable');
-              droppableItems.forEach(item => {
-                item.addEventListener('dragover', (e) => e.preventDefault());
-                item.addEventListener('drop', (e) => {
-                  e.preventDefault();
-                  const draggable = document.querySelector('.dragging');
-                  if (draggable && draggable.classList.contains('draggable')) {
-                    const leftValue = draggable.dataset.value || '';
-                    const rightValue = item.dataset.value || '';
-                    if (leftValue && rightValue) {
-                      item.innerHTML = rightValue + ' <span class="matched"> (Зіставлено: ' + leftValue + ')</span>';
-                      const leftColumn = document.getElementById('left-column');
-                      const rightColumn = document.getElementById('right-column');
-                      const leftItems = Array.from(leftColumn.children);
-                      const rightItems = Array.from(rightColumn.children);
-                      const rightIndex = rightItems.indexOf(item);
-                      if (leftItems[rightIndex]) {
-                        leftColumn.insertBefore(draggable, leftItems[rightIndex]);
-                      } else {
-                        leftColumn.appendChild(draggable);
-                      }
-                      updateMatchingPairs();
-                      equalizeMatchingHeights();
-                    }
-                  }
-                });
-              });
-
-              window.addEventListener('load', equalizeMatchingHeights);
-            }
-
-            function equalizeMatchingHeights() {
-              const allItems = document.querySelectorAll('.matching-item');
-              if (allItems.length === 0) return;
-              let maxHeight = 0;
-              allItems.forEach(item => {
-                item.style.height = 'auto';
-                const height = item.getBoundingClientRect().height;
-                if (height > maxHeight) maxHeight = height;
-              });
-              allItems.forEach(item => {
-                item.style.height = maxHeight + 'px';
-              });
-            }
-
-            updateGlobalTimer();
-            if (isQuickTest) {
-              const questionTimerInterval = setInterval(() => {
                 const now = Date.now();
                 const elapsed = Math.floor((now - questionStartTime) / 1000);
                 questionTimeRemaining = Math.max(0, timePerQuestion - elapsed);
@@ -3275,13 +2875,27 @@ app.get('/test/question', checkAuth, async (req, res) => {
                     saveAndNext(currentQuestionIndex);
                   });
                 }
-              }, 50);
+              }
+              setInterval(updateQuestionTimer, 50);
             }
 
             document.addEventListener('visibilitychange', () => {
               if (!document.hidden) {
                 updateGlobalTimer();
-                if (isQuickTest) updateQuestionTimer();
+              }
+            });
+
+            window.addEventListener('load', () => {
+              if ('${q.type}' === 'matching') {
+                setTimeout(() => {
+                  const items = document.querySelectorAll('.matching-item');
+                  let maxH = 0;
+                  items.forEach(item => {
+                    item.style.height = 'auto';
+                    maxH = Math.max(maxH, item.getBoundingClientRect().height);
+                  });
+                  items.forEach(item => item.style.height = maxH + 'px');
+                }, 100);
               }
             });
           </script>
@@ -3348,7 +2962,7 @@ app.post('/answer', checkAuth, express.urlencoded({ extended: true }), async (re
           parsedAnswer = [];
         } else {
           parsedAnswer = JSON.parse(answer);
-          logger.info('[ANSWER] Успішно розпарсено рядок', { index, parsedType: typeof parsedAnswer, length: parsedAnswer.length });
+          logger.info('[ANSWER] Успішно розпарсено рядок', { index, parsedType: typeof parsedAnswer, length: Array.isArray(parsedAnswer) ? parsedAnswer.length : 'not-array' });
         }
       } else if (Array.isArray(answer)) {
         parsedAnswer = answer;
@@ -3356,23 +2970,35 @@ app.post('/answer', checkAuth, express.urlencoded({ extended: true }), async (re
         parsedAnswer = [];
       }
 
-      // Додаткове виправлення для matching (якщо прийшли об’єкти)
-      const userTest = await db.collection('active_tests').findOne({ user: req.user });
-      if (userTest?.questions?.[index]?.type === 'matching') {
-        if (Array.isArray(parsedAnswer) && parsedAnswer.length > 0 && typeof parsedAnswer[0] === 'object' && !Array.isArray(parsedAnswer[0])) {
-          logger.warn('[ANSWER] Matching: конвертуємо об’єкти в масиви пар');
-          parsedAnswer = parsedAnswer.map(p => [p.left || '', p.right || '']);
+      // === МІНІМАЛЬНЕ ВИПРАВЛЕННЯ ДЛЯ MATCHING ===
+      const userTestCheck = await db.collection('active_tests').findOne({ user: req.user });
+      if (userTestCheck?.questions?.[index]?.type === 'matching') {
+        if (Array.isArray(parsedAnswer) && parsedAnswer.length > 0) {
+          // Якщо прийшли об'єкти {left, right}
+          if (typeof parsedAnswer[0] === 'object' && parsedAnswer[0] !== null && !Array.isArray(parsedAnswer[0])) {
+            logger.info('[ANSWER] Matching: конвертуємо об’єкти в масиви пар', { index });
+            parsedAnswer = parsedAnswer.map(p => [p.left || '', p.right || '']);
+          }
+          // Якщо прийшов плоский масив — намагаємося згрупувати по 2
+          else if (parsedAnswer.length > 0 && typeof parsedAnswer[0] !== 'object') {
+            logger.warn('[ANSWER] Matching: отримали плоский масив, намагаємося перетворити', { index, length: parsedAnswer.length });
+            const pairs = [];
+            for (let i = 0; i < parsedAnswer.length; i += 2) {
+              pairs.push([parsedAnswer[i] || '', parsedAnswer[i + 1] || '']);
+            }
+            parsedAnswer = pairs;
+          }
         }
       }
     } catch (error) {
-      logger.error('[ANSWER] Помилка парсингу відповіді', { answer, error: error.message });
+      logger.error('[ANSWER] Помилка парсингу відповіді', { index, answer, error: error.message });
       parsedAnswer = [];
     }
 
     const userTest = await db.collection('active_tests').findOne({ user: req.user });
     if (!userTest) {
       logger.warn('[ANSWER] Активний тест не знайдено');
-      return res.json({ success: true }); // не падаємо, просто ігноруємо
+      return res.json({ success: true });
     }
 
     userTest.answers[index] = parsedAnswer;
@@ -3387,7 +3013,12 @@ app.post('/answer', checkAuth, express.urlencoded({ extended: true }), async (re
       { $set: { answers: userTest.answers, suspiciousActivity: userTest.suspiciousActivity } }
     );
 
-    logger.info('[ANSWER] Відповідь збережена', { index, type: userTest.questions?.[index]?.type, parsedAnswerLength: parsedAnswer.length });
+    logger.info('[ANSWER] Відповідь збережена', { 
+      index, 
+      type: userTest.questions?.[index]?.type, 
+      parsedAnswerLength: Array.isArray(parsedAnswer) ? parsedAnswer.length : 0,
+      isMatching: userTest.questions?.[index]?.type === 'matching'
+    });
 
     res.json({ success: true });
   } catch (error) {
@@ -4995,6 +4626,7 @@ app.get('/admin/add-question', checkAuth, checkAdmin, (req, res) => {
                 errorMessage.textContent = 'Назва файлу зображення має закінчуватися на .jpeg, .jpg, .png або .gif';
                 return false;
               }
+
               if (type === 'input' || type === 'fillblank') {
                 const answersArray = correctAnswers.split(';').map(ans => ans.trim());
                 if (type === 'input' && answersArray.length !== 1) {
@@ -5025,6 +4657,7 @@ app.get('/admin/add-question', checkAuth, checkAdmin, (req, res) => {
                   }
                 }
               }
+
               if (type === 'singlechoice') {
                 const correctAnswersArray = correctAnswers.split(';').map(ans => ans.trim());
                 if (correctAnswersArray.length !== 1) {
@@ -5037,11 +4670,12 @@ app.get('/admin/add-question', checkAuth, checkAdmin, (req, res) => {
                   return false;
                 }
               }
+
               if (type === 'matching') {
                 const options = document.getElementById('options').value.split(';').map(opt => opt.trim()).filter(Boolean);
                 const correctAnswersArray = correctAnswers.split(';').map(ans => ans.trim()).filter(Boolean);
                 if (options.length === 0 || options.length !== correctAnswersArray.length) {
-                  errorMessage.textContent = 'Для типу Matching кількість варіантів має відповідати кількості правильних відповідей';
+                  errorMessage.textContent = 'Для типу Matching кількість варіантів (лівих) має відповідати кількості правильних відповідей (правих)';
                   return false;
                 }
               }
@@ -5121,16 +4755,31 @@ app.post('/admin/add-question', checkAuth, checkAdmin, [
       questionData.options = ["Правда", "Неправда"];
     }
 
+    // ==================== ВИПРАВЛЕНИЙ БЛОК MATCHING ====================
     if (type === 'matching') {
-      questionData.pairs = questionData.options.map((opt, idx) => ({
-        left: opt || '',
-        right: questionData.correctAnswers[idx] || ''
-      })).filter(pair => pair.left && pair.right);
-      if (questionData.pairs.length === 0) {
-        logger.warn('Для типу Matching потрібні пари', { testNumber, text });
-        return res.status(400).send('Для типу Matching потрібні пари відповідей');
+      const leftOptions = questionData.options;
+      const rightAnswers = questionData.correctAnswers;
+
+      if (leftOptions.length === 0 || leftOptions.length !== rightAnswers.length) {
+        logger.warn('Для типу Matching кількість лівих і правих елементів не співпадає', { 
+          left: leftOptions.length, 
+          right: rightAnswers.length,
+          text 
+        });
+        return res.status(400).send('Для типу Matching кількість варіантів (лівих) має відповідати кількості правильних відповідей (правих)');
       }
+
+      questionData.pairs = leftOptions.map((left, idx) => ({
+        left: left,
+        right: rightAnswers[idx] || ''
+      }));
+
       questionData.correctPairs = questionData.pairs.map(pair => [pair.left, pair.right]);
+
+      logger.info('Matching питання підготовлено', { 
+        pairsCount: questionData.pairs.length,
+        testNumber 
+      });
     }
 
     if (type === 'fillblank') {
@@ -5292,11 +4941,11 @@ app.get('/admin/edit-question', checkAuth, checkAdmin, async (req, res) => {
             </select>
             <div id="options-container">
               <label for="options">Варіанти відповідей (через крапку з комою):</label>
-              <textarea id="options" name="options" placeholder="Введіть варіанти через крапку з комою">${question.options.join('; ')}</textarea>
+              <textarea id="options" name="options" placeholder="Введіть варіанти через крапку з комою">${Array.isArray(question.options) ? question.options.join('; ') : ''}</textarea>
             </div>
             <label for="correctAnswers">Правильні відповіді (через крапку з комою):</label>
             <p id="correctAnswersNote" class="note">Для типів Input і Fillblank можна вказати діапазон у форматі "число1-число2", наприклад, "12-14".</p>
-            <textarea id="correctAnswers" name="correctAnswers" required placeholder="Введіть правильні відповіді через крапку з комою">${question.correctAnswers.join('; ')}</textarea>
+            <textarea id="correctAnswers" name="correctAnswers" required placeholder="Введіть правильні відповіді через крапку з комою">${Array.isArray(question.correctAnswers) ? question.correctAnswers.join('; ') : ''}</textarea>
             <label for="points">Бали за питання:</label>
             <input type="number" id="points" name="points" value="${question.points}" min="1" required>
             <label for="variant">Варіант:</label>
@@ -5395,7 +5044,7 @@ app.get('/admin/edit-question', checkAuth, checkAdmin, async (req, res) => {
                 const options = document.getElementById('options').value.split(';').map(opt => opt.trim()).filter(Boolean);
                 const correctAnswersArray = correctAnswers.split(';').map(ans => ans.trim()).filter(Boolean);
                 if (options.length === 0 || options.length !== correctAnswersArray.length) {
-                  errorMessage.textContent = 'Для типу Matching кількість варіантів має відповідати кількості правильних відповідей';
+                  errorMessage.textContent = 'Для типу Matching кількість варіантів (лівих) має відповідати кількості правильних відповідей (правих)';
                   return false;
                 }
               }
@@ -5511,16 +5160,31 @@ app.post('/admin/edit-question', checkAuth, checkAdmin, [
       questionData.options = ["Правда", "Неправда"];
     }
 
+    // ==================== ВИПРАВЛЕНИЙ БЛОК MATCHING ====================
     if (type === 'matching') {
-      questionData.pairs = questionData.options.map((opt, idx) => ({
-        left: opt || '',
-        right: questionData.correctAnswers[idx] || ''
-      })).filter(pair => pair.left && pair.right);
-      if (questionData.pairs.length === 0) {
-        logger.warn('Для типу Matching потрібні пари', { testNumber, text });
-        return res.status(400).send('Для типу Matching потрібні пари відповідей');
+      const leftOptions = questionData.options;
+      const rightAnswers = questionData.correctAnswers;
+
+      if (leftOptions.length === 0 || leftOptions.length !== rightAnswers.length) {
+        logger.warn('Для типу Matching кількість лівих і правих елементів не співпадає', { 
+          left: leftOptions.length, 
+          right: rightAnswers.length,
+          text 
+        });
+        return res.status(400).send('Для типу Matching кількість варіантів (лівих) має відповідати кількості правильних відповідей (правих)');
       }
+
+      questionData.pairs = leftOptions.map((left, idx) => ({
+        left: left,
+        right: rightAnswers[idx] || ''
+      }));
+
       questionData.correctPairs = questionData.pairs.map(pair => [pair.left, pair.right]);
+
+      logger.info('Matching питання оновлено', { 
+        pairsCount: questionData.pairs.length,
+        testNumber 
+      });
     }
 
     if (type === 'fillblank') {
@@ -5821,6 +5485,7 @@ app.get('/admin/import-questions', ensureInitialized, checkAuth, checkAdmin, asy
       res.locals = {};
       logger.info('Ініціалізовано res.locals для /admin/import-questions', { url: req.url });
     }
+
     if (!testNames || !Object.keys(testNames).length) {
       logger.warn('Список тестів порожній, перезавантаження', { url: req.url });
       await loadTestsFromMongoDB();
@@ -5828,6 +5493,7 @@ app.get('/admin/import-questions', ensureInitialized, checkAuth, checkAdmin, asy
         throw new Error('Не вдалося завантажити список тестів');
       }
     }
+
     const html = `
       <!DOCTYPE html>
       <html lang="uk">
@@ -5882,6 +5548,7 @@ app.get('/admin/import-questions', ensureInitialized, checkAuth, checkAdmin, asy
               // Отримання JWT із cookies
               const authToken = document.cookie.split('; ').find(row => row.startsWith('auth_token='))?.split('=')[1];
               console.log('auth_token:', authToken ? 'Присутній' : 'Відсутній');
+
               if (!authToken) {
                 errorMessage.textContent = 'Токен авторизації відсутній. Увійдіть знову.';
                 console.error('Помилка: auth_token відсутній у cookies:', document.cookie);
@@ -5900,8 +5567,8 @@ app.get('/admin/import-questions', ensureInitialized, checkAuth, checkAdmin, asy
                 });
 
                 if (!response.ok) {
-                  const result = await response.json();
-                  throw new Error(result.message || 'Помилка: ' + response.status);
+                  const result = await response.text();
+                  throw new Error(result || 'Помилка сервера: ' + response.status);
                 }
 
                 const result = await response.text();
@@ -5949,13 +5616,18 @@ app.get('/admin/import-questions', ensureInitialized, checkAuth, checkAdmin, asy
 app.post('/admin/import-questions', ensureInitialized, checkAuth, checkAdmin, upload.single('file'), async (req, res) => {
   const startTime = Date.now();
   try {
-    const token = req.headers['authorization']?.split(' ')[1] || req.cookies.token;
-    logger.info('Отримано JWT для /admin/import-questions', { token: token ? '[присутній]' : '[відсутній]' });
+    const token = req.headers['authorization']?.split(' ')[1] || req.cookies.auth_token || req.cookies.token;
+    logger.info('Отримано JWT для /admin/import-questions', { 
+      token: token ? '[присутній]' : '[відсутній]',
+      hasFile: !!req.file,
+      testNumber: req.body.testNumber 
+    });
 
     if (!req.file) {
       logger.error('Файл не надано', { url: req.url });
       return res.status(400).send('Файл не надано');
     }
+
     const testNumber = req.body.testNumber;
     if (!testNumber || !testNames[testNumber]) {
       logger.error('Невірний номер тесту', { testNumber, url: req.url });
@@ -5964,6 +5636,10 @@ app.post('/admin/import-questions', ensureInitialized, checkAuth, checkAdmin, up
 
     const count = await importQuestionsToMongoDB(req.file.buffer, testNumber);
     logger.info(`Імпортовано ${count} питань для тесту ${testNumber}`);
+
+    // Очищення кешу після імпорту
+    await CacheManager.invalidateCache('questions', testNumber);
+    await CacheManager.invalidateCache('allQuestions', 'all');
 
     res.send(`
       <!DOCTYPE html>
@@ -5984,7 +5660,11 @@ app.post('/admin/import-questions', ensureInitialized, checkAuth, checkAdmin, up
       </html>
     `);
   } catch (error) {
-    logger.error('Помилка імпорту питань (POST)', { message: error.message, stack: error.stack });
+    logger.error('Помилка імпорту питань (POST)', { 
+      message: error.message, 
+      stack: error.stack,
+      testNumber: req.body.testNumber 
+    });
     res.status(500).send(`
       <!DOCTYPE html>
       <html lang="uk">
@@ -6005,7 +5685,9 @@ app.post('/admin/import-questions', ensureInitialized, checkAuth, checkAdmin, up
       </html>
     `);
   } finally {
-    logger.info('Маршрут /admin/import-questions (POST) виконано', { duration: `${Date.now() - startTime} мс` });
+    logger.info('Маршрут /admin/import-questions (POST) виконано', { 
+      duration: `${Date.now() - startTime} мс` 
+    });
   }
 });
 
