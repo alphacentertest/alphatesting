@@ -6148,7 +6148,7 @@ app.get('/admin/results', checkAuth, async (req, res) => {
       html += '<tr><td colspan="10">Немає результатів</td></tr>';
     } else {
       for (const result of results) {
-        // === КРИТИЧНЕ ВИПРАВЛЕННЯ ===
+        // Завантаження питань
         let questions = [];
 
         if (result.questions && Array.isArray(result.questions) && result.questions.length > 0) {
@@ -6164,9 +6164,10 @@ app.get('/admin/results', checkAuth, async (req, res) => {
           );
         }
 
+        // === ВИПРАВЛЕНИЙ РОЗРАХУНОК ===
         const scoresPerQuestion = questions.map((q, idx) => {
           const userAnswer = result.answers[idx];
-          return calculateQuestionScore(q, userAnswer);
+          return calculateQuestionScore(q, userAnswer);   // Твоя функція
         });
 
         const exactScore = scoresPerQuestion.reduce((sum, s) => sum + s, 0);
@@ -6271,12 +6272,10 @@ app.get('/admin/view-result', checkAuth, async (req, res) => {
       return res.status(404).send('Результат не знайдено');
     }
 
-    // === ВИПРАВЛЕНО: Правильне завантаження питань ===
+    // Завантаження питань
     let questions = [];
-
     if (result.questions && Array.isArray(result.questions) && result.questions.length > 0) {
       questions = result.questions;
-      logger.info('[VIEW-RESULT] Використано збережені питання з result.questions', { count: questions.length });
     } else {
       let allQuestions = await db.collection('questions')
         .find({ testNumber: result.testNumber })
@@ -6286,12 +6285,11 @@ app.get('/admin/view-result', checkAuth, async (req, res) => {
       questions = allQuestions.filter(q => 
         !q.variant || q.variant === '' || q.variant === result.variant
       );
-      logger.info('[VIEW-RESULT] Використано питання з бази даних', { count: questions.length });
     }
 
-    // Використовуємо функцію для підрахунку
-    const scoresPerQuestion = questions.map((q, displayIndex) => {
-      const userAnswer = result.answers[displayIndex];
+    // Розрахунок балів
+    const scoresPerQuestion = questions.map((q, idx) => {
+      const userAnswer = result.answers[idx];
       return calculateQuestionScore(q, userAnswer);
     });
 
@@ -6334,10 +6332,8 @@ app.get('/admin/view-result', checkAuth, async (req, res) => {
             .summary { font-size: 20px; margin: 20px 0 40px; padding: 20px; background: #f8f9fa; border-radius: 8px; }
             .nav-btn { padding: 12px 24px; margin: 10px 5px; cursor: pointer; border: none; border-radius: 8px; background: #007bff; color: white; }
             .nav-btn:hover { background: #0056b3; }
-            .correct-answer { color: #166534; font-weight: bold; }
             .details { white-space: pre-line; }
           </style>
-          <!-- Підключення pdfMake -->
           <script src="/pdfmake/pdfmake.min.js"></script>
           <script src="/pdfmake/vfs_fonts.js"></script>
         </head>
@@ -6350,7 +6346,6 @@ app.get('/admin/view-result', checkAuth, async (req, res) => {
             </div>
 
             <script>
-              // Передаємо всі потрібні дані з сервера в JavaScript
               const viewResultData = {
                 user: "${result.user.replace(/"/g, '\\"')}",
                 testName: "${testNames[result.testNumber]?.name?.replace(/"/g, '\\"') || 'Невідомий тест'}",
@@ -6367,32 +6362,37 @@ app.get('/admin/view-result', checkAuth, async (req, res) => {
                 totalActivityCount: ${totalActivityCount},
                 questionsTable: ${JSON.stringify(questions.map((q, idx) => {
                   const userAns = result.answers[idx] !== undefined ? result.answers[idx] : 'Не відповіли';
-                  let userDisplay = userAns;
+                  let userDisplay = '—';
+
                   if (Array.isArray(userAns)) {
                     if (q.type === 'matching') {
-                      userDisplay = userAns.map(p => `${p[0]} → ${p[1]}`).join('<br>');
+                      userDisplay = userAns.map(pair => {
+                        if (Array.isArray(pair) && pair.length === 2) {
+                          return `${pair[0] || '—'} → ${pair[1] || '—'}`;
+                        }
+                        return String(pair);
+                      }).join('<br>');
                     } else if (q.type === 'fillblank') {
                       userDisplay = userAns.join('<br>');
                     } else {
                       userDisplay = userAns.join(', ');
                     }
+                  } else {
+                    userDisplay = String(userAns);
                   }
+
                   return {
-                    text: q.text.replace(/"/g, '\\"').replace(/\n/g, '<br>'),
+                    text: String(q.text).replace(/"/g, '\\"').replace(/\n/g, '<br>'),
                     userAnswer: userDisplay,
                     score: scoresPerQuestion[idx].toFixed(3),
-                    maxPoints: q.points
+                    maxPoints: q.points || 1
                   };
                 }))}
               };
 
-              // Функція експорту PDF з перевіркою
               function exportToPDF() {
                 if (typeof pdfMake === 'undefined' || typeof pdfMake.createPdf === 'undefined') {
-                  console.error('pdfMake не завантажився. Перевірте підключення скриптів:');
-                  console.log('pdfmake.min.js:', document.querySelector('script[src="/pdfmake/pdfmake.min.js"]')?.src || 'не знайдено');
-                  console.log('vfs_fonts.js:', document.querySelector('script[src="/pdfmake/vfs_fonts.js"]')?.src || 'не знайдено');
-                  alert('PDF-генератор не завантажився. Спробуйте оновити сторінку (Ctrl+F5) або зверніться до адміністратора.');
+                  alert('PDF-генератор не завантажився. Спробуйте оновити сторінку (Ctrl + F5).');
                   return;
                 }
 
@@ -6417,11 +6417,7 @@ app.get('/admin/view-result', checkAuth, async (req, res) => {
                       layout: 'lightHorizontalLines',
                       margin: [0, 0, 0, 20]
                     },
-                    {
-                      text: 'Підозріла активність:',
-                      style: 'subHeader',
-                      margin: [0, 0, 0, 5]
-                    },
+                    { text: 'Підозріла активність:', style: 'subHeader', margin: [0, 0, 0, 5] },
                     {
                       ul: [
                         'Час поза вкладкою: ' + viewResultData.timeAwayPercent + '%',
@@ -6467,23 +6463,14 @@ app.get('/admin/view-result', checkAuth, async (req, res) => {
                     mainHeader: { fontSize: 20, bold: true, alignment: 'center', margin: [0, 0, 0, 20] },
                     subHeader: { fontSize: 14, bold: true, margin: [0, 15, 0, 5] }
                   },
-                  defaultStyle: {
-                    fontSize: 11,
-                    lineHeight: 1.4
-                  }
+                  defaultStyle: { fontSize: 11, lineHeight: 1.4 }
                 };
 
-                pdfMake.createPdf(docDefinition).download(viewResultData.user + 'деталі_результату_' + '.pdf');
+                pdfMake.createPdf(docDefinition).download(viewResultData.user + '_результат.pdf');
               }
 
-              // Додаємо обробник після повного завантаження сторінки
               document.addEventListener('DOMContentLoaded', () => {
-                const exportBtn = document.getElementById('exportPDF');
-                if (exportBtn) {
-                  exportBtn.addEventListener('click', exportToPDF);
-                } else {
-                  console.error('Кнопка #exportPDF не знайдена на сторінці');
-                }
+                document.getElementById('exportPDF').addEventListener('click', exportToPDF);
               });
             </script>
 
@@ -6495,7 +6482,6 @@ app.get('/admin/view-result', checkAuth, async (req, res) => {
               <strong>Питань:</strong> ${totalQuestions}<br>
               <strong>Правильних:</strong> ${correctClicks}<br>
               <strong>Дата завершення:</strong> ${new Date(result.endTime).toLocaleString('uk-UA')}<br><br>
-
               <strong>Підозріла активність:</strong><br>
               Час поза вкладкою: <span class="${timeAwayPercent > 50 ? 'suspicious' : ''}">${timeAwayPercent}%</span><br>
               Переключення вкладок: ${switchCount}<br>
@@ -6517,31 +6503,30 @@ app.get('/admin/view-result', checkAuth, async (req, res) => {
       const questionScore = scoresPerQuestion[index];
 
       let userAnswerDisplay = '—';
-
       if (Array.isArray(userAnswer)) {
         if (question.type === 'matching') {
-          if (userAnswer.length > 0 && Array.isArray(userAnswer[0]) && userAnswer[0].length === 2) {
-            userAnswerDisplay = userAnswer.map(pair => 
-              Array.isArray(pair) && pair.length === 2 ? `${pair[0]} → ${pair[1]}` : String(pair)
-            ).join('<br>');
-          } else {
-            userAnswerDisplay = userAnswer.join('<br>');
-          }
+          userAnswerDisplay = userAnswer.map(pair => {
+            if (Array.isArray(pair) && pair.length === 2) {
+              return `${pair[0] || '—'} → ${pair[1] || '—'}`;
+            }
+            return String(pair);
+          }).join('<br>');
         } else if (question.type === 'fillblank') {
           userAnswerDisplay = userAnswer.join('<br>');
         } else {
           userAnswerDisplay = userAnswer.join(', ');
         }
       } else {
-        userAnswerDisplay = String(userAnswer);
+        userAnswerDisplay = String(userAnswer || '—');
       }
 
       let correctAnswerDisplay = '—';
-      if (question.type === 'matching' && question.correctPairs) {
-        correctAnswerDisplay = question.correctPairs.map(pair => 
-          `${pair[0]} → ${pair[1]}`
+      if (question.type === 'matching') {
+        const pairs = question.correctPairs || (question.pairs || []).map(p => [p.left, p.right]);
+        correctAnswerDisplay = pairs.map(pair => 
+          `${pair[0] || '—'} → ${pair[1] || '—'}`
         ).join('<br>');
-      } else if (question.correctAnswers && Array.isArray(question.correctAnswers)) {
+      } else if (Array.isArray(question.correctAnswers)) {
         correctAnswerDisplay = question.correctAnswers.join('<br>');
       } else if (question.correctAnswer) {
         correctAnswerDisplay = question.correctAnswer;
@@ -6550,9 +6535,9 @@ app.get('/admin/view-result', checkAuth, async (req, res) => {
       html += `
         <tr>
           <td>${question.text.replace(/</g, '&lt;').replace(/>/g, '&gt;')}</td>
-          <td class="details">${userAnswerDisplay || '—'}</td>
+          <td class="details">${userAnswerDisplay}</td>
           <td class="details">${correctAnswerDisplay}</td>
-          <td>${questionScore.toFixed(3)} / ${question.points}</td>
+          <td>${questionScore.toFixed(3)} / ${question.points || 1}</td>
         </tr>
       `;
     });
@@ -6571,7 +6556,7 @@ app.get('/admin/view-result', checkAuth, async (req, res) => {
     logger.error('Помилка в /admin/view-result', { message: error.message, stack: error.stack });
     res.status(500).send('Помилка перегляду результату');
   } finally {
-    logger.info('Маршрут /admin/view-result виконано');
+    logger.info('Маршрут /admin/view-result виконано', { duration: `${Date.now() - startTime} мс` });
   }
 });
 
