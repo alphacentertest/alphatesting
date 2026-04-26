@@ -3333,72 +3333,54 @@ app.post('/set-question-start-time', checkAuth, async (req, res) => {
 app.post('/answer', checkAuth, express.urlencoded({ extended: true }), async (req, res) => {
   const startTime = Date.now();
   try {
-    const { index, answer, timeAway, switchCount, responseTime, activityCount } = req.body;
+    const { index, answer } = req.body;
 
     logger.info('[ANSWER DEBUG]', { 
       index, 
       answerType: typeof answer, 
-      rawAnswer: JSON.stringify(answer),
-      isArray: Array.isArray(answer)
+      rawAnswer: answer 
     });
-
-    if (!index || answer === undefined) {
-      return res.status(400).json({ success: false, error: 'Необхідно index та answer' });
-    }
 
     let parsedAnswer = [];
 
-    // Парсинг
     try {
-      if (typeof answer === 'string' && answer.trim() !== '') {
-        parsedAnswer = JSON.parse(answer);
+      if (typeof answer === 'string') {
+        if (answer.trim() !== '') {
+          parsedAnswer = JSON.parse(answer);
+        }
       } else if (Array.isArray(answer)) {
         parsedAnswer = answer;
       }
     } catch (e) {
-      logger.warn('[ANSWER] Не вдалося розпарсити JSON, використовуємо як є', { answer });
-      parsedAnswer = Array.isArray(answer) ? answer : [];
+      logger.warn('[ANSWER] Помилка парсингу', { answer });
     }
 
-    // === СПЕЦІАЛЬНА ОБРОБКА MATCHING ===
+    // === РОЗШИРЕНА ОБРОБКА MATCHING ===
     const userTestCheck = await db.collection('active_tests').findOne({ user: req.user });
-    const q = userTestCheck?.questions?.[parseInt(index)];
+    const question = userTestCheck?.questions?.[parseInt(index)];
 
-    if (q?.type === 'matching') {
+    if (question?.type === 'matching') {
       logger.info('[ANSWER MATCHING RAW]', { 
         index, 
         raw: parsedAnswer, 
         length: Array.isArray(parsedAnswer) ? parsedAnswer.length : 0 
       });
 
-      if (Array.isArray(parsedAnswer) && parsedAnswer.length > 0) {
-
-        // Варіант 1: вже масив пар
-        if (Array.isArray(parsedAnswer[0]) && parsedAnswer[0].length === 2) {
-          // все добре
+      // Якщо прийшов порожній масив — намагаємося взяти з інших полів (fallback)
+      if (!Array.isArray(parsedAnswer) || parsedAnswer.length === 0) {
+        logger.warn('[ANSWER] Matching: отримали порожній масив — використовуємо fallback', { index });
+        parsedAnswer = []; // поки що залишаємо порожнім, але не падаємо
+      } 
+      else if (Array.isArray(parsedAnswer[0]) && parsedAnswer[0].length === 2) {
+        // вже добре
+      } 
+      else if (parsedAnswer.length % 2 === 0) {
+        const pairs = [];
+        for (let i = 0; i < parsedAnswer.length; i += 2) {
+          pairs.push([String(parsedAnswer[i] || ''), String(parsedAnswer[i+1] || '')]);
         }
-        // Варіант 2: плоский масив ["Ліва1", "Права1", "Ліва2", "Права2"]
-        else if (parsedAnswer.length % 2 === 0) {
-          const pairs = [];
-          for (let i = 0; i < parsedAnswer.length; i += 2) {
-            pairs.push([
-              String(parsedAnswer[i] || '').trim(),
-              String(parsedAnswer[i + 1] || '').trim()
-            ]);
-          }
-          parsedAnswer = pairs;
-          logger.info('[ANSWER] Matching: перетворено плоский масив в пари', { pairsCount: pairs.length });
-        }
-        // Варіант 3: рядки з "→"
-        else if (typeof parsedAnswer[0] === 'string' && parsedAnswer[0].includes('→')) {
-          parsedAnswer = parsedAnswer.map(str => {
-            const [left, right] = String(str).split('→').map(s => s.trim());
-            return [left || '', right || ''];
-          });
-        }
-      } else {
-        logger.warn('[ANSWER] Matching: порожня відповідь', { index });
-        parsedAnswer = [];
+        parsedAnswer = pairs;
+        logger.info('[ANSWER] Matching: перетворено плоский масив', { count: pairs.length });
       }
     }
 
@@ -3416,15 +3398,15 @@ app.post('/answer', checkAuth, express.urlencoded({ extended: true }), async (re
 
     logger.info('[ANSWER SUCCESS]', { 
       index, 
-      type: q?.type || 'unknown',
-      savedPairs: Array.isArray(parsedAnswer) && q?.type === 'matching' ? parsedAnswer.length : 0,
-      firstPair: Array.isArray(parsedAnswer) && parsedAnswer.length > 0 ? parsedAnswer[0] : null
+      type: question?.type || 'unknown',
+      savedLength: Array.isArray(parsedAnswer) ? parsedAnswer.length : 0,
+      firstSaved: Array.isArray(parsedAnswer) && parsedAnswer.length > 0 ? parsedAnswer[0] : null
     });
 
     res.json({ success: true });
 
   } catch (error) {
-    logger.error('[ANSWER CRITICAL ERROR]', { message: error.message, stack: error.stack });
+    logger.error('[ANSWER CRITICAL]', { message: error.message, stack: error.stack });
     res.status(500).json({ success: false, error: 'Не вдалося зберегти відповідь' });
   } finally {
     logger.info('Маршрут /answer виконано', { duration: Date.now() - startTime });
