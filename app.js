@@ -2141,6 +2141,13 @@ app.get('/test/question', checkAuth, async (req, res) => {
       testSessionId 
     } = userTest;
 
+    logger.info('[QUESTION DEBUG]', {
+      index,
+      questionType: q.type,
+      hasAnswer: !!answers[index],
+      existingAnswer: answers[index]
+    });
+
     // Перевірка кешу тестів
     if (!testNames[testNumber]) {
       logger.info('Номер тесту не знайдено в кеші, повторне завантаження тестів', { testNumber });
@@ -3336,77 +3343,105 @@ app.post('/answer', checkAuth, express.urlencoded({ extended: true }), async (re
     if (req.user === 'admin') return res.redirect('/admin');
 
     const { index, answer, timeAway, switchCount, responseTime, activityCount } = req.body;
+
+    logger.info('[ANSWER DEBUG]', { 
+      index, 
+      answerType: typeof answer, 
+      rawAnswer: answer,
+      isArray: Array.isArray(answer),
+      answerLength: Array.isArray(answer) ? answer.length : null,
+      firstElement: Array.isArray(answer) ? answer[0] : null
+    });
+
     if (!index || answer === undefined) {
       logger.error('Відсутні параметри в /answer', { index, answer });
       return res.status(400).json({ success: false, error: 'Необхідно index та answer' });
     }
 
-    let parsedAnswer;
+    let parsedAnswer = [];
+
     try {
       if (typeof answer === 'string') {
         if (answer.trim() === '') {
           parsedAnswer = [];
         } else {
           parsedAnswer = JSON.parse(answer);
-          logger.info('[ANSWER] Успішно розпарсено рядок', { index, parsedType: typeof parsedAnswer, length: Array.isArray(parsedAnswer) ? parsedAnswer.length : 'not-array' });
+          logger.info('[ANSWER] Успішно розпарсено JSON', { index, parsedType: typeof parsedAnswer });
         }
       } else if (Array.isArray(answer)) {
         parsedAnswer = answer;
-      } else {
-        parsedAnswer = [];
       }
 
-      // === МІНІМАЛЬНЕ ВИПРАВЛЕННЯ ДЛЯ MATCHING ===
-      const userTestCheck = await db.collection('active_tests').findOne({ user: req.user });
-      if (userTestCheck?.questions?.[index]?.type === 'matching') {
+      // === РОЗШИРЕНА ОБРОБКА ДЛЯ MATCHING ===
+      const userTest = await db.collection('active_tests').findOne({ user: req.user });
+      const questionType = userTest?.questions?.[index]?.type;
+
+      if (questionType === 'matching') {
+        logger.info('[ANSWER MATCHING]', { 
+          index, 
+          rawParsed: parsedAnswer, 
+          isArray: Array.isArray(parsedAnswer),
+          firstItemType: Array.isArray(parsedAnswer) ? typeof parsedAnswer[0] : null 
+        });
+
         if (Array.isArray(parsedAnswer) && parsedAnswer.length > 0) {
-          // Якщо прийшли об'єкти {left, right}
+
+          // 1. Якщо прийшли об'єкти {left, right}
           if (typeof parsedAnswer[0] === 'object' && parsedAnswer[0] !== null && !Array.isArray(parsedAnswer[0])) {
-            logger.info('[ANSWER] Matching: конвертуємо об’єкти в масиви пар', { index });
-            parsedAnswer = parsedAnswer.map(p => [p.left || '', p.right || '']);
+            logger.info('[ANSWER] Matching: конвертуємо об’єкти {left,right} в пари', { index });
+            parsedAnswer = parsedAnswer.map(p => [p.left || p[0] || '', p.right || p[1] || '']);
           }
-          // Якщо прийшов плоский масив — намагаємося згрупувати по 2
-          else if (parsedAnswer.length > 0 && typeof parsedAnswer[0] !== 'object') {
-            logger.warn('[ANSWER] Matching: отримали плоский масив, намагаємося перетворити', { index, length: parsedAnswer.length });
+
+          // 2. Якщо прийшов плоский масив ["Ліва1", "Права1", "Ліва2", "Права2"]
+          else if (parsedAnswer.length % 2 === 0 && typeof parsedAnswer[0] !== 'object') {
+            logger.info('[ANSWER] Matching: конвертуємо плоский масив в пари', { index });
             const pairs = [];
             for (let i = 0; i < parsedAnswer.length; i += 2) {
-              pairs.push([parsedAnswer[i] || '', parsedAnswer[i + 1] || '']);
+              pairs.push([String(parsedAnswer[i] || ''), String(parsedAnswer[i + 1] || '')]);
             }
             parsedAnswer = pairs;
           }
+
+          // 3. Якщо рядки з "→"
+          else if (typeof parsedAnswer[0] === 'string' && parsedAnswer[0].includes('→')) {
+            logger.info('[ANSWER] Matching: конвертуємо рядки з →', { index });
+            parsedAnswer = parsedAnswer.map(str => {
+              const parts = str.split('→').map(s => s.trim());
+              return [parts[0] || '', parts[1] || ''];
+            });
+          }
+        } else {
+          logger.warn('[ANSWER] Matching: прийшов порожній або некоректний масив', { index, parsedAnswer });
         }
       }
+
     } catch (error) {
-      logger.error('[ANSWER] Помилка парсингу відповіді', { index, answer, error: error.message });
+      logger.error('[ANSWER] Помилка парсингу', { index, answer, error: error.message });
       parsedAnswer = [];
     }
 
-    const userTest = await db.collection('active_tests').findOne({ user: req.user });
-    if (!userTest) {
-      logger.warn('[ANSWER] Активний тест не знайдено');
-      return res.json({ success: true });
-    }
-
-    userTest.answers[index] = parsedAnswer;
-    userTest.suspiciousActivity = userTest.suspiciousActivity || { timeAway: 0, switchCount: 0, responseTimes: [], activityCounts: [] };
-    userTest.suspiciousActivity.timeAway = Math.max(0, parseFloat(timeAway) || 0);
-    userTest.suspiciousActivity.switchCount = Math.min(Math.max(0, parseInt(switchCount) || 0), 1000);
-    userTest.suspiciousActivity.responseTimes[index] = Math.max(0, parseFloat(responseTime) || 0);
-    userTest.suspiciousActivity.activityCounts[index] = parseInt(activityCount) || 0;
-
+    // Збереження
     await db.collection('active_tests').updateOne(
       { user: req.user },
-      { $set: { answers: userTest.answers, suspiciousActivity: userTest.suspiciousActivity } }
+      { 
+        $set: { 
+          [`answers.${index}`]: parsedAnswer,
+          currentQuestion: parseInt(index) + 1,
+          [`answerTimestamps.${index}`]: Date.now()
+        } 
+      }
     );
 
-    logger.info('[ANSWER] Відповідь збережена', { 
+    logger.info('[ANSWER] Успішно збережено', { 
       index, 
-      type: userTest.questions?.[index]?.type, 
-      parsedAnswerLength: Array.isArray(parsedAnswer) ? parsedAnswer.length : 0,
-      isMatching: userTest.questions?.[index]?.type === 'matching'
+      type: questionType || 'unknown',
+      finalParsedLength: Array.isArray(parsedAnswer) ? parsedAnswer.length : 0,
+      isMatching: questionType === 'matching',
+      finalFirstPair: Array.isArray(parsedAnswer) && parsedAnswer.length > 0 ? parsedAnswer[0] : null
     });
 
     res.json({ success: true });
+
   } catch (error) {
     logger.error('[ANSWER] Критична помилка', { message: error.message, stack: error.stack });
     res.status(500).json({ success: false, error: 'Помилка сервера' });
