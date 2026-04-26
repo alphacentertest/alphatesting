@@ -2139,14 +2139,7 @@ app.get('/test/question', checkAuth, async (req, res) => {
       suspiciousActivity, 
       variant, 
       testSessionId 
-    } = userTest;
-
-    logger.info('[QUESTION DEBUG]', {
-      index,
-      questionType: q.type,
-      hasAnswer: !!answers[index],
-      existingAnswer: answers[index]
-    });
+    } = userTest;    
 
     // Перевірка кешу тестів
     if (!testNames[testNumber]) {
