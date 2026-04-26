@@ -3461,7 +3461,7 @@ function calculateQuestionScore(question, userAnswer) {
       break;
     }
 
-        case 'matching': {
+    case 'matching': {
       if (!Array.isArray(userAnswer) || userAnswer.length === 0) return 0;
 
       const correctPairs = question.correctPairs || [];
@@ -6503,17 +6503,27 @@ app.get('/admin/view-result', checkAuth, async (req, res) => {
       const questionScore = scoresPerQuestion[index];
 
       let userAnswerDisplay = '—';
+
       if (Array.isArray(userAnswer)) {
         if (question.type === 'matching') {
-          userAnswerDisplay = userAnswer.map(pair => {
-            if (Array.isArray(pair) && pair.length === 2) {
-              return `${pair[0] || '—'} → ${pair[1] || '—'}`;
-            }
-            return String(pair);
-          }).join('<br>');
-        } else if (question.type === 'fillblank') {
+          // === ВИПРАВЛЕНО ДЛЯ ТВОГО ФОРМАТУ ===
+          if (Array.isArray(userAnswer[0]) && userAnswer[0].length === 2) {
+            // ідеальний формат: масив пар
+            userAnswerDisplay = userAnswer.map(pair => 
+              `${pair[0] || '—'} → ${pair[1] || '—'}`
+            ).join('<br>');
+          } else {
+            
+            userAnswerDisplay = userAnswer.map((item, i) => {
+              if (i % 2 === 0) return `<strong>${item}</strong>`;
+              return ` → ${item}`;
+            }).join('<br>');
+          }
+        } 
+        else if (question.type === 'fillblank') {
           userAnswerDisplay = userAnswer.join('<br>');
-        } else {
+        } 
+        else {
           userAnswerDisplay = userAnswer.join(', ');
         }
       } else {
@@ -6522,7 +6532,8 @@ app.get('/admin/view-result', checkAuth, async (req, res) => {
 
       let correctAnswerDisplay = '—';
       if (question.type === 'matching') {
-        const pairs = question.correctPairs || (question.pairs || []).map(p => [p.left, p.right]);
+        const pairs = question.correctPairs || 
+                     (question.pairs || []).map(p => [p.left, p.right]);
         correctAnswerDisplay = pairs.map(pair => 
           `${pair[0] || '—'} → ${pair[1] || '—'}`
         ).join('<br>');
