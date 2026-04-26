@@ -3462,6 +3462,14 @@ function calculateQuestionScore(question, userAnswer) {
     }
 
     case 'matching': {
+      logger.info('[CALCULATE-SCORE MATCHING]', {
+        userAnswer,
+        isArray: Array.isArray(userAnswer),
+        length: Array.isArray(userAnswer) ? userAnswer.length : 0,
+        firstElementType: Array.isArray(userAnswer) ? typeof userAnswer[0] : null,
+        questionHasCorrectPairs: !!question.correctPairs,
+        correctPairsCount: question.correctPairs ? question.correctPairs.length : 0
+      });
       if (!Array.isArray(userAnswer) || userAnswer.length === 0) return 0;
 
       const correctPairs = question.correctPairs || [];
@@ -6499,41 +6507,41 @@ app.get('/admin/view-result', checkAuth, async (req, res) => {
     `;
 
     questions.forEach((question, index) => {
-      const userAnswer = result.answers[index] !== undefined ? result.answers[index] : 'Не відповіли';
+      const userAnswerRaw = result.answers[index];
       const questionScore = scoresPerQuestion[index];
+
+      logger.info(`[VIEW-RESULT DEBUG] Питання ${index} | Тип: ${question.type}`, {
+        userAnswerRaw: userAnswerRaw,
+        isArray: Array.isArray(userAnswerRaw),
+        firstElement: Array.isArray(userAnswerRaw) ? userAnswerRaw[0] : null,
+        length: Array.isArray(userAnswerRaw) ? userAnswerRaw.length : null,
+        correctPairs: question.correctPairs ? question.correctPairs.length : null,
+        pairs: question.pairs ? question.pairs.length : null
+      });
 
       let userAnswerDisplay = '—';
 
-      if (Array.isArray(userAnswer)) {
+      if (Array.isArray(userAnswerRaw)) {
         if (question.type === 'matching') {
-          // === ВИПРАВЛЕНО ДЛЯ ТВОГО ФОРМАТУ ===
-          if (Array.isArray(userAnswer[0]) && userAnswer[0].length === 2) {
-            // ідеальний формат: масив пар
-            userAnswerDisplay = userAnswer.map(pair => 
+          if (Array.isArray(userAnswerRaw[0]) && userAnswerRaw[0].length === 2) {
+            userAnswerDisplay = userAnswerRaw.map(pair => 
               `${pair[0] || '—'} → ${pair[1] || '—'}`
             ).join('<br>');
           } else {
-            
-            userAnswerDisplay = userAnswer.map((item, i) => {
-              if (i % 2 === 0) return `<strong>${item}</strong>`;
-              return ` → ${item}`;
-            }).join('<br>');
+            userAnswerDisplay = userAnswerRaw.map(item => String(item)).join('<br>');
           }
-        } 
-        else if (question.type === 'fillblank') {
-          userAnswerDisplay = userAnswer.join('<br>');
-        } 
-        else {
-          userAnswerDisplay = userAnswer.join(', ');
+        } else if (question.type === 'fillblank') {
+          userAnswerDisplay = userAnswerRaw.join('<br>');
+        } else {
+          userAnswerDisplay = userAnswerRaw.join(', ');
         }
-      } else {
-        userAnswerDisplay = String(userAnswer || '—');
+      } else if (userAnswerRaw) {
+        userAnswerDisplay = String(userAnswerRaw);
       }
 
       let correctAnswerDisplay = '—';
       if (question.type === 'matching') {
-        const pairs = question.correctPairs || 
-                     (question.pairs || []).map(p => [p.left, p.right]);
+        const pairs = question.correctPairs || (question.pairs || []).map(p => [p.left, p.right]);
         correctAnswerDisplay = pairs.map(pair => 
           `${pair[0] || '—'} → ${pair[1] || '—'}`
         ).join('<br>');
