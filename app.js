@@ -2677,7 +2677,7 @@ app.get('/test/question', checkAuth, async (req, res) => {
             <div id="answers">
     `;
 
-        // ==================== MATCHING ====================
+    // ==================== MATCHING ====================
     if (q.type === 'matching' && q.pairs) {
       const leftItems = q.pairs.map(p => p.left);
       const rightItems = shuffleArray([...q.pairs.map(p => p.right)]);
@@ -2688,70 +2688,20 @@ app.get('/test/question', checkAuth, async (req, res) => {
             <h4 style="margin-bottom:15px;color:#333;text-align:center;">Терміни</h4>
             ${leftItems.map(item => {
               const escaped = item.replace(/'/g, "\\'").replace(/"/g, '\\"');
-              return `<div class="matching-item draggable" data-value="${escaped}">${item}</div>`;
+              return `<div class="matching-item draggable" data-left="${escaped}">${item}</div>`;
             }).join('')}
           </div>
           <div class="matching-column" id="right-column-${index}">
             <h4 style="margin-bottom:15px;color:#333;text-align:center;">Відповіді (сортуйте)</h4>
             ${rightItems.map(item => {
               const escaped = item.replace(/'/g, "\\'").replace(/"/g, '\\"');
-              return `<div class="matching-item draggable" data-value="${escaped}">${item}</div>`;
+              return `<div class="matching-item draggable" data-right="${escaped}">${item}</div>`;
             }).join('')}
           </div>
         </div>
 
         <button onclick="resetMatching(${index})" style="margin-top:15px;">Скинути порядок</button>
-
-        <script>
-          let currentMatchingPairs${index} = [];
-
-          new Sortable(document.getElementById('left-column-${index}'), {
-            animation: 150,
-            onEnd: () => updateMatchingPairs${index}()
-          });
-
-          new Sortable(document.getElementById('right-column-${index}'), {
-            animation: 150,
-            onEnd: () => updateMatchingPairs${index}()
-          });
-
-          function updateMatchingPairs${index}() {
-            const leftItems = Array.from(document.querySelectorAll('#left-column-${index} .matching-item'));
-            const rightItems = Array.from(document.querySelectorAll('#right-column-${index} .matching-item'));
-
-            currentMatchingPairs${index} = [];
-            const minLen = Math.min(leftItems.length, rightItems.length);
-
-            for (let i = 0; i < minLen; i++) {
-              const l = (leftItems[i].dataset.value || '').trim();
-              const r = (rightItems[i].dataset.value || '').trim();
-              if (l || r) currentMatchingPairs${index}.push([l, r]);
-            }
-
-            window.currentAnswers = window.currentAnswers || {};
-            window.currentAnswers[${index}] = currentMatchingPairs${index};
-          }
-
-          function resetMatching(idx) {
-            if (confirm('Скинути порядок?')) location.reload();
-          }
-
-          function equalizeMatchingHeights${index}() {
-            const items = document.querySelectorAll('#matching-${index} .matching-item');
-            let maxH = 0;
-            items.forEach(item => {
-              item.style.height = 'auto';
-              maxH = Math.max(maxH, item.getBoundingClientRect().height);
-            });
-            items.forEach(item => item.style.height = maxH + 'px');
-          }
-
-          window.addEventListener('load', () => {
-            equalizeMatchingHeights${index}();
-            updateMatchingPairs${index}();
-          });
-        </script>
-      `;
+      `;    
     } else if (!q.options || q.options.length === 0) {
       if (q.type !== 'fillblank') {
         const userAnswer = answers[index] || '';
@@ -2831,30 +2781,27 @@ app.get('/test/question', checkAuth, async (req, res) => {
             let hasMovedToNext = false;
             let questionStartTime = ${questionStartTimeObj[index]};
 
-            // Функція переходу на інше питання
-            function goToQuestion(targetIndex) {
-              if (targetIndex === currentQuestionIndex) return;
-              saveCurrentAnswer(currentQuestionIndex).then(() => {
-                window.location.href = '/test/question?index=' + targetIndex;
-              }).catch(err => {
-                console.error('Помилка перед переходом:', err);
-                window.location.href = '/test/question?index=' + targetIndex;
-              });
+            // ==================== MATCHING ====================
+            let currentMatchingPairs = [];
+
+            function updateMatchingPairs() {
+              const leftItems = Array.from(document.querySelectorAll('#left-column-${index} .matching-item'));
+              const rightItems = Array.from(document.querySelectorAll('#right-column-${index} .matching-item'));
+              
+              currentMatchingPairs = [];
+              const minLen = Math.min(leftItems.length, rightItems.length);
+
+              for (let i = 0; i < minLen; i++) {
+                const leftVal = (leftItems[i].dataset.left || '').trim();
+                const rightVal = (rightItems[i].dataset.right || '').trim();
+                if (leftVal || rightVal) {
+                  currentMatchingPairs.push([leftVal, rightVal]);
+                }
+              }
             }
 
-            // Вирівнювання висоти всіх matching-item
-            function equalizeMatchingHeights() {
-              const allItems = document.querySelectorAll('.matching-item');
-              if (allItems.length === 0) return;
-              let maxHeight = 0;
-              allItems.forEach(item => {
-                item.style.height = 'auto';
-                const height = item.getBoundingClientRect().height;
-                if (height > maxHeight) maxHeight = height;
-              });
-              allItems.forEach(item => {
-                item.style.height = maxHeight + 'px';
-              });
+            function resetMatching(idx) {
+              if (confirm('Скинути порядок?')) location.reload();
             }
 
             // Автозбереження відповіді
@@ -2877,20 +2824,9 @@ app.get('/test/question', checkAuth, async (req, res) => {
                                     .map(el => el.dataset.value.trim());
                 } 
                 else if (document.getElementById('left-column-' + index)) {
-                  // === MATCHING — ВАЖЛИВЕ ВИПРАВЛЕННЯ ===
-                  const leftItems = Array.from(document.querySelectorAll('#left-column-' + index + ' .matching-item'));
-                  const rightItems = Array.from(document.querySelectorAll('#right-column-' + index + ' .matching-item'));
-                  
-                  answerData = [];
-                  const minLen = Math.min(leftItems.length, rightItems.length);
-
-                  for (let i = 0; i < minLen; i++) {
-                    const leftVal = (leftItems[i].dataset.value || '').trim();
-                    const rightVal = (rightItems[i].dataset.value || '').trim();
-                    if (leftVal || rightVal) {
-                      answerData.push([leftVal, rightVal]);   // <-- Масив пар!
-                    }
-                  }
+                  // === MATCHING — ВИПРАВЛЕНО ===
+                  updateMatchingPairs();
+                  answerData = currentMatchingPairs;
                 } 
                 else {
                   answerData = Array.from(document.querySelectorAll('.option-box.selected'))
@@ -2933,8 +2869,9 @@ app.get('/test/question', checkAuth, async (req, res) => {
                   answers = document.getElementById('q' + index + '_input').value;
                 } else if (document.getElementById('sortable-options')) {
                   answers = Array.from(document.querySelectorAll('#sortable-options .option-box')).map(el => el.dataset.value);
-                } else if (document.getElementById('left-column')) {
-                  answers = matchingPairs;
+                } else if ('${q.type}' === 'matching') {
+                  updateMatchingPairs();
+                  answers = currentMatchingPairs;
                 } else if ('${q.type}' === 'fillblank') {
                   answers = [];
                   for (let i = 0; i < ${q.blankCount || 1}; i++) {
@@ -2995,8 +2932,9 @@ app.get('/test/question', checkAuth, async (req, res) => {
                   answers = document.getElementById('q' + index + '_input').value;
                 } else if (document.getElementById('sortable-options')) {
                   answers = Array.from(document.querySelectorAll('#sortable-options .option-box')).map(el => el.dataset.value);
-                } else if (document.getElementById('left-column')) {
-                  answers = matchingPairs;
+                } else if ('${q.type}' === 'matching') {
+                  updateMatchingPairs();
+                  answers = currentMatchingPairs;
                 } else if ('${q.type}' === 'fillblank') {
                   answers = [];
                   for (let i = 0; i < ${q.blankCount || 1}; i++) {
@@ -3170,76 +3108,25 @@ app.get('/test/question', checkAuth, async (req, res) => {
               new Sortable(sortable, { animation: 150 });
             }
 
-            const leftColumn = document.getElementById('left-column');
-            const rightColumn = document.getElementById('right-column');
-            if (leftColumn && rightColumn && '${q.type}' === 'matching') {
-              new Sortable(leftColumn, {
-                group: 'matching',
-                animation: 150,
-                onStart: function(evt) { evt.item.classList.add('dragging'); },
-                onEnd: function(evt) { evt.item.classList.remove('dragging'); updateMatchingPairs(); equalizeMatchingHeights(); }
-              });
-              new Sortable(rightColumn, {
-                group: 'matching',
-                animation: 150,
-                onStart: function(evt) { evt.item.classList.add('dragging'); },
-                onEnd: function(evt) { evt.item.classList.remove('dragging'); updateMatchingPairs(); equalizeMatchingHeights(); }
-              });
-
-              function updateMatchingPairs() {
-                matchingPairs = [];
-                const leftItems = Array.from(document.querySelectorAll('#left-column .draggable'));
-                const rightItems = Array.from(document.querySelectorAll('#right-column .droppable'));
-                rightItems.forEach((rightItem, idx) => {
-                  const rightValue = rightItem.dataset.value || '';
-                  const leftItem = leftItems[idx];
-                  const leftValue = leftItem ? leftItem.dataset.value || '' : '';
-                  if (leftValue && rightValue) {
-                    matchingPairs.push([leftValue, rightValue]);
-                  }
+            // Ініціалізація Sortable для matching
+            window.addEventListener('load', () => {
+              const leftColumn = document.getElementById('left-column-${index}');
+              const rightColumn = document.getElementById('right-column-${index}');
+              if (leftColumn && rightColumn && '${q.type}' === 'matching') {
+                new Sortable(leftColumn, {
+                  animation: 150,
+                  group: 'matching',
+                  onEnd: updateMatchingPairs
+                });
+                new Sortable(rightColumn, {
+                  animation: 150,
+                  group: 'matching',
+                  onEnd: updateMatchingPairs
                 });
               }
-
-              function resetMatchingPairs() {
-                matchingPairs = [];
-                const rightItems = document.querySelectorAll('#right-column .droppable');
-                rightItems.forEach(item => {
-                  const rightValue = item.dataset.value || '';
-                  item.innerHTML = rightValue;
-                });
-                equalizeMatchingHeights();
-              }
-
-              const droppableItems = document.querySelectorAll('.droppable');
-              droppableItems.forEach(item => {
-                item.addEventListener('dragover', (e) => e.preventDefault());
-                item.addEventListener('drop', (e) => {
-                  e.preventDefault();
-                  const draggable = document.querySelector('.dragging');
-                  if (draggable && draggable.classList.contains('draggable')) {
-                    const leftValue = draggable.dataset.value || '';
-                    const rightValue = item.dataset.value || '';
-                    if (leftValue && rightValue) {
-                      item.innerHTML = rightValue + ' <span class="matched"> (Зіставлено: ' + leftValue + ')</span>';
-                      const leftColumn = document.getElementById('left-column');
-                      const rightColumn = document.getElementById('right-column');
-                      const leftItems = Array.from(leftColumn.children);
-                      const rightItems = Array.from(rightColumn.children);
-                      const rightIndex = rightItems.indexOf(item);
-                      if (leftItems[rightIndex]) {
-                        leftColumn.insertBefore(draggable, leftItems[rightIndex]);
-                      } else {
-                        leftColumn.appendChild(draggable);
-                      }
-                      updateMatchingPairs();
-                      equalizeMatchingHeights();
-                    }
-                  }
-                });
-              });
-
-              window.addEventListener('load', equalizeMatchingHeights);
-            }
+              equalizeMatchingHeights();
+              updateGlobalTimer();
+            });
 
             function equalizeMatchingHeights() {
               const allItems = document.querySelectorAll('.matching-item');
