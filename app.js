@@ -2348,6 +2348,33 @@ app.get('/test/question', checkAuth, async (req, res) => {
               text-align: center;
               margin-bottom: 15px;
             }
+            .image-container {
+              text-align: center;
+              margin: 20px 0 25px 0;
+              padding: 10px;
+              background: #f8f9fa;
+              border-radius: 12px;
+              border: 1px solid #eee;
+            }
+
+            .question-image {
+              max-width: 100%;
+              max-height: 380px;           /* ← головне обмеження по висоті */
+              width: auto;
+              height: auto;
+              object-fit: contain;         /* зберігає пропорції */
+              border-radius: 8px;
+              box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+              display: block;
+              margin: 0 auto;
+            }
+
+            @media (max-width: 600px) {
+              .question-image {
+                max-height: 280px;
+              }
+            }
+              
             img {
               max-width: 100%;
               margin: 15px auto;
@@ -2636,9 +2663,11 @@ app.get('/test/question', checkAuth, async (req, res) => {
 
     if (q.picture && q.picture.trim() !== '') {
       html += `
-        <div id="image-container">
-          <img src="${q.picture}" alt="Picture" onerror="this.style.display='none'; document.getElementById('image-error').style.display='block';">
-          <div id="image-error" class="image-error" style="display: none;">Зображення недоступне</div>
+        <div class="image-container">
+          <img src="${q.picture}" 
+               alt="Ілюстрація" 
+               class="question-image"
+               onerror="this.parentElement.style.display='none';">
         </div>
       `;
     }
