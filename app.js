@@ -3333,17 +3333,13 @@ app.post('/set-question-start-time', checkAuth, async (req, res) => {
 app.post('/answer', checkAuth, express.urlencoded({ extended: true }), async (req, res) => {
   const startTime = Date.now();
   try {
-    if (req.user === 'admin') return res.redirect('/admin');
-
     const { index, answer, timeAway, switchCount, responseTime, activityCount } = req.body;
 
     logger.info('[ANSWER DEBUG]', { 
       index, 
       answerType: typeof answer, 
-      rawAnswer: answer,
-      isArray: Array.isArray(answer),
-      answerLength: Array.isArray(answer) ? answer.length : null,
-      firstElement: Array.isArray(answer) ? answer[0] : null
+      rawAnswer: JSON.stringify(answer),
+      isArray: Array.isArray(answer)
     });
 
     if (!index || answer === undefined) {
@@ -3352,62 +3348,58 @@ app.post('/answer', checkAuth, express.urlencoded({ extended: true }), async (re
 
     let parsedAnswer = [];
 
+    // Парсинг
     try {
-      if (typeof answer === 'string') {
-        if (answer.trim() === '') {
-          parsedAnswer = [];
-        } else {
-          parsedAnswer = JSON.parse(answer);
-        }
+      if (typeof answer === 'string' && answer.trim() !== '') {
+        parsedAnswer = JSON.parse(answer);
       } else if (Array.isArray(answer)) {
         parsedAnswer = answer;
       }
     } catch (e) {
-      logger.error('[ANSWER] Помилка парсингу JSON', { answer });
-      parsedAnswer = [];
+      logger.warn('[ANSWER] Не вдалося розпарсити JSON, використовуємо як є', { answer });
+      parsedAnswer = Array.isArray(answer) ? answer : [];
     }
 
-    // === ОБРОБКА MATCHING ===
-    let isMatching = false;
-    try {
-      const userTestCheck = await db.collection('active_tests').findOne({ user: req.user });
-      if (userTestCheck?.questions?.[index]?.type === 'matching') {
-        isMatching = true;
+    // === СПЕЦІАЛЬНА ОБРОБКА MATCHING ===
+    const userTestCheck = await db.collection('active_tests').findOne({ user: req.user });
+    const q = userTestCheck?.questions?.[parseInt(index)];
 
-        logger.info('[ANSWER MATCHING]', { 
-          index, 
-          rawParsed: parsedAnswer, 
-          length: Array.isArray(parsedAnswer) ? parsedAnswer.length : 0,
-          firstType: Array.isArray(parsedAnswer) ? typeof parsedAnswer[0] : null 
-        });
+    if (q?.type === 'matching') {
+      logger.info('[ANSWER MATCHING RAW]', { 
+        index, 
+        raw: parsedAnswer, 
+        length: Array.isArray(parsedAnswer) ? parsedAnswer.length : 0 
+      });
 
-        if (Array.isArray(parsedAnswer) && parsedAnswer.length > 0) {
+      if (Array.isArray(parsedAnswer) && parsedAnswer.length > 0) {
 
-          // 1. Об'єкти {left, right}
-          if (typeof parsedAnswer[0] === 'object' && parsedAnswer[0] !== null && !Array.isArray(parsedAnswer[0])) {
-            parsedAnswer = parsedAnswer.map(p => [p.left || '', p.right || '']);
-            logger.info('[ANSWER] Matching: конвертовано з об’єктів', { index });
-          }
-          // 2. Плоский масив ["Ліва", "Права", ...]
-          else if (parsedAnswer.length % 2 === 0 && typeof parsedAnswer[0] !== 'object') {
-            const pairs = [];
-            for (let i = 0; i < parsedAnswer.length; i += 2) {
-              pairs.push([String(parsedAnswer[i] || ''), String(parsedAnswer[i + 1] || '')]);
-            }
-            parsedAnswer = pairs;
-            logger.info('[ANSWER] Matching: конвертовано з плоского масиву', { index });
-          }
-          // 3. Рядки з "→"
-          else if (typeof parsedAnswer[0] === 'string' && parsedAnswer.some(s => String(s).includes('→'))) {
-            parsedAnswer = parsedAnswer.map(str => {
-              const parts = String(str).split('→').map(s => s.trim());
-              return [parts[0] || '', parts[1] || ''];
-            });
-          }
+        // Варіант 1: вже масив пар
+        if (Array.isArray(parsedAnswer[0]) && parsedAnswer[0].length === 2) {
+          // все добре
         }
+        // Варіант 2: плоский масив ["Ліва1", "Права1", "Ліва2", "Права2"]
+        else if (parsedAnswer.length % 2 === 0) {
+          const pairs = [];
+          for (let i = 0; i < parsedAnswer.length; i += 2) {
+            pairs.push([
+              String(parsedAnswer[i] || '').trim(),
+              String(parsedAnswer[i + 1] || '').trim()
+            ]);
+          }
+          parsedAnswer = pairs;
+          logger.info('[ANSWER] Matching: перетворено плоский масив в пари', { pairsCount: pairs.length });
+        }
+        // Варіант 3: рядки з "→"
+        else if (typeof parsedAnswer[0] === 'string' && parsedAnswer[0].includes('→')) {
+          parsedAnswer = parsedAnswer.map(str => {
+            const [left, right] = String(str).split('→').map(s => s.trim());
+            return [left || '', right || ''];
+          });
+        }
+      } else {
+        logger.warn('[ANSWER] Matching: порожня відповідь', { index });
+        parsedAnswer = [];
       }
-    } catch (e) {
-      logger.error('[ANSWER] Помилка перевірки типу питання', { error: e.message });
     }
 
     // Збереження
@@ -3422,17 +3414,17 @@ app.post('/answer', checkAuth, express.urlencoded({ extended: true }), async (re
       }
     );
 
-    logger.info('[ANSWER] Успішно збережено', { 
+    logger.info('[ANSWER SUCCESS]', { 
       index, 
-      isMatching,
-      finalLength: Array.isArray(parsedAnswer) ? parsedAnswer.length : 0,
+      type: q?.type || 'unknown',
+      savedPairs: Array.isArray(parsedAnswer) && q?.type === 'matching' ? parsedAnswer.length : 0,
       firstPair: Array.isArray(parsedAnswer) && parsedAnswer.length > 0 ? parsedAnswer[0] : null
     });
 
     res.json({ success: true });
 
   } catch (error) {
-    logger.error('[ANSWER] Критична помилка', { message: error.message, stack: error.stack });
+    logger.error('[ANSWER CRITICAL ERROR]', { message: error.message, stack: error.stack });
     res.status(500).json({ success: false, error: 'Не вдалося зберегти відповідь' });
   } finally {
     logger.info('Маршрут /answer виконано', { duration: Date.now() - startTime });
