@@ -2917,7 +2917,6 @@ app.get('/test/question', checkAuth, async (req, res) => {
                 window.location.href = '/test/question?index=' + targetIndex;
               }).catch(err => {
                 console.error('Помилка збереження при переході:', err);
-                // Все одно переходимо
                 window.location.href = '/test/question?index=' + targetIndex;
               });
             }
@@ -2941,7 +2940,6 @@ app.get('/test/question', checkAuth, async (req, res) => {
               }
             }
 
-            // === Відновлення порядку пар при поверненні назад ===
             function restoreMatchingOrder(savedPairs) {
               if (!savedPairs || !Array.isArray(savedPairs) || savedPairs.length === 0) return;
 
@@ -2959,7 +2957,7 @@ app.get('/test/question', checkAuth, async (req, res) => {
                 );
                 
                 if (correctItem) {
-                  rightColumn.appendChild(correctItem); // переміщуємо в потрібну позицію
+                  rightColumn.appendChild(correctItem);
                 }
               });
             }
@@ -2968,7 +2966,7 @@ app.get('/test/question', checkAuth, async (req, res) => {
               if (confirm('Скинути порядок?')) location.reload();
             }
 
-            // Автозбереження відповіді
+            // Головна функція збереження
             async function saveCurrentAnswer(index) {
               if (isSaving) return;
               isSaving = true;
@@ -2976,9 +2974,13 @@ app.get('/test/question', checkAuth, async (req, res) => {
               try {
                 let answerData = [];
 
-                if (document.querySelector('.fillblank-question')) {
-                  answerData = Array.from(document.querySelectorAll('.blank-input'))
-                                    .map(el => el.value.trim());
+                // === FILLBLANK — точна логіка як у saveAndNext ===
+                if ('${q.type}' === 'fillblank' || document.querySelector('.fillblank-question')) {
+                  answerData = [];
+                  for (let i = 0; i < ${q.blankCount || 1}; i++) {
+                    const input = document.getElementById('blank_' + i);
+                    answerData.push(input ? input.value.trim() : '');
+                  }
                   console.log('[SAVE FILLBLANK] Питання ' + index + ' — збережено ' + answerData.length + ' пропусків', answerData);
                 } 
                 else if (document.getElementById('q' + index + '_input')) {
@@ -2991,6 +2993,7 @@ app.get('/test/question', checkAuth, async (req, res) => {
                 else if (document.getElementById('left-column-' + index)) {
                   updateMatchingPairs();
                   answerData = currentMatchingPairs;
+                  console.log('[SAVE MATCHING] Питання ' + index + ' — збережено ' + answerData.length + ' пар', answerData);
                 } 
                 else {
                   answerData = Array.from(document.querySelectorAll('.option-box.selected'))
@@ -3014,15 +3017,18 @@ app.get('/test/question', checkAuth, async (req, res) => {
                   body: formData
                 });
 
-                if (!resp.ok) throw new Error('HTTP ' + resp.status);
+                if (resp.ok) {
+                  console.log('[SAVE SUCCESS] Питання ' + index + ' успішно збережено');
+                } else {
+                  console.error('[SAVE FAILED] HTTP ' + resp.status + ' для питання ' + index);
+                }
               } catch (err) {
-                console.error('Помилка збереження:', err);
+                console.error('Помилка збереження питання ' + index + ':', err);
               } finally {
                 isSaving = false;
               }
             }
 
-            // Збереження + наступне питання
             async function saveAndNext(index) {
               if (isSaving) return;
               isSaving = true;
@@ -3073,19 +3079,14 @@ app.get('/test/question', checkAuth, async (req, res) => {
                       setTimeout(() => window.location.href = '/result', 300);
                     }
                   });
-                } else {
-                  console.error('Помилка збереження:', result.error);
-                  alert('Помилка збереження відповіді');
                 }
               } catch (error) {
                 console.error('Помилка в saveAndNext:', error);
-                alert('Не вдалося зберегти відповідь');
               } finally {
                 isSaving = false;
               }
             }
 
-            // Завершення тесту
             async function finishTest(index) {
               if (isSaving) return;
               isSaving = true;
@@ -3274,8 +3275,8 @@ app.get('/test/question', checkAuth, async (req, res) => {
 
             // Ініціалізація Sortable для matching
             window.addEventListener('load', () => {
-              const leftColumn = document.getElementById('left-column-${index}');
-              const rightColumn = document.getElementById('right-column-${index}');
+              const leftColumn = document.getElementById('left-column-' + currentQuestionIndex);
+              const rightColumn = document.getElementById('right-column-' + currentQuestionIndex);
               if (leftColumn && rightColumn && '${q.type}' === 'matching') {
                 new Sortable(leftColumn, {
                   animation: 150,
@@ -3287,6 +3288,12 @@ app.get('/test/question', checkAuth, async (req, res) => {
                   group: 'matching',
                   onEnd: updateMatchingPairs
                 });
+
+                if (matchingPairs && matchingPairs.length > 0) {
+                  setTimeout(() => {
+                    restoreMatchingOrder(matchingPairs);
+                  }, 100);
+                }
               }
               equalizeMatchingHeights();
               updateGlobalTimer();
@@ -3323,21 +3330,17 @@ app.get('/test/question', checkAuth, async (req, res) => {
                   timerCircle.style.strokeDashoffset = offset;
                 }
 
-                // === ВИПРАВЛЕННЯ: Автоматичне завершення тесту ===
                 if (questionTimeRemaining <= 0) {
                   clearInterval(questionTimerInterval);
                   
                   if (currentQuestionIndex === totalQuestions - 1) {
-                    // Це останнє питання — зберігаємо відповідь і завершуємо тест
                     hasMovedToNext = true;
                     saveCurrentAnswer(currentQuestionIndex).then(() => {
-                      // Перехід на результат
                       window.location.href = '/result';
                     }).catch(() => {
                       window.location.href = '/result';
                     });
                   } else if (currentQuestionIndex < totalQuestions - 1 && !hasMovedToNext) {
-                    // Не останнє питання — переходимо далі
                     hasMovedToNext = true;
                     saveCurrentAnswer(currentQuestionIndex).then(() => {
                       saveAndNext(currentQuestionIndex);
