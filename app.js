@@ -2917,6 +2917,7 @@ app.get('/test/question', checkAuth, async (req, res) => {
                 window.location.href = '/test/question?index=' + targetIndex;
               }).catch(err => {
                 console.error('Помилка збереження при переході:', err);
+                // Все одно переходимо
                 window.location.href = '/test/question?index=' + targetIndex;
               });
             }
@@ -2940,6 +2941,7 @@ app.get('/test/question', checkAuth, async (req, res) => {
               }
             }
 
+            // === Відновлення порядку пар при поверненні назад ===
             function restoreMatchingOrder(savedPairs) {
               if (!savedPairs || !Array.isArray(savedPairs) || savedPairs.length === 0) return;
 
@@ -2957,7 +2959,7 @@ app.get('/test/question', checkAuth, async (req, res) => {
                 );
                 
                 if (correctItem) {
-                  rightColumn.appendChild(correctItem);
+                  rightColumn.appendChild(correctItem); // переміщуємо в потрібну позицію
                 }
               });
             }
@@ -2966,7 +2968,7 @@ app.get('/test/question', checkAuth, async (req, res) => {
               if (confirm('Скинути порядок?')) location.reload();
             }
 
-            // Головна функція збереження
+            // Автозбереження відповіді
             async function saveCurrentAnswer(index) {
               if (isSaving) return;
               isSaving = true;
@@ -2989,7 +2991,6 @@ app.get('/test/question', checkAuth, async (req, res) => {
                 else if (document.getElementById('left-column-' + index)) {
                   updateMatchingPairs();
                   answerData = currentMatchingPairs;
-                  console.log('[SAVE MATCHING] Питання ' + index + ' — збережено ' + answerData.length + ' пар', answerData);
                 } 
                 else {
                   answerData = Array.from(document.querySelectorAll('.option-box.selected'))
@@ -3013,18 +3014,15 @@ app.get('/test/question', checkAuth, async (req, res) => {
                   body: formData
                 });
 
-                if (resp.ok) {
-                  console.log('[SAVE SUCCESS] Питання ' + index + ' успішно збережено');
-                } else {
-                  console.error('[SAVE FAILED] HTTP ' + resp.status + ' для питання ' + index);
-                }
+                if (!resp.ok) throw new Error('HTTP ' + resp.status);
               } catch (err) {
-                console.error('Помилка збереження питання ' + index + ':', err);
+                console.error('Помилка збереження:', err);
               } finally {
                 isSaving = false;
               }
             }
 
+            // Збереження + наступне питання
             async function saveAndNext(index) {
               if (isSaving) return;
               isSaving = true;
@@ -3075,14 +3073,19 @@ app.get('/test/question', checkAuth, async (req, res) => {
                       setTimeout(() => window.location.href = '/result', 300);
                     }
                   });
+                } else {
+                  console.error('Помилка збереження:', result.error);
+                  alert('Помилка збереження відповіді');
                 }
               } catch (error) {
                 console.error('Помилка в saveAndNext:', error);
+                alert('Не вдалося зберегти відповідь');
               } finally {
                 isSaving = false;
               }
             }
 
+            // Завершення тесту
             async function finishTest(index) {
               if (isSaving) return;
               isSaving = true;
@@ -3271,8 +3274,8 @@ app.get('/test/question', checkAuth, async (req, res) => {
 
             // Ініціалізація Sortable для matching
             window.addEventListener('load', () => {
-              const leftColumn = document.getElementById('left-column-' + currentQuestionIndex);
-              const rightColumn = document.getElementById('right-column-' + currentQuestionIndex);
+              const leftColumn = document.getElementById('left-column-${index}');
+              const rightColumn = document.getElementById('right-column-${index}');
               if (leftColumn && rightColumn && '${q.type}' === 'matching') {
                 new Sortable(leftColumn, {
                   animation: 150,
@@ -3284,12 +3287,6 @@ app.get('/test/question', checkAuth, async (req, res) => {
                   group: 'matching',
                   onEnd: updateMatchingPairs
                 });
-
-                if (matchingPairs && matchingPairs.length > 0) {
-                  setTimeout(() => {
-                    restoreMatchingOrder(matchingPairs);
-                  }, 100);
-                }
               }
               equalizeMatchingHeights();
               updateGlobalTimer();
@@ -3326,17 +3323,21 @@ app.get('/test/question', checkAuth, async (req, res) => {
                   timerCircle.style.strokeDashoffset = offset;
                 }
 
+                // === ВИПРАВЛЕННЯ: Автоматичне завершення тесту ===
                 if (questionTimeRemaining <= 0) {
                   clearInterval(questionTimerInterval);
                   
                   if (currentQuestionIndex === totalQuestions - 1) {
+                    // Це останнє питання — зберігаємо відповідь і завершуємо тест
                     hasMovedToNext = true;
                     saveCurrentAnswer(currentQuestionIndex).then(() => {
+                      // Перехід на результат
                       window.location.href = '/result';
                     }).catch(() => {
                       window.location.href = '/result';
                     });
                   } else if (currentQuestionIndex < totalQuestions - 1 && !hasMovedToNext) {
+                    // Не останнє питання — переходимо далі
                     hasMovedToNext = true;
                     saveCurrentAnswer(currentQuestionIndex).then(() => {
                       saveAndNext(currentQuestionIndex);
@@ -3998,63 +3999,26 @@ app.get('/result', checkAuth, async (req, res) => {
           </div>
 
           <script>
-            const user = "${req.user.replace(/"/g, '\\"')}";
-            const testName = "${testNames[testNumber]?.name?.replace(/"/g, '\\"') || 'Невідомий тест'}";
-            const totalQuestionsVal = ${totalQuestions};
-            const correctClicksVal = ${correctClicks};
-            const scoreVal = ${Math.round(score)};
-            const totalPointsVal = ${Math.round(totalPoints)};
-            const percentageVal = ${Math.round(percentage)};
-            const timeVal = "${formattedTime.replace(/"/g, '\\"')}";
-            const dateVal = "${formattedDate.replace(/"/g, '\\"')}";
-            const imageBase64Val = "${imageBase64.replace(/"/g, '\\"')}";
-
             document.addEventListener('DOMContentLoaded', () => {
-              const exportBtn = document.getElementById('exportPDF');
-              const restartBtn = document.getElementById('restart');
-
-              if (exportBtn) {
-                exportBtn.addEventListener('click', () => {
-                  if (typeof pdfMake === 'undefined' || !pdfMake.createPdf) {
-                    alert('PDF-генератор не завантажився. Оновіть сторінку або перевірте інтернет.');
-                    return;
+              document.getElementById('exportPDF').addEventListener('click', () => {
+                const docDefinition = {
+                  content: [
+                    { text: 'Результат тесту користувача ' + "${req.user}" + ' з тесту ' + "${testNames[testNumber]?.name || 'Тест'}", style: 'header' },
+                    { text: 'Кількість питань: ${totalQuestions}', margin: [0, 10, 0, 0] },
+                    { text: 'Правильних відповідей: ${correctClicks}', margin: [0, 5, 0, 0] },
+                    { text: 'Набрано балів: ${Math.round(score)}', margin: [0, 5, 0, 0] },
+                    { text: 'Максимально можлива кількість балів: ${Math.round(totalPoints)}', margin: [0, 5, 0, 0] }
+                  ],
+                  styles: {
+                    header: { fontSize: 18, bold: true, margin: [0, 0, 0, 10] }
                   }
+                };
+                pdfMake.createPdf(docDefinition).download('результат.pdf');
+              });
 
-                  const docDefinition = {
-                    content: [
-                      imageBase64Val ? {
-                        image: 'data:image/png;base64,' + imageBase64Val,
-                        width: 50,
-                        alignment: 'center',
-                        margin: [0, 0, 0, 20]
-                      } : { text: 'Логотип відсутній', alignment: 'center', margin: [0, 0, 0, 20] },
-                      { text: 'Результат тесту користувача ' + user + ' з тесту ' + testName + ' складає ' + percentageVal + '%', style: 'header' },
-                      { text: 'Кількість питань: ' + totalQuestionsVal, lineHeight: 2 },
-                      { text: 'Правильних відповідей: ' + correctClicksVal, lineHeight: 2 },
-                      { text: 'Набрано балів: ' + scoreVal, lineHeight: 2 },
-                      { text: 'Максимально можлива кількість балів: ' + totalPointsVal, lineHeight: 2 },
-                      {
-                        columns: [
-                          { text: 'Час: ' + timeVal, width: '50%', lineHeight: 2 },
-                          { text: 'Дата: ' + dateVal, width: '50%', alignment: 'right', lineHeight: 2 }
-                        ],
-                        margin: [0, 10, 0, 0]
-                      }
-                    ],
-                    styles: {
-                      header: { fontSize: 14, bold: true, margin: [0, 0, 0, 10], lineHeight: 2 }
-                    }
-                  };
-
-                  pdfMake.createPdf(docDefinition).download(user + '_результат.pdf');                  
-                });
-              }
-
-              if (restartBtn) {
-                restartBtn.addEventListener('click', () => {
-                  window.location.href = '/select-test';
-                });
-              }
+              document.getElementById('restart').addEventListener('click', () => {
+                window.location.href = '/select-test';
+              });
             });
           </script>
         </body>
