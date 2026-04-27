@@ -6469,19 +6469,36 @@ app.get('/admin/view-result', checkAuth, async (req, res) => {
 
     const switchCount = result.suspiciousActivity?.switchCount || 0;
 
-    // Середній час відповіді
+    // === СЕРЕДНІЙ ЧАС ВІДПОВІДІ — ВИПРАВЛЕНО З ЛОГУВАННЯМ ===
     let totalResponseTime = 0;
     let answeredQuestions = 0;
-    const responseTimes = result.answerTimestamps || result.suspiciousActivity?.responseTimes || {};
 
-    Object.keys(responseTimes).forEach(key => {
-      const t = parseFloat(responseTimes[key]);
-      if (t > 0) {
-        totalResponseTime += t;
+    console.log('[VIEW-RESULT] answerTimestamps:', result.answerTimestamps);
+    console.log('[VIEW-RESULT] suspiciousActivity.responseTimes:', result.suspiciousActivity?.responseTimes);
+
+    const responseTimes = {
+      ...(result.answerTimestamps || {}),
+      ...(result.suspiciousActivity?.responseTimes || {})
+    };
+
+    questions.forEach((_, idx) => {
+      const time = responseTimes[idx] || responseTimes[String(idx)] || 0;
+      if (time > 0) {
+        totalResponseTime += parseFloat(time);
         answeredQuestions++;
       }
     });
-    const avgResponseTime = answeredQuestions > 0 ? (totalResponseTime / answeredQuestions).toFixed(1) : 0;
+
+    const avgResponseTime = answeredQuestions > 0 
+      ? (totalResponseTime / answeredQuestions).toFixed(1) 
+      : 0;
+
+    logger.info('[VIEW-RESULT] Середній час', { 
+      answeredQuestions, 
+      totalResponseTime, 
+      avgResponseTime,
+      hasAnswerTimestamps: !!result.answerTimestamps 
+    });
 
     const totalActivityCount = result.suspiciousActivity?.activityCounts
       ? result.suspiciousActivity.activityCounts.reduce((sum, c) => sum + (c || 0), 0)
