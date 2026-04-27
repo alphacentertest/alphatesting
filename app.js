@@ -2941,59 +2941,27 @@ app.get('/test/question', checkAuth, async (req, res) => {
               }
             }
 
-            function restoreMatchingOrder(savedPairs) {
-              if (!savedPairs || !Array.isArray(savedPairs) || savedPairs.length === 0) {
-                console.log('[RESTORE MATCHING] Немає збережених пар');
-                return;
-              }
+                        function restoreMatchingOrder(savedPairs) {
+              if (!savedPairs || !Array.isArray(savedPairs) || savedPairs.length === 0) return;
 
               const rightColumn = document.getElementById('right-column-' + currentQuestionIndex);
               if (!rightColumn) return;
 
-              console.log('[RESTORE MATCHING] Відновлюємо', savedPairs.length, 'пар');
-
-              // Збираємо всі існуючі елементи правої колонки
               const allRightItems = Array.from(rightColumn.querySelectorAll('.matching-item'));
-              
-              // Повністю очищаємо праву колонку
-              rightColumn.innerHTML = '';
 
-              // Додаємо елементи строго в потрібному порядку
-              savedPairs.forEach((pair, idx) => {
+              savedPairs.forEach((pair) => {
                 const targetRightText = (pair[1] || '').trim();
                 
-                // Знаходимо потрібний елемент
-                let item = allRightItems.find(el => 
-                  (el.dataset.right || '').trim() === targetRightText
+                const correctItem = allRightItems.find(item => 
+                  (item.dataset.right || '').trim() === targetRightText
                 );
 
-                if (item) {
-                  rightColumn.appendChild(item);
-                } else {
-                  // Якщо не знайшли — беремо перший доступний (захист)
-                  const fallback = allRightItems.find(el => !rightColumn.contains(el));
-                  if (fallback) rightColumn.appendChild(fallback);
+                if (correctItem) {
+                  rightColumn.appendChild(correctItem);   // переміщуємо в кінець у потрібному порядку
                 }
               });
 
-              // Додаємо залишені елементи в кінець (якщо є)
-              allRightItems.forEach(item => {
-                if (!rightColumn.contains(item)) {
-                  rightColumn.appendChild(item);
-                }
-              });
-
-              console.log('[RESTORE MATCHING] Успішно відновлено порядок');
-            }
-
-              // Додаємо залишені елементи в кінець (якщо є)
-              allRightItems.forEach(item => {
-                if (!rightColumn.contains(item)) {
-                  rightColumn.appendChild(item);
-                }
-              });
-
-              console.log('[RESTORE MATCHING] Відновлено порядок для', savedPairs.length, 'пар');
+              console.log('[RESTORE MATCHING] Відновлено', savedPairs.length, 'пар');
             }
 
             function resetMatching(idx) {
@@ -3326,8 +3294,8 @@ app.get('/test/question', checkAuth, async (req, res) => {
                 if (matchingPairs && matchingPairs.length > 0) {
                   setTimeout(() => {
                     restoreMatchingOrder(matchingPairs);
-                    updateMatchingPairs();   // синхронізуємо поточний стан після відновлення
-                  }, 200);   
+                    updateMatchingPairs();   // синхронізуємо стан
+                  }, 180);
                 }
               }
               equalizeMatchingHeights();
