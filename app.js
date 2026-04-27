@@ -2897,7 +2897,8 @@ app.get('/test/question', checkAuth, async (req, res) => {
             let lastGlobalUpdateTime = Date.now();
             let isSaving = false;
             let hasMovedToNext = false;
-            let questionStartTime = ${questionStartTimeObj[index]};
+            let questionStartTimeObj = ${JSON.stringify(questionStartTimeObj || {})};
+            let questionStartTime = questionStartTimeObj[currentQuestionIndex] || Date.now();
 
             // === ФУНКЦІЯ ПЕРЕХОДУ МІЖ ПИТАННЯМИ ===
             function goToQuestion(targetIndex) {
@@ -2917,8 +2918,8 @@ app.get('/test/question', checkAuth, async (req, res) => {
             let currentMatchingPairs = [];
 
             function updateMatchingPairs() {
-              const leftItems = Array.from(document.querySelectorAll('#left-column-${index} .matching-item'));
-              const rightItems = Array.from(document.querySelectorAll('#right-column-${index} .matching-item'));
+              const leftItems = Array.from(document.querySelectorAll('#left-column-' + currentQuestionIndex + ' .matching-item'));
+              const rightItems = Array.from(document.querySelectorAll('#right-column-' + currentQuestionIndex + ' .matching-item'));
               
               currentMatchingPairs = [];
               const minLen = Math.min(leftItems.length, rightItems.length);
@@ -2965,7 +2966,7 @@ app.get('/test/question', checkAuth, async (req, res) => {
                                     .map(el => el.dataset.value.trim());
                 }
 
-                const responseTime = (Date.now() - questionStartTime) / 1000;
+                const responseTime = (Date.now() - (questionStartTimeObj[index] || Date.now())) / 1000;
 
                 const formData = new URLSearchParams();
                 formData.append('index', index);
@@ -3011,7 +3012,7 @@ app.get('/test/question', checkAuth, async (req, res) => {
                     answers.push(input ? input.value.trim() : '');
                   }
                 }
-                const responseTime = (Date.now() - questionStartTime) / 1000;
+                const responseTime = (Date.now() - (questionStartTimeObj[index] || Date.now())) / 1000;
                 const formData = new URLSearchParams();
                 formData.append('index', index);
                 const safeAnswer = JSON.stringify(answers);
@@ -3074,7 +3075,7 @@ app.get('/test/question', checkAuth, async (req, res) => {
                     answers.push(input ? input.value.trim() : '');
                   }
                 }
-                const responseTime = (Date.now() - questionStartTime) / 1000;
+                const responseTime = (Date.now() - (questionStartTimeObj[index] || Date.now())) / 1000;
                 const formData = new URLSearchParams();
                 formData.append('index', index);
                 const safeAnswer = JSON.stringify(answers);
