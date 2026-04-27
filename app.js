@@ -441,118 +441,162 @@ const importQuestionsToMongoDB = async (buffer, testNumber) => {
     await workbook.xlsx.load(buffer);
     const sheet = workbook.getWorksheet('Questions');
     if (!sheet) throw new Error('Лист "Questions" не знайдено');
+
     const MAX_ROWS = 1000;
-    if (sheet.rowCount > MAX_ROWS + 1) throw new Error(`Занадто багато рядків (${sheet.rowCount - 1}). Макс: ${MAX_ROWS}`);
+    if (sheet.rowCount > MAX_ROWS + 1) 
+      throw new Error(`Занадто багато рядків (${sheet.rowCount - 1}). Макс: ${MAX_ROWS}`);
+
     const questions = [];
+    const imageDir = path.join(__dirname, 'public', 'images');
+    
+    // Отримуємо список файлів один раз
+    let filesInDir = [];
+    if (fs.existsSync(imageDir)) {
+      filesInDir = fs.readdirSync(imageDir);
+      logger.info(`Завантажено ${filesInDir.length} файлів з папки images`);
+    } else {
+      logger.warn(`Папка ${imageDir} не існує!`);
+    }
+
     sheet.eachRow({ includeEmpty: false }, (row, rowNumber) => {
-      if (rowNumber > 1) {
-        try {
-          const rowValues = row.values.slice(1);
-          let questionText = rowValues[1];
-          if (typeof questionText === 'object' && questionText) questionText = questionText.text || questionText.value || '[Невірний текст]';
-          questionText = String(questionText || '').trim();
-          if (!questionText) throw new Error('Текст питання відсутній');
-          const picture = String(rowValues[0] || '').trim();
-          let options = rowValues.slice(2, 14).filter(Boolean).map(val => String(val).trim());
-          const correctAnswers = rowValues.slice(14, 26).filter(Boolean).map(val => String(val).trim());
-          const type = String(rowValues[26] || 'multiple').toLowerCase();
-          const points = Number(rowValues[27]) || 1;
-          const variant = String(rowValues[28] || '').trim();
+      if (rowNumber === 1) return; // пропускаємо заголовок
 
-          if (type === 'truefalse') options = ["Правда", "Неправда"];
+      try {
+        const rowValues = row.values.slice(1);
 
-          const normalizedPicture = picture ? picture.replace(/\.png$/i, '').replace(/^picture/i, 'Picture').replace(/\s+/g, '') : null;
-
-          let questionData = {
-            testNumber,
-            picture: null,
-            originalPicture: normalizedPicture,
-            text: questionText,
-            options,
-            correctAnswers,
-            type,
-            points,
-            variant,
-            order: rowNumber - 1
-          };
-
-          if (normalizedPicture) {
-            const pictureMatch = normalizedPicture.match(/^Picture(\d+)$/i);
-            if (pictureMatch) {
-              const pictureNumber = parseInt(pictureMatch[1], 10);
-              const targetFileNameBase = `Picture${pictureNumber}`;
-              const extensions = ['.png', '.jpg', '.jpeg', '.gif'];
-              const imageDir = path.join(__dirname, 'public', 'images');
-              const filesInDir = fs.existsSync(imageDir) ? fs.readdirSync(imageDir) : [];
-              for (const ext of extensions) {
-                const expectedFileName = `${targetFileNameBase}${ext}`;
-                const fileExists = filesInDir.some(file => file.toLowerCase() === expectedFileName.toLowerCase());
-                if (fileExists) {
-                  const matchedFile = filesInDir.find(file => file.toLowerCase() === expectedFileName.toLowerCase());
-                  const imagePath = path.join(imageDir, matchedFile);
-                  if (fs.existsSync(imagePath)) {
-                    questionData.picture = `/images/Picture${pictureNumber}${ext.toLowerCase()}`;
-                    break;
-                  }
-                }
-              }
-            }
-          }
-
-          if (type === 'matching') {
-            questionData.pairs = options.map((opt, idx) => ({
-              left: opt || '',
-              right: questionData.correctAnswers[idx] || ''
-            })).filter(pair => pair.left && pair.right);
-            if (!questionData.pairs.length) throw new Error('Для Matching потрібні пари');
-            questionData.correctPairs = questionData.pairs.map(pair => [pair.left, pair.right]);
-          }
-
-          if (type === 'fillblank') {
-            questionData.text = questionText.replace(/\s*___/g, '___');
-            const blankCount = (questionData.text.match(/___/g) || []).length;
-            if (blankCount === 0 || blankCount !== questionData.correctAnswers.length) {
-              throw new Error('Пропуски не відповідають відповідям');
-            }
-            questionData.blankCount = blankCount;
-            questionData.correctAnswers.forEach((answer, idx) => {
-              if (answer.includes('-')) {
-                const [min, max] = answer.split('-').map(val => parseFloat(val.trim()));
-                if (isNaN(min) || isNaN(max) || min > max) throw new Error(`Невірний діапазон для відповіді ${idx + 1}`);
-              } else {
-                const value = parseFloat(answer);
-                if (isNaN(value)) throw new Error(`Відповідь ${idx + 1} має бути числом або діапазоном`);
-              }
-            });
-          }
-
-          if (type === 'singlechoice') {
-            if (correctAnswers.length !== 1 || options.length < 2) throw new Error('Single Choice: потрібна 1 відповідь і ≥2 варіанти');
-            questionData.correctAnswer = correctAnswers[0];
-          }
-
-          if (type === 'input') {
-            if (correctAnswers.length !== 1) throw new Error('Input: потрібна 1 відповідь');
-            const correctAnswer = correctAnswers[0];
-            if (correctAnswer.includes('-')) {
-              const [min, max] = correctAnswer.split('-').map(val => parseFloat(val.trim()));
-              if (isNaN(min) || isNaN(max) || min > max) throw new Error('Невірний діапазон');
-            } else {
-              const value = parseFloat(correctAnswer);
-              if (isNaN(value)) throw new Error('Відповідь має бути числом або діапазоном');
-            }
-          }
-
-          questions.push(questionData);
-        } catch (error) {
-          throw new Error(`Помилка в рядку ${rowNumber}: ${error.message}`);
+        let questionText = rowValues[1];
+        if (typeof questionText === 'object' && questionText) {
+          questionText = questionText.text || questionText.value || '[Невірний текст]';
         }
+        questionText = String(questionText || '').trim();
+        if (!questionText) throw new Error('Текст питання відсутній');
+
+        const pictureRaw = String(rowValues[0] || '').trim();
+        let options = rowValues.slice(2, 14).filter(Boolean).map(val => String(val).trim());
+        const correctAnswers = rowValues.slice(14, 26).filter(Boolean).map(val => String(val).trim());
+        const type = String(rowValues[26] || 'multiple').toLowerCase().trim();
+        const points = Number(rowValues[27]) || 1;
+        const variant = String(rowValues[28] || '').trim();
+
+        if (type === 'truefalse') options = ["Правда", "Неправда"];
+
+        let picturePath = null;
+        let originalPicture = null;
+
+        // ==================== ПОКРАЩЕНА ОБРОБКА КАРТИНОК ====================
+        if (pictureRaw) {
+          originalPicture = pictureRaw
+            .replace(/\.png|\.jpg|\.jpeg|\.gif$/i, '')
+            .replace(/^picture/i, 'Picture')
+            .trim()
+            .replace(/\s+/g, '');
+
+          const baseName = originalPicture;
+          const extensions = ['.png', '.jpg', '.jpeg', '.gif'];
+
+          for (const ext of extensions) {
+            const possibleFile = `${baseName}${ext}`;
+            const foundFile = filesInDir.find(file => 
+              file.toLowerCase() === possibleFile.toLowerCase()
+            );
+
+            if (foundFile) {
+              picturePath = `/images/${foundFile}`;
+              logger.info(`Знайдено зображення: ${foundFile} для питання рядок ${rowNumber}`);
+              break;
+            }
+          }
+
+          if (!picturePath) {
+            logger.warn(`Зображення не знайдено: ${pictureRaw} (base: ${baseName}) у рядку ${rowNumber}`);
+          }
+        }
+
+        let questionData = {
+          testNumber,
+          picture: picturePath,
+          originalPicture: originalPicture,
+          text: questionText,
+          options,
+          correctAnswers,
+          type,
+          points,
+          variant: variant || '',
+          order: rowNumber - 1
+        };
+
+        // ==================== MATCHING ====================
+        if (type === 'matching') {
+          questionData.pairs = options.map((opt, idx) => ({
+            left: opt || '',
+            right: correctAnswers[idx] || ''
+          })).filter(pair => pair.left && pair.right);
+
+          if (!questionData.pairs.length) {
+            throw new Error('Для Matching потрібні пари (лівий + правий елемент)');
+          }
+          questionData.correctPairs = questionData.pairs.map(pair => [pair.left, pair.right]);
+        }
+
+        // ==================== FILLBLANK ====================
+        if (type === 'fillblank') {
+          questionData.text = questionText.replace(/\s*___/g, '___');
+          const blankCount = (questionData.text.match(/___/g) || []).length;
+          if (blankCount === 0 || blankCount !== correctAnswers.length) {
+            throw new Error(`Пропуски (${blankCount}) не відповідають кількості відповідей (${correctAnswers.length})`);
+          }
+          questionData.blankCount = blankCount;
+
+          correctAnswers.forEach((answer, idx) => {
+            if (answer.includes('-')) {
+              const [min, max] = answer.split('-').map(v => parseFloat(v.trim()));
+              if (isNaN(min) || isNaN(max) || min > max) {
+                throw new Error(`Невірний діапазон у відповіді ${idx + 1}`);
+              }
+            } else if (isNaN(parseFloat(answer))) {
+              throw new Error(`Відповідь ${idx + 1} має бути числом або діапазоном`);
+            }
+          });
+        }
+
+        // ==================== SINGLECHOICE ====================
+        if (type === 'singlechoice') {
+          if (correctAnswers.length !== 1 || options.length < 2) {
+            throw new Error('Single Choice: потрібна 1 правильна відповідь і ≥2 варіанти');
+          }
+          questionData.correctAnswer = correctAnswers[0];
+        }
+
+        // ==================== INPUT ====================
+        if (type === 'input') {
+          if (correctAnswers.length !== 1) {
+            throw new Error('Input: потрібна 1 правильна відповідь');
+          }
+          const ans = correctAnswers[0];
+          if (ans.includes('-')) {
+            const [min, max] = ans.split('-').map(v => parseFloat(v.trim()));
+            if (isNaN(min) || isNaN(max) || min > max) {
+              throw new Error('Невірний діапазон у Input');
+            }
+          } else if (isNaN(parseFloat(ans))) {
+            throw new Error('Input відповідь має бути числом або діапазоном');
+          }
+        }
+
+        questions.push(questionData);
+      } catch (error) {
+        throw new Error(`Помилка в рядку ${rowNumber}: ${error.message}`);
       }
     });
+
     if (!questions.length) throw new Error('Не знайдено питань');
+
     await db.collection('questions').deleteMany({ testNumber });
     await db.collection('questions').insertMany(questions);
+
     await CacheManager.invalidateCache('questions', testNumber);
+    logger.info(`Імпортовано ${questions.length} питань для тесту ${testNumber}`);
+
     return questions.length;
   } catch (error) {
     logger.error('Помилка імпорту питань', { message: error.message, stack: error.stack });
@@ -2652,9 +2696,31 @@ app.get('/test/question', checkAuth, async (req, res) => {
     if (isQuickTest) {
       html += `
         <div id="question-timer">
-          <svg viewBox="0 0 80 80">
-            <circle class="timer-circle-bg" cx="40" cy="40" r="36" />
-            <circle class="timer-circle" cx="40" cy="40" r="36" />
+          <svg viewBox="0 0 100 100" width="90" height="90">
+            <!-- Фоновий круг -->
+            <circle 
+              class="timer-circle-bg" 
+              cx="50" 
+              cy="50" 
+              r="45" 
+              fill="none" 
+              stroke="#e0e0e0" 
+              stroke-width="8"/>
+            
+            <!-- Активний круг (буде анімований) -->
+            <circle 
+              id="timer-progress"
+              class="timer-circle" 
+              cx="50" 
+              cy="50" 
+              r="45" 
+              fill="none" 
+              stroke="#ff4d4d" 
+              stroke-width="8"
+              stroke-dasharray="282.74"
+              stroke-dashoffset="282.74"
+              stroke-linecap="round"
+              transform="rotate(-90 50 50)"/>
           </svg>
           <div class="timer-text" id="timer-text">${timePerQuestion}</div>
         </div>
@@ -3338,7 +3404,7 @@ function calculateQuestionScore(question, userAnswer) {
   const maxPoints = parseFloat(question.points) || 1;
   const type = (question.type || '').toLowerCase().trim();
 
-  // Нормалізація
+  // Нормалізація для тексту
   const normalize = (val) => {
     if (val === null || val === undefined) return '';
     return String(val)
@@ -3348,6 +3414,7 @@ function calculateQuestionScore(question, userAnswer) {
       .replace(/[^a-z0-9а-яіїєґ\s.,-]/gi, '');
   };
 
+  // Нормалізація для чисел
   const normalizeNumber = (val) => {
     if (val === null || val === undefined) return NaN;
     let str = String(val).trim().replace(/,/g, '.').replace(/\s+/g, '');
@@ -3384,6 +3451,7 @@ function calculateQuestionScore(question, userAnswer) {
         questionHasCorrectPairs: !!question.correctPairs,
         correctPairsCount: question.correctPairs ? question.correctPairs.length : 0
       });
+
       if (!Array.isArray(userAnswer) || userAnswer.length === 0) return 0;
 
       const correctPairs = question.correctPairs || [];
@@ -3398,7 +3466,7 @@ function calculateQuestionScore(question, userAnswer) {
 
       userAnswer.forEach(userPair => {
         if (!Array.isArray(userPair) || userPair.length !== 2) {
-          score -= partial;   // штраф за неправильну пару
+          score -= partial;
           return;
         }
         const pairKey = `${normalize(userPair[0])}|||${normalize(userPair[1])}`;
@@ -3406,7 +3474,7 @@ function calculateQuestionScore(question, userAnswer) {
           correctCount++;
           score += partial;
         } else {
-          score -= partial;   // штраф за невірну пару
+          score -= partial;
         }
       });
 
@@ -3437,22 +3505,37 @@ function calculateQuestionScore(question, userAnswer) {
       let correctCount = 0;
 
       userAnswer.forEach((userRaw, i) => {
-        const user = normalize(userRaw);
+        const userStr = String(userRaw || '').trim();
         const correctRaw = correctAnswers[i] || '';
-        const correct = normalize(correctRaw);
+        const correctStr = String(correctRaw).trim();
 
-        if (!user) return;
+        if (!userStr) return;
 
-        // 1. Діапазон чисел
-        if (correctRaw.includes('-')) {
-          const range = correctRaw.split('-', 2);
-          const min = parseFloat(range[0].trim());
-          const max = parseFloat(range[1].trim());
-          const num = parseFloat(user);
-          if (!isNaN(num) && num >= min && num <= max) correctCount++;
-        }
-        // 2. М'яке порівняння тексту
+        // 1. Діапазон чисел (50-55)
+        if (correctStr.includes('-')) {
+          const range = correctStr.split('-', 2).map(v => parseFloat(v.trim()));
+          const min = range[0];
+          const max = range[1];
+          const userNum = normalizeNumber(userStr);
+
+          if (!isNaN(userNum) && !isNaN(min) && !isNaN(max) && userNum >= min && userNum <= max) {
+            correctCount++;
+          }
+        } 
+        // 2. Чисте число (жорстке порівняння)
+        else if (/^-?\d+[.,]?\d*$/.test(correctStr)) {
+          const correctNum = normalizeNumber(correctStr);
+          const userNum = normalizeNumber(userStr);
+
+          if (!isNaN(correctNum) && !isNaN(userNum) && correctNum === userNum) {
+            correctCount++;
+          }
+        } 
+        // 3. Текст — м'яке порівняння
         else {
+          const user = normalize(userStr);
+          const correct = normalize(correctStr);
+
           if (user.includes(correct) || correct.includes(user)) {
             correctCount++;
           } else {
@@ -5020,7 +5103,7 @@ app.post('/admin/add-question', checkAuth, checkAdmin, [
     .isLength({ min: 1, max: 50 }).withMessage('Варіант має бути від 1 до 50 символів'),
   body('picture')
     .optional({ checkFalsy: true })
-    .matches(/\.(jpeg|jpg|png|gif)$/i).withMessage('Назва файлу зображення має закінчуватися на .jpeg, .jpg, .png або .gif')
+    .isString().withMessage('Назва зображення має бути рядком')
 ], async (req, res) => {
   const startTime = Date.now();
   try {
@@ -5032,38 +5115,65 @@ app.post('/admin/add-question', checkAuth, checkAdmin, [
 
     const { testNumber, text, type, options, correctAnswers, points, variant, picture } = req.body;
 
-    const normalizedPicture = picture
-      ? picture.replace(/\.png$/i, '').replace(/^picture/i, 'Picture').replace(/\s+/g, '')
-      : null;
+    // ==================== ОБРОБКА КАРТИНКИ ====================
+    let picturePath = null;
+    let originalPicture = null;
+
+    if (picture && String(picture).trim() !== '') {
+      const pictureRaw = String(picture).trim();
+      originalPicture = pictureRaw
+        .replace(/\.png|\.jpg|\.jpeg|\.gif$/i, '')
+        .replace(/^picture/i, 'Picture')
+        .trim()
+        .replace(/\s+/g, '');
+
+      const imageDir = path.join(__dirname, 'public', 'images');
+      let filesInDir = [];
+      
+      if (fs.existsSync(imageDir)) {
+        filesInDir = fs.readdirSync(imageDir);
+      }
+
+      const extensions = ['.png', '.jpg', '.jpeg', '.gif'];
+      let found = false;
+
+      for (const ext of extensions) {
+        const possibleFileName = `${originalPicture}${ext}`;
+        const matchedFile = filesInDir.find(file => 
+          file.toLowerCase() === possibleFileName.toLowerCase()
+        );
+
+        if (matchedFile) {
+          picturePath = `/images/${matchedFile}`;
+          logger.info(`Зображення знайдено при додаванні питання: ${matchedFile}`);
+          found = true;
+          break;
+        }
+      }
+
+      if (!found) {
+        logger.warn(`Зображення не знайдено при додаванні: ${pictureRaw} (нормалізовано: ${originalPicture})`);
+      }
+    }
 
     let questionData = {
       testNumber,
-      picture: picture ? `/images/${normalizedPicture}` : null,
-      originalPicture: normalizedPicture,
-      text,
-      type: type.toLowerCase(),
+      picture: picturePath,
+      originalPicture: originalPicture,
+      text: String(text).trim(),
+      type: type.toLowerCase().trim(),
       options: options ? options.split(';').map(opt => opt.trim()).filter(Boolean) : [],
       correctAnswers: correctAnswers.split(';').map(ans => ans.trim()).filter(Boolean),
       points: Number(points),
-      variant: variant || '',
+      variant: variant ? String(variant).trim() : '',
       order: await db.collection('questions').countDocuments({ testNumber })
     };
-
-    if (questionData.picture) {
-      const imagePath = path.join(__dirname, 'public', questionData.picture);
-      if (!fs.existsSync(imagePath)) {
-        logger.warn(`Зображення не знайдено за шляхом: ${imagePath}`);
-        questionData.picture = null;
-      } else {
-        logger.info(`Зображення знайдено: ${questionData.picture}`);
-      }
-    }
 
     if (type === 'truefalse') {
       questionData.options = ["Правда", "Неправда"];
     }
 
-    // ==================== ВИПРАВЛЕНИЙ БЛОК MATCHING ====================
+    // ==================== MATCHING ====================
     if (type === 'matching') {
       const leftOptions = questionData.options;
       const rightAnswers = questionData.correctAnswers;
@@ -5072,7 +5182,7 @@ app.post('/admin/add-question', checkAuth, checkAdmin, [
         logger.warn('Для типу Matching кількість лівих і правих елементів не співпадає', { 
           left: leftOptions.length, 
           right: rightAnswers.length,
-          text 
+          text: questionData.text 
         });
         return res.status(400).send('Для типу Matching кількість варіантів (лівих) має відповідати кількості правильних відповідей (правих)');
       }
@@ -5090,65 +5200,70 @@ app.post('/admin/add-question', checkAuth, checkAdmin, [
       });
     }
 
+    // ==================== FILLBLANK ====================
     if (type === 'fillblank') {
       questionData.text = questionData.text.replace(/\s*___\s*/g, '___');
       const blankCount = (questionData.text.match(/___/g) || []).length;
+      
       if (blankCount === 0 || blankCount !== questionData.correctAnswers.length) {
-        logger.warn('Невідповідність між пропусками та правильними відповідями для fillblank', { blankCount, correctAnswersLength: questionData.correctAnswers.length });
+        logger.warn('Невідповідність пропусків у fillblank', { 
+          blankCount, 
+          correctAnswersLength: questionData.correctAnswers.length 
+        });
         return res.status(400).send('Кількість пропусків у тексті питання не відповідає кількості правильних відповідей');
       }
+
       questionData.blankCount = blankCount;
 
       questionData.correctAnswers.forEach((correctAnswer, idx) => {
         if (correctAnswer.includes('-')) {
           const [min, max] = correctAnswer.split('-').map(val => parseFloat(val.trim()));
           if (isNaN(min) || isNaN(max) || min > max) {
-            return res.status(400).send(`Невірний формат діапазону для правильної відповіді ${idx + 1}. Використовуйте формат "число1-число2", наприклад, "12-14", де число1 <= число2.`);
+            return res.status(400).send(`Невірний формат діапазону для відповіді ${idx + 1}. Використовуйте "число1-число2"`);
           }
         } else {
           const value = parseFloat(correctAnswer);
           if (isNaN(value)) {
-            return res.status(400).send(`Правильна відповідь ${idx + 1} для типу Fillblank має бути числом або діапазоном у форматі "число1-число2".`);
+            return res.status(400).send(`Правильна відповідь ${idx + 1} для Fillblank має бути числом або діапазоном`);
           }
         }
       });
     }
 
+    // ==================== SINGLECHOICE ====================
     if (type === 'singlechoice') {
       if (questionData.correctAnswers.length !== 1 || questionData.options.length < 2) {
-        logger.warn('Для типу Single Choice потрібна одна правильна відповідь та щонайменше 2 варіанти', {
-          correctAnswersLength: questionData.correctAnswers.length,
-          optionsLength: questionData.options.length
-        });
-        return res.status(400).send('Для типу Single Choice потрібна одна правильна відповідь і мінімум 2 варіанти');
+        return res.status(400).send('Для Single Choice потрібна 1 правильна відповідь і мінімум 2 варіанти');
       }
       questionData.correctAnswer = questionData.correctAnswers[0];
     }
 
+    // ==================== INPUT ====================
     if (type === 'input') {
       if (questionData.correctAnswers.length !== 1) {
-        return res.status(400).send('Для типу Input потрібна одна правильна відповідь');
+        return res.status(400).send('Для Input потрібна одна правильна відповідь');
       }
       const correctAnswer = questionData.correctAnswers[0];
       if (correctAnswer.includes('-')) {
         const [min, max] = correctAnswer.split('-').map(val => parseFloat(val.trim()));
         if (isNaN(min) || isNaN(max) || min > max) {
-          return res.status(400).send('Невірний формат діапазону для правильної відповіді. Використовуйте формат "число1-число2", наприклад, "12-14", де число1 <= число2.');
+          return res.status(400).send('Невірний діапазон для Input. Використовуйте "число1-число2"');
         }
-      } else {
-        const value = parseFloat(correctAnswer);
-        if (isNaN(value)) {
-          return res.status(400).send('Правильна відповідь для типу Input має бути числом або діапазоном у форматі "число1-число2".');
-        }
+      } else if (isNaN(parseFloat(correctAnswer))) {
+        return res.status(400).send('Відповідь для Input має бути числом або діапазоном');
       }
     }
 
     await db.collection('questions').insertOne(questionData);
-    logger.info('Питання додано до MongoDB', { testNumber, text, type });
+    logger.info('Питання успішно додано', { 
+      testNumber, 
+      type, 
+      hasPicture: !!picturePath,
+      picture: picturePath 
+    });
 
     await CacheManager.invalidateCache('questions', testNumber);
     await CacheManager.invalidateCache('allQuestions', 'all');
-    logger.info('Кеш очищено після додавання питання', { testNumber });
 
     res.send(`
       <!DOCTYPE html>
@@ -5157,23 +5272,43 @@ app.post('/admin/add-question', checkAuth, checkAdmin, [
           <meta charset="UTF-8">
           <title>Питання додано</title>
           <style>
-            body { font-family: Arial, sans-serif; padding: 20px; text-align: center; }
-            button { padding: 10px 20px; margin: 5px; cursor: pointer; border: none; border-radius: 5px; background-color: #4CAF50; color: white; }
+            body { font-family: Arial, sans-serif; padding: 40px; text-align: center; background: #f5f5f5; }
+            .container { max-width: 600px; margin: 0 auto; background: white; padding: 30px; border-radius: 12px; box-shadow: 0 4px 15px rgba(0,0,0,0.1); }
+            h1 { color: #4CAF50; }
+            button { 
+              padding: 12px 24px; 
+              margin-top: 20px; 
+              font-size: 16px; 
+              cursor: pointer; 
+              border: none; 
+              border-radius: 8px; 
+              background-color: #4CAF50; 
+              color: white; 
+            }
             button:hover { background-color: #45a049; }
           </style>
         </head>
         <body>
-          <h1>Питання успішно додано</h1>
-          <button onclick="window.location.href='/admin/questions'">Повернутися до списку питань</button>
+          <div class="container">
+            <h1>Питання успішно додано!</h1>
+            ${picturePath ? `<p>Зображення: ${picturePath}</p>` : ''}
+            <button onclick="window.location.href='/admin/questions'">Повернутися до списку питань</button>
+          </div>
         </body>
       </html>
     `);
+
   } catch (error) {
-    logger.error('Помилка додавання питання в /admin/add-question', { message: error.message, stack: error.stack });
+    logger.error('Помилка додавання питання в /admin/add-question', { 
+      message: error.message, 
+      stack: error.stack 
+    });
     res.status(500).send('Помилка при додаванні питання: ' + error.message);
   } finally {
     const endTime = Date.now();
-    logger.info('Маршрут /admin/add-question (POST) виконано', { duration: `${endTime - startTime} мс` });
+    logger.info('Маршрут /admin/add-question (POST) виконано', { 
+      duration: `${endTime - startTime} мс` 
+    });
   }
 });
 
@@ -5191,12 +5326,13 @@ app.get('/admin/edit-question', checkAuth, checkAdmin, async (req, res) => {
       return res.status(404).send('Питання не знайдено');
     }
 
-    const pictureName = question.picture ? question.picture.replace('/images/', '') : '';
-    const normalizedOriginalPicture = question.originalPicture
-      ? question.originalPicture.replace(/\.png$/i, '').replace(/^picture/i, 'Picture').replace(/\s+/g, '')
-      : '';
-    const warningMessage = question.picture === null && question.originalPicture && question.originalPicture.trim() !== ''
-      ? `Попередження: зображення "${normalizedOriginalPicture}" не було знайдено під час імпорту. Перевірте, чи файл зображення є в папці public/images.`
+    // ==================== ОБРОБКА КАРТИНКИ ====================
+    const pictureName = question.picture 
+      ? question.picture.replace('/images/', '').trim()
+      : (question.originalPicture || '').trim();
+
+    const warningMessage = (!question.picture && question.originalPicture && question.originalPicture.trim() !== '')
+      ? `Попередження: зображення "${question.originalPicture}" не знайдено в папці public/images`
       : '';
 
     const html = `
@@ -6320,11 +6456,18 @@ app.get('/admin/view-result', checkAuth, async (req, res) => {
 
                 const docDefinition = {
                   pageSize: 'A4',
-                  pageMargins: [40, 60, 40, 60],
+                  pageOrientation: 'portrait',
+                  pageMargins: [20, 30, 20, 30],           // зменшили відступи
+                  defaultStyle: { 
+                    fontSize: 9, 
+                    lineHeight: 1.3 
+                  },
                   content: [
                     { text: 'Деталі результату для користувача ' + viewResultData.user, style: 'mainHeader' },
                     { text: 'Тест: ' + viewResultData.testName, margin: [0, 10, 0, 5], style: 'subHeader' },
                     { text: 'Варіант: ' + viewResultData.variant, margin: [0, 0, 0, 15] },
+
+                    // Зведена таблиця
                     {
                       table: {
                         widths: ['*', 'auto'],
@@ -6339,6 +6482,7 @@ app.get('/admin/view-result', checkAuth, async (req, res) => {
                       layout: 'lightHorizontalLines',
                       margin: [0, 0, 0, 20]
                     },
+
                     { text: 'Підозріла активність:', style: 'subHeader', margin: [0, 0, 0, 5] },
                     {
                       ul: [
@@ -6349,11 +6493,14 @@ app.get('/admin/view-result', checkAuth, async (req, res) => {
                       ],
                       margin: [0, 0, 0, 20]
                     },
+
                     { text: 'Деталі відповідей:', style: 'subHeader', margin: [0, 0, 0, 10] },
+
+                    // Головна таблиця — оптимізована під ширину A4
                     {
                       table: {
                         headerRows: 1,
-                        widths: ['*', '*', '*', 'auto'],
+                        widths: ['42%', '22%', '22%', '14%'],   // <-- головне виправлення
                         body: [
                           [
                             { text: 'Питання', bold: true, fillColor: '#f2f2f2' },
@@ -6362,9 +6509,9 @@ app.get('/admin/view-result', checkAuth, async (req, res) => {
                             { text: 'Бали', bold: true, fillColor: '#f2f2f2', alignment: 'center' }
                           ],
                           ...viewResultData.questionsTable.map(row => [
-                            row.text,
-                            row.userAnswer,
-                            '', 
+                            { text: row.text, alignment: 'left' },
+                            { text: row.userAnswer || '—', alignment: 'left' },
+                            { text: '', alignment: 'left' },           // поки що порожня правильна відповідь
                             { text: row.score + ' / ' + row.maxPoints, alignment: 'center' }
                           ])
                         ]
@@ -6374,18 +6521,17 @@ app.get('/admin/view-result', checkAuth, async (req, res) => {
                         vLineWidth: () => 0.5,
                         hLineColor: () => '#ddd',
                         vLineColor: () => '#ddd',
-                        paddingLeft: () => 8,
-                        paddingRight: () => 8,
-                        paddingTop: () => 6,
-                        paddingBottom: () => 6
+                        paddingLeft: () => 6,
+                        paddingRight: () => 6,
+                        paddingTop: () => 5,
+                        paddingBottom: () => 5
                       }
                     }
                   ],
                   styles: {
-                    mainHeader: { fontSize: 20, bold: true, alignment: 'center', margin: [0, 0, 0, 20] },
-                    subHeader: { fontSize: 14, bold: true, margin: [0, 15, 0, 5] }
-                  },
-                  defaultStyle: { fontSize: 11, lineHeight: 1.4 }
+                    mainHeader: { fontSize: 18, bold: true, alignment: 'center', margin: [0, 0, 0, 20] },
+                    subHeader: { fontSize: 13, bold: true, margin: [0, 15, 0, 5] }
+                  }
                 };
 
                 pdfMake.createPdf(docDefinition).download(viewResultData.user + '_результат.pdf');
