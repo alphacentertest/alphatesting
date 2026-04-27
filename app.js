@@ -3807,12 +3807,6 @@ app.get('/result', checkAuth, async (req, res) => {
       }
     });
 
-    const timeAwayPercent = result.suspiciousActivity?.timeAway && result.duration
-      ? Math.round((result.suspiciousActivity.timeAway / result.duration) * 100)
-      : 0;
-
-    const switchCount = result.suspiciousActivity?.switchCount || 0;
-
     // 5. Час та підозріла активність
     let endTime = testData.endTime ? new Date(testData.endTime).getTime() : Date.now();
     const maxEndTime = startTimeMs + timeLimit;
@@ -3822,8 +3816,10 @@ app.get('/result', checkAuth, async (req, res) => {
     const timeAway = suspiciousActivity.timeAway || 0;
     const correctedTimeAway = Math.min(timeAway, duration);
     
+    // ←←←←←←←←←←←←←←←←←←←←←←←←←←←←←←←←←←
     const timeAwayPercent = duration > 0 ? Math.round((correctedTimeAway / duration) * 100) : 0;
     const switchCount = suspiciousActivity.switchCount || 0;
+    // ←←←←←←←←←←←←←←←←←←←←←←←←←←←←←←←←←←
 
     // 6. Збереження результату (якщо потрібно)
     const existingResult = await db.collection('test_results').findOne({ testSessionId });
