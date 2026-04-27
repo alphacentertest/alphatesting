@@ -4003,7 +4003,8 @@ app.get('/result', checkAuth, async (req, res) => {
 
           <div class="summary-text">
             Кількість питань: ${totalQuestions}<br>
-            Правильних відповідей: ${correctClicks}<br>
+            Повністю правильних відповідей: ${correctClicks}<br>
+            Частково правильних відповідей: ${scoresPerQuestion.filter(s => s > 0 && s < questions[scoresPerQuestion.indexOf(s)].points).length}<br>
             Набрано балів: ${Math.round(score)}<br>
             Максимально можлива кількість балів: ${Math.round(totalPoints)}<br>
           </div>
@@ -6450,6 +6451,15 @@ app.get('/admin/view-result', checkAuth, async (req, res) => {
     const totalQuestions = questions.length;
     const correctClicks = scoresPerQuestion.filter(s => s > 0).length;
 
+    // === РОЗРАХУНОК ЧАСТКОВО ПРАВИЛЬНИХ ===
+    const fullyCorrect = scoresPerQuestion.filter((s, idx) => 
+      s > 0 && s === (questions[idx]?.points || 1)
+    ).length;
+
+    const partiallyCorrect = scoresPerQuestion.filter((s, idx) => 
+      s > 0 && s < (questions[idx]?.points || 1)
+    ).length;
+
     const timeAwayPercent = result.suspiciousActivity?.timeAway && result.duration
       ? Math.round((result.suspiciousActivity.timeAway / result.duration) * 100)
       : 0;
@@ -6543,6 +6553,8 @@ app.get('/admin/view-result', checkAuth, async (req, res) => {
                 switchCount: ${switchCount},
                 avgResponseTime: ${avgResponseTime},
                 totalActivityCount: ${totalActivityCount},
+                fullyCorrect: ${fullyCorrect},
+                partiallyCorrect: ${partiallyCorrect},
                 questionsTable: ${JSON.stringify(questions.map((q, idx) => {
                   const userAns = result.answers[idx] !== undefined ? result.answers[idx] : 'Не відповіли';
                   let userDisplay = '—';
@@ -6689,7 +6701,8 @@ app.get('/admin/view-result', checkAuth, async (req, res) => {
               <strong>Бали:</strong> ${roundedScore.toFixed(1)} з ${totalPoints}<br>
               <strong>Відсоток:</strong> ${roundedPercentage.toFixed(1)}%<br>
               <strong>Питань:</strong> ${totalQuestions}<br>
-              <strong>Правильних:</strong> ${correctClicks}<br>
+              <strong>Повністю правильних:</strong> ${fullyCorrect}<br>
+              <strong>Частково правильних:</strong> ${partiallyCorrect}<br>
               <strong>Дата завершення:</strong> ${formatKievTime(result.endTime)}<br><br>
               <strong>Підозріла активність:</strong><br>
               Час поза вкладкою: <span class="${timeAwayPercent > 50 ? 'suspicious' : ''}">${timeAwayPercent}%</span><br>
