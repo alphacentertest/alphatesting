@@ -6475,6 +6475,7 @@ app.get('/admin/view-result', checkAuth, async (req, res) => {
       }
     });
 
+    // === РОЗРАХУНОК ЧАСУ ТА АКТИВНОСТІ ===
     const timeAwayPercent = result.suspiciousActivity?.timeAway && result.duration
       ? Math.round((result.suspiciousActivity.timeAway / result.duration) * 100)
       : 0;
