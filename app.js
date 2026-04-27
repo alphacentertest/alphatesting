@@ -2932,7 +2932,7 @@ app.get('/test/question', checkAuth, async (req, res) => {
               }
             }
 
-            // === НОВА ФУНКЦІЯ: Відновлення порядку пар при поверненні назад ===
+            // === Відновлення порядку пар при поверненні назад ===
             function restoreMatchingOrder(savedPairs) {
               if (!savedPairs || !Array.isArray(savedPairs) || savedPairs.length === 0) return;
 
@@ -2950,7 +2950,7 @@ app.get('/test/question', checkAuth, async (req, res) => {
                 );
                 
                 if (correctItem) {
-                  rightColumn.appendChild(correctItem); // переміщуємо в потрібну позицію
+                  rightColumn.appendChild(correctItem);
                 }
               });
             }
@@ -3012,7 +3012,7 @@ app.get('/test/question', checkAuth, async (req, res) => {
               }
             }
 
-            // Збереження + наступне питання (залишив майже без змін)
+            // Збереження + наступне питання
             async function saveAndNext(index) {
               if (isSaving) return;
               isSaving = true;
@@ -3260,8 +3260,8 @@ app.get('/test/question', checkAuth, async (req, res) => {
 
             // Ініціалізація Sortable для matching
             window.addEventListener('load', () => {
-              const leftColumn = document.getElementById('left-column-${index}');
-              const rightColumn = document.getElementById('right-column-${index}');
+              const leftColumn = document.getElementById('left-column-' + currentQuestionIndex);
+              const rightColumn = document.getElementById('right-column-' + currentQuestionIndex);
               if (leftColumn && rightColumn && '${q.type}' === 'matching') {
                 new Sortable(leftColumn, {
                   animation: 150,
@@ -3273,6 +3273,13 @@ app.get('/test/question', checkAuth, async (req, res) => {
                   group: 'matching',
                   onEnd: updateMatchingPairs
                 });
+
+                // Відновлюємо збережений порядок matching
+                if (matchingPairs && matchingPairs.length > 0) {
+                  setTimeout(() => {
+                    restoreMatchingOrder(matchingPairs);
+                  }, 100);
+                }
               }
               equalizeMatchingHeights();
               updateGlobalTimer();
@@ -3309,21 +3316,17 @@ app.get('/test/question', checkAuth, async (req, res) => {
                   timerCircle.style.strokeDashoffset = offset;
                 }
 
-                // === ВИПРАВЛЕННЯ: Автоматичне завершення тесту ===
                 if (questionTimeRemaining <= 0) {
                   clearInterval(questionTimerInterval);
                   
                   if (currentQuestionIndex === totalQuestions - 1) {
-                    // Це останнє питання — зберігаємо відповідь і завершуємо тест
                     hasMovedToNext = true;
                     saveCurrentAnswer(currentQuestionIndex).then(() => {
-                      // Перехід на результат
                       window.location.href = '/result';
                     }).catch(() => {
                       window.location.href = '/result';
                     });
                   } else if (currentQuestionIndex < totalQuestions - 1 && !hasMovedToNext) {
-                    // Не останнє питання — переходимо далі
                     hasMovedToNext = true;
                     saveCurrentAnswer(currentQuestionIndex).then(() => {
                       saveAndNext(currentQuestionIndex);
