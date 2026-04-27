@@ -3797,12 +3797,12 @@ app.get('/result', checkAuth, async (req, res) => {
     let fullyCorrect = 0;
     let partiallyCorrect = 0;
 
-    scoresPerQuestion.forEach((score, idx) => {
+    scoresPerQuestion.forEach((s, idx) => {
       const maxPointsForQuestion = questions[idx]?.points || 1;
       
-      if (score >= maxPointsForQuestion) {           // повністю правильно
+      if (s >= maxPointsForQuestion) {           // повністю правильно
         fullyCorrect++;
-      } else if (score > 0) {                        // частково правильно
+      } else if (s > 0) {                        // частково правильно
         partiallyCorrect++;
       }
     });
@@ -3848,7 +3848,7 @@ app.get('/result', checkAuth, async (req, res) => {
         startTimeMs,
         endTime,
         Object.keys(answers).length,
-        correctClicks,
+        fullyCorrect,                    // передаємо правильну кількість
         totalQuestions,
         percentage,
         { timeAway: correctedTimeAway, switchCount, responseTimes: suspiciousActivity.responseTimes || [], activityCounts: suspiciousActivity.activityCounts || [] },
@@ -4032,7 +4032,8 @@ app.get('/result', checkAuth, async (req, res) => {
                   content: [
                     { text: 'Результат тесту користувача ' + "${req.user}" + ' з тесту ' + "${testNames[testNumber]?.name || 'Тест'}", style: 'header' },
                     { text: 'Кількість питань: ${totalQuestions}', margin: [0, 10, 0, 0] },
-                    { text: 'Правильних відповідей: ${correctClicks}', margin: [0, 5, 0, 0] },
+                    { text: 'Повністю правильних: ${fullyCorrect}', margin: [0, 5, 0, 0] },
+                    { text: 'Частково правильних: ${partiallyCorrect}', margin: [0, 5, 0, 0] },
                     { text: 'Набрано балів: ${Math.round(score)}', margin: [0, 5, 0, 0] },
                     { text: 'Максимально можлива кількість балів: ${Math.round(totalPoints)}', margin: [0, 5, 0, 0] }
                   ],
