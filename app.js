@@ -2941,26 +2941,40 @@ app.get('/test/question', checkAuth, async (req, res) => {
               }
             }
 
-            function restoreMatchingOrder(savedPairs) {
+                        function restoreMatchingOrder(savedPairs) {
               if (!savedPairs || !Array.isArray(savedPairs) || savedPairs.length === 0) return;
 
               const rightColumn = document.getElementById('right-column-' + currentQuestionIndex);
               if (!rightColumn) return;
 
-              const rightItems = Array.from(rightColumn.querySelectorAll('.matching-item'));
+              // Очищаємо колонку і додаємо елементи строго в потрібному порядку
+              const allRightItems = Array.from(rightColumn.querySelectorAll('.matching-item'));
+              rightColumn.innerHTML = '';  // повністю очищаємо
 
-              savedPairs.forEach((pair, index) => {
-                if (index >= rightItems.length) return;
+              savedPairs.forEach((pair) => {
                 const targetRightText = pair[1] ? pair[1].trim() : '';
                 
-                const correctItem = rightItems.find(item => 
+                const matchingItem = allRightItems.find(item => 
                   (item.dataset.right || '').trim() === targetRightText
                 );
-                
-                if (correctItem) {
-                  rightColumn.appendChild(correctItem);
+
+                if (matchingItem) {
+                  rightColumn.appendChild(matchingItem);
+                } else {
+                  // Якщо елемент не знайдено — додаємо будь-який залишений (захист)
+                  const fallback = allRightItems.find(item => !rightColumn.contains(item));
+                  if (fallback) rightColumn.appendChild(fallback);
                 }
               });
+
+              // Додаємо залишені елементи в кінець (якщо є)
+              allRightItems.forEach(item => {
+                if (!rightColumn.contains(item)) {
+                  rightColumn.appendChild(item);
+                }
+              });
+
+              console.log('[RESTORE MATCHING] Відновлено порядок для', savedPairs.length, 'пар');
             }
 
             function resetMatching(idx) {
@@ -3040,7 +3054,7 @@ app.get('/test/question', checkAuth, async (req, res) => {
                 isSaving = false;
               }
             }
-              
+
             async function saveAndNext(index) {
               if (isSaving) return;
               isSaving = true;
@@ -3304,7 +3318,8 @@ app.get('/test/question', checkAuth, async (req, res) => {
                 if (matchingPairs && matchingPairs.length > 0) {
                   setTimeout(() => {
                     restoreMatchingOrder(matchingPairs);
-                  }, 100);
+                    updateMatchingPairs();        // синхронізуємо поточний стан
+                  }, 150);   
                 }
               }
               equalizeMatchingHeights();
