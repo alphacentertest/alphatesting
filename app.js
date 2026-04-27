@@ -2909,7 +2909,6 @@ app.get('/test/question', checkAuth, async (req, res) => {
                 window.location.href = '/test/question?index=' + targetIndex;
               }).catch(err => {
                 console.error('Помилка збереження при переході:', err);
-                // Все одно переходимо
                 window.location.href = '/test/question?index=' + targetIndex;
               });
             }
@@ -2931,6 +2930,29 @@ app.get('/test/question', checkAuth, async (req, res) => {
                   currentMatchingPairs.push([leftVal, rightVal]);
                 }
               }
+            }
+
+            // === НОВА ФУНКЦІЯ: Відновлення порядку пар при поверненні назад ===
+            function restoreMatchingOrder(savedPairs) {
+              if (!savedPairs || !Array.isArray(savedPairs) || savedPairs.length === 0) return;
+
+              const rightColumn = document.getElementById('right-column-' + currentQuestionIndex);
+              if (!rightColumn) return;
+
+              const rightItems = Array.from(rightColumn.querySelectorAll('.matching-item'));
+
+              savedPairs.forEach((pair, index) => {
+                if (index >= rightItems.length) return;
+                const targetRightText = pair[1] ? pair[1].trim() : '';
+                
+                const correctItem = rightItems.find(item => 
+                  (item.dataset.right || '').trim() === targetRightText
+                );
+                
+                if (correctItem) {
+                  rightColumn.appendChild(correctItem); // переміщуємо в потрібну позицію
+                }
+              });
             }
 
             function resetMatching(idx) {
@@ -2957,7 +2979,6 @@ app.get('/test/question', checkAuth, async (req, res) => {
                                     .map(el => el.dataset.value.trim());
                 } 
                 else if (document.getElementById('left-column-' + index)) {
-                  // === MATCHING — ВИПРАВЛЕНО ===
                   updateMatchingPairs();
                   answerData = currentMatchingPairs;
                 } 
@@ -2991,7 +3012,7 @@ app.get('/test/question', checkAuth, async (req, res) => {
               }
             }
 
-            // Збереження + наступне питання
+            // Збереження + наступне питання (залишив майже без змін)
             async function saveAndNext(index) {
               if (isSaving) return;
               isSaving = true;
@@ -3042,13 +3063,9 @@ app.get('/test/question', checkAuth, async (req, res) => {
                       setTimeout(() => window.location.href = '/result', 300);
                     }
                   });
-                } else {
-                  console.error('Помилка збереження:', result.error);
-                  alert('Помилка збереження відповіді');
                 }
               } catch (error) {
                 console.error('Помилка в saveAndNext:', error);
-                alert('Не вдалося зберегти відповідь');
               } finally {
                 isSaving = false;
               }
