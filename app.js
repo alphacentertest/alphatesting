@@ -1962,11 +1962,12 @@ app.get('/test', checkAuth, async (req, res) => {
     const userVariant = Math.floor(Math.random() * 3) + 1;
     logger.info(`Призначено варіант користувачу ${req.user} для тесту ${testNumber}: Variant ${userVariant}`);
 
-    questions = questions.filter(q => !q.variant || q.variant === '' || q.variant === `Variant ${userVariant}`);
-    logger.info(`Відфільтровано питання для тесту ${testNumber}, варіант ${userVariant}: знайдено ${questions.length} питань`);
+    questions = questions.filter(q => 
+      !q.variant || q.variant === '' || q.variant === `Variant ${userVariant}`
+    );
 
     if (questions.length === 0) {
-      return res.status(400).send(`Немає питань для варіанту ${userVariant} у тесті ${testNumber}`);
+      return res.status(400).send(`Немає питань для варіанту ${userVariant}`);
     }
 
     const questionLimit = testNames[testNumber].questionLimit;
@@ -1978,14 +1979,24 @@ app.get('/test', checkAuth, async (req, res) => {
       questions = shuffleArray([...questions]);
     }
 
+    // === ОДНОРАЗОВЕ ПЕРЕМІШУВАННЯ MATCHING ТІЛЬКИ ПРИ СТАРТІ ТЕСТУ ===
+    questions = questions.map(q => {
+      if (q.type === 'matching' && q.pairs && q.pairs.length > 0) {
+        logger.info(`[SHUFFLE MATCHING] Перемішуємо пари для питання (один раз на початку тесту)`, {
+          testNumber,
+          questionText: q.text.substring(0, 80)
+        });
+        q.pairs = shuffleArray([...q.pairs]);
+        q.correctPairs = q.pairs.map(pair => [pair.left, pair.right]); // оновлюємо correctPairs
+      }
+      return q;
+    });
+
     if (testNames[testNumber].randomAnswers) {
       questions = questions.map(q => {
         if (q.options && q.options.length > 0 && q.type !== 'ordering' && q.type !== 'matching') {
           const shuffledOptions = shuffleArray([...q.options]);
           return { ...q, options: shuffledOptions };
-        } else if (q.type === 'matching' && q.pairs) {
-          const shuffledPairs = shuffleArray([...q.pairs]);
-          return { ...q, pairs: shuffledPairs };
         }
         return q;
       });
@@ -1994,11 +2005,10 @@ app.get('/test', checkAuth, async (req, res) => {
     const testStartTime = Date.now();
     const testSessionId = `${req.user}_${testNumber}_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
 
-    // Збереження стану тесту в MongoDB
     const testData = {
       user: req.user,
       testNumber,
-      questions,
+      questions,                    // зберігаємо вже перемішані
       answers: {},
       currentQuestion: 0,
       startTime: testStartTime,
@@ -2007,8 +2017,6 @@ app.get('/test', checkAuth, async (req, res) => {
       isQuickTest: testNames[testNumber].isQuickTest,
       timePerQuestion: testNames[testNumber].timePerQuestion,
       testSessionId: testSessionId,
-      isSavingResult: false,
-      answerTimestamps: {},
       questionStartTime: {},
       suspiciousActivity: { timeAway: 0, switchCount: 0, responseTimes: [], activityCounts: [] }
     };
@@ -2020,14 +2028,14 @@ app.get('/test', checkAuth, async (req, res) => {
     );
 
     const ipAddress = req.headers['x-forwarded-for'] || req.socket.remoteAddress;
-    await logActivity(req.user, `розпочав тест ${testNames[testNumber].name.replace(/"/g, '\\"')}`, ipAddress);
+    await logActivity(req.user, `розпочав тест ${testNames[testNumber].name}`, ipAddress);
+
     res.redirect(`/test/question?index=0`);
   } catch (error) {
     logger.error('Помилка в /test', { message: error.message, stack: error.stack });
-    res.status(500).send('Помилка при завантаженні тесту: ' + error.message);
+    res.status(500).send('Помилка при завантаженні тесту');
   } finally {
-    const endTime = Date.now();
-    logger.info('Маршрут /test виконано', { duration: `${endTime - startTime} мс` });
+    logger.info('Маршрут /test виконано', { duration: `${Date.now() - startTime} мс` });
   }
 });
 
@@ -2183,7 +2191,7 @@ app.get('/instructions', checkAuth, (req, res) => {
   }
 });
 
-
+// Відображення питання тесту — з правильним переносом тексту цілими словами
 app.get('/test/question', checkAuth, async (req, res) => {
   const startTime = Date.now();
   try {
@@ -2932,7 +2940,6 @@ app.get('/test/question', checkAuth, async (req, res) => {
               }
             }
 
-            // === Відновлення порядку пар при поверненні назад ===
             function restoreMatchingOrder(savedPairs) {
               if (!savedPairs || !Array.isArray(savedPairs) || savedPairs.length === 0) return;
 
@@ -2959,7 +2966,7 @@ app.get('/test/question', checkAuth, async (req, res) => {
               if (confirm('Скинути порядок?')) location.reload();
             }
 
-            // Автозбереження відповіді
+            // Головна функція збереження
             async function saveCurrentAnswer(index) {
               if (isSaving) return;
               isSaving = true;
@@ -2970,6 +2977,7 @@ app.get('/test/question', checkAuth, async (req, res) => {
                 if (document.querySelector('.fillblank-question')) {
                   answerData = Array.from(document.querySelectorAll('.blank-input'))
                                     .map(el => el.value.trim());
+                  console.log('[SAVE FILLBLANK] Питання ' + index + ' — збережено ' + answerData.length + ' пропусків', answerData);
                 } 
                 else if (document.getElementById('q' + index + '_input')) {
                   answerData = [document.getElementById('q' + index + '_input').value.trim()];
@@ -2981,6 +2989,7 @@ app.get('/test/question', checkAuth, async (req, res) => {
                 else if (document.getElementById('left-column-' + index)) {
                   updateMatchingPairs();
                   answerData = currentMatchingPairs;
+                  console.log('[SAVE MATCHING] Питання ' + index + ' — збережено ' + answerData.length + ' пар', answerData);
                 } 
                 else {
                   answerData = Array.from(document.querySelectorAll('.option-box.selected'))
@@ -3004,15 +3013,18 @@ app.get('/test/question', checkAuth, async (req, res) => {
                   body: formData
                 });
 
-                if (!resp.ok) throw new Error('HTTP ' + resp.status);
+                if (resp.ok) {
+                  console.log('[SAVE SUCCESS] Питання ' + index + ' успішно збережено');
+                } else {
+                  console.error('[SAVE FAILED] HTTP ' + resp.status + ' для питання ' + index);
+                }
               } catch (err) {
-                console.error('Помилка збереження:', err);
+                console.error('Помилка збереження питання ' + index + ':', err);
               } finally {
                 isSaving = false;
               }
             }
 
-            // Збереження + наступне питання
             async function saveAndNext(index) {
               if (isSaving) return;
               isSaving = true;
@@ -3071,7 +3083,6 @@ app.get('/test/question', checkAuth, async (req, res) => {
               }
             }
 
-            // Завершення тесту
             async function finishTest(index) {
               if (isSaving) return;
               isSaving = true;
@@ -3274,7 +3285,6 @@ app.get('/test/question', checkAuth, async (req, res) => {
                   onEnd: updateMatchingPairs
                 });
 
-                // Відновлюємо порядок, якщо є збережені пари
                 if (matchingPairs && matchingPairs.length > 0) {
                   setTimeout(() => {
                     restoreMatchingOrder(matchingPairs);
@@ -3316,21 +3326,17 @@ app.get('/test/question', checkAuth, async (req, res) => {
                   timerCircle.style.strokeDashoffset = offset;
                 }
 
-                // === ВИПРАВЛЕННЯ: Автоматичне завершення тесту ===
                 if (questionTimeRemaining <= 0) {
                   clearInterval(questionTimerInterval);
                   
                   if (currentQuestionIndex === totalQuestions - 1) {
-                    // Це останнє питання — зберігаємо відповідь і завершуємо тест
                     hasMovedToNext = true;
                     saveCurrentAnswer(currentQuestionIndex).then(() => {
-                      // Перехід на результат
                       window.location.href = '/result';
                     }).catch(() => {
                       window.location.href = '/result';
                     });
                   } else if (currentQuestionIndex < totalQuestions - 1 && !hasMovedToNext) {
-                    // Не останнє питання — переходимо далі
                     hasMovedToNext = true;
                     saveCurrentAnswer(currentQuestionIndex).then(() => {
                       saveAndNext(currentQuestionIndex);
@@ -3402,24 +3408,28 @@ app.post('/answer', checkAuth, express.urlencoded({ extended: true }), async (re
     logger.info('[ANSWER DEBUG]', { 
       index, 
       answerType: typeof answer, 
-      rawAnswer: answer 
+      rawAnswer: answer,
+      isArray: Array.isArray(answer)
     });
 
     let parsedAnswer = [];
 
     try {
       if (typeof answer === 'string') {
-        if (answer.trim() !== '') {
+        if (answer.trim() === '' || answer.trim() === '[]') {
+          parsedAnswer = [];
+        } else {
           parsedAnswer = JSON.parse(answer);
         }
       } else if (Array.isArray(answer)) {
         parsedAnswer = answer;
       }
     } catch (e) {
-      logger.warn('[ANSWER] Помилка парсингу', { answer });
+      logger.warn('[ANSWER] Помилка парсингу JSON', { answer, error: e.message });
+      parsedAnswer = [];
     }
 
-    // === РОЗШИРЕНА ОБРОБКА MATCHING ===
+    // === РОЗШИРЕНА ОБРОБКА ДЛЯ MATCHING ===
     const userTestCheck = await db.collection('active_tests').findOne({ user: req.user });
     const question = userTestCheck?.questions?.[parseInt(index)];
 
@@ -3427,25 +3437,40 @@ app.post('/answer', checkAuth, express.urlencoded({ extended: true }), async (re
       logger.info('[ANSWER MATCHING RAW]', { 
         index, 
         raw: parsedAnswer, 
-        length: Array.isArray(parsedAnswer) ? parsedAnswer.length : 0 
+        length: Array.isArray(parsedAnswer) ? parsedAnswer.length : 0,
+        firstElementType: typeof parsedAnswer[0]
       });
 
-      // Якщо прийшов порожній масив — намагаємося взяти з інших полів (fallback)
-      if (!Array.isArray(parsedAnswer) || parsedAnswer.length === 0) {
-        logger.warn('[ANSWER] Matching: отримали порожній масив — використовуємо fallback', { index });
-        parsedAnswer = []; // поки що залишаємо порожнім, але не падаємо
-      } 
-      else if (Array.isArray(parsedAnswer[0]) && parsedAnswer[0].length === 2) {
-        // вже добре
-      } 
-      else if (parsedAnswer.length % 2 === 0) {
+      if (!Array.isArray(parsedAnswer)) {
+        parsedAnswer = [];
+      }
+
+      // Якщо прийшов плоский масив [left1, right1, left2, right2...]
+      if (parsedAnswer.length > 0 && !Array.isArray(parsedAnswer[0])) {
         const pairs = [];
         for (let i = 0; i < parsedAnswer.length; i += 2) {
-          pairs.push([String(parsedAnswer[i] || ''), String(parsedAnswer[i+1] || '')]);
+          pairs.push([
+            String(parsedAnswer[i] || ''),
+            String(parsedAnswer[i + 1] || '')
+          ]);
         }
         parsedAnswer = pairs;
-        logger.info('[ANSWER] Matching: перетворено плоский масив', { count: pairs.length });
+        logger.info('[ANSWER] Matching: перетворено плоский масив у пари', { count: pairs.length });
       }
+    }
+
+    // === FILLBLANK — спеціальна обробка ===
+    if (question?.type === 'fillblank') {
+      if (!Array.isArray(parsedAnswer)) {
+        parsedAnswer = typeof parsedAnswer === 'string' 
+          ? [parsedAnswer] 
+          : [];
+      }
+      logger.info('[ANSWER FILLBLANK]', { 
+        index, 
+        parsed: parsedAnswer,
+        length: parsedAnswer.length 
+      });
     }
 
     // Збереження
@@ -3470,7 +3495,11 @@ app.post('/answer', checkAuth, express.urlencoded({ extended: true }), async (re
     res.json({ success: true });
 
   } catch (error) {
-    logger.error('[ANSWER CRITICAL]', { message: error.message, stack: error.stack });
+    logger.error('[ANSWER CRITICAL]', { 
+      message: error.message, 
+      stack: error.stack,
+      index: req.body.index 
+    });
     res.status(500).json({ success: false, error: 'Не вдалося зберегти відповідь' });
   } finally {
     logger.info('Маршрут /answer виконано', { duration: Date.now() - startTime });
