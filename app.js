@@ -401,6 +401,21 @@ app.use((req, res, next) => {
   next();
 });
 
+// Допоміжна функція для форматування часу в київському часовому поясі
+function formatKievTime(date) {
+  if (!date) return '—';
+  return new Date(date).toLocaleString('uk-UA', {
+    timeZone: 'Europe/Kiev',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: false
+  });
+}
+
 // Імпорт користувачів
 const importUsersToMongoDB = async (buffer) => {
   try {
@@ -1619,7 +1634,7 @@ app.post('/feedback', checkAuth, [
         text: `
           Користувач: ${user}
           Повідомлення: ${message}
-          Час: ${new Date(timestamp).toLocaleString('uk-UA')}
+          Час: ${formatKievTime(timestamp)}
           IP-адреса: ${ipAddress}
         `
       };
@@ -6237,8 +6252,8 @@ app.get('/admin/results', checkAuth, async (req, res) => {
         const totalQuestions = questions.length;
         const correctClicks = scoresPerQuestion.filter(s => s > 0).length;
 
-        const startTimeStr = new Date(result.startTime).toLocaleString('uk-UA');
-        const endTimeStr = new Date(result.endTime).toLocaleString('uk-UA');
+        const startTimeStr = formatKievTime(result.startTime);
+        const endTimeStr = formatKievTime(result.endTime);
 
         const durationSec = result.duration || Math.round((new Date(result.endTime) - new Date(result.startTime)) / 1000);
         const minutes = Math.floor(durationSec / 60).toString().padStart(2, '0');
@@ -6413,7 +6428,7 @@ app.get('/admin/view-result', checkAuth, async (req, res) => {
                 roundedPercentage: ${roundedPercentage.toFixed(1)},
                 totalQuestions: ${totalQuestions},
                 correctClicks: ${correctClicks},
-                endDateTime: "${new Date(result.endTime).toLocaleString('uk-UA')}",
+                endDateTime: "${formatKievTime(result.endTime)}",                
                 timeAwayPercent: ${timeAwayPercent},
                 switchCount: ${switchCount},
                 avgResponseTime: ${avgResponseTime},
@@ -6549,7 +6564,7 @@ app.get('/admin/view-result', checkAuth, async (req, res) => {
               <strong>Відсоток:</strong> ${roundedPercentage.toFixed(1)}%<br>
               <strong>Питань:</strong> ${totalQuestions}<br>
               <strong>Правильних:</strong> ${correctClicks}<br>
-              <strong>Дата завершення:</strong> ${new Date(result.endTime).toLocaleString('uk-UA')}<br><br>
+              <strong>Дата завершення:</strong> ${formatKievTime(result.endTime)}<br><br>
               <strong>Підозріла активність:</strong><br>
               Час поза вкладкою: <span class="${timeAwayPercent > 50 ? 'suspicious' : ''}">${timeAwayPercent}%</span><br>
               Переключення вкладок: ${switchCount}<br>
@@ -7278,7 +7293,7 @@ app.get('/admin/activity-log', checkAuth, checkAdmin, async (req, res) => {
                   <td>${a.user}</td>
                   <td>${a.action}</td>
                   <td>${a.ipAddress}</td>
-                  <td>${new Date(a.timestamp).toLocaleString('uk-UA')}</td>
+                  <td>${formatKievTime(a.timestamp)}</td>
                 </tr>
               `).join('') : '<tr><td colspan="4">Немає записів</td></tr>'}
             </table>
