@@ -3792,27 +3792,26 @@ app.get('/result', checkAuth, async (req, res) => {
     const percentage = totalPoints > 0 ? (score / totalPoints) * 100 : 0;
 
     const totalQuestions = questions.length;
+    const correctClicks = scoresPerQuestion.filter(s => s > 0).length;
 
-    // === ПРАВИЛЬНИЙ РОЗРАХУНОК КІЛЬКОСТІ ===
+    // === РОЗРАХУНОК ПОВНІСТЮ ТА ЧАСТКОВО ПРАВИЛЬНИХ ===
     let fullyCorrect = 0;
     let partiallyCorrect = 0;
 
     scoresPerQuestion.forEach((s, idx) => {
-      const maxPointsForQuestion = questions[idx]?.points || 1;
-      
-      if (s >= maxPointsForQuestion) {           // повністю правильно
+      const maxPoints = questions[idx]?.points || 1;
+      if (s >= maxPoints) {
         fullyCorrect++;
-      } else if (s > 0) {                        // частково правильно
+      } else if (s > 0) {
         partiallyCorrect++;
       }
     });
 
-    logger.info('[RESULT] Статистика відповідей', {
-      fullyCorrect,
-      partiallyCorrect,
-      totalQuestions,
-      score: score.toFixed(2)
-    });
+    const timeAwayPercent = result.suspiciousActivity?.timeAway && result.duration
+      ? Math.round((result.suspiciousActivity.timeAway / result.duration) * 100)
+      : 0;
+
+    const switchCount = result.suspiciousActivity?.switchCount || 0;
 
     // 5. Час та підозріла активність
     let endTime = testData.endTime ? new Date(testData.endTime).getTime() : Date.now();
@@ -6482,21 +6481,13 @@ app.get('/admin/view-result', checkAuth, async (req, res) => {
     let totalResponseTime = 0;
     let answeredQuestions = 0;
 
-    // Беремо з різних можливих місць
     const responseTimes = {
-      ... (result.answerTimestamps || {}),
-      ... (result.suspiciousActivity?.responseTimes || {}),
-      ... (testData?.answerTimestamps || {})
+      ...(result.answerTimestamps || {}),
+      ...(result.suspiciousActivity?.responseTimes || {})
     };
 
     questions.forEach((q, idx) => {
       let time = responseTimes[idx] || responseTimes[String(idx)] || 0;
-      
-      // Якщо є questionStartTime — можна приблизно порахувати
-      if (time === 0 && result.questionStartTime && result.questionStartTime[idx]) {
-        time = 30; // fallback 30 секунд, якщо немає точного часу
-      }
-
       if (time > 0) {
         totalResponseTime += parseFloat(time);
         answeredQuestions++;
@@ -6560,13 +6551,13 @@ app.get('/admin/view-result', checkAuth, async (req, res) => {
                 roundedPercentage: ${roundedPercentage.toFixed(1)},
                 totalQuestions: ${totalQuestions},
                 correctClicks: ${correctClicks},
+                fullyCorrect: ${fullyCorrect},
+                partiallyCorrect: ${partiallyCorrect},
                 endDateTime: "${formatKievTime(result.endTime)}",                
                 timeAwayPercent: ${timeAwayPercent},
                 switchCount: ${switchCount},
                 avgResponseTime: ${avgResponseTime},
                 totalActivityCount: ${totalActivityCount},
-                fullyCorrect: ${fullyCorrect},
-                partiallyCorrect: ${partiallyCorrect},
                 questionsTable: ${JSON.stringify(questions.map((q, idx) => {
                   const userAns = result.answers[idx] !== undefined ? result.answers[idx] : 'Не відповіли';
                   let userDisplay = '—';
@@ -6653,6 +6644,8 @@ app.get('/admin/view-result', checkAuth, async (req, res) => {
                         'Час поза вкладкою: ' + viewResultData.timeAwayPercent + '%',
                         'Переключення вкладок: ' + viewResultData.switchCount,
                         'Середній час відповіді: ' + (viewResultData.avgResponseTime || 0) + ' сек',
+                        'Повністю правильних: ' + viewResultData.fullyCorrect,
+                        'Частково правильних: ' + viewResultData.partiallyCorrect,
                         'Загальна активність: ' + viewResultData.totalActivityCount
                       ],
                       margin: [0, 0, 0, 20]
