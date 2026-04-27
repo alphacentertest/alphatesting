@@ -2967,45 +2967,49 @@ app.get('/test/question', checkAuth, async (req, res) => {
               if (confirm('Скинути порядок?')) location.reload();
             }
 
-            // Головна функція збереження
+            // Головна функція збереження (тепер повністю синхронізована з saveAndNext)
             async function saveCurrentAnswer(index) {
               if (isSaving) return;
               isSaving = true;
 
               try {
-                let answerData = [];
+                let answers = [];
 
-                // === FILLBLANK — точна логіка як у saveAndNext ===
-                if ('${q.type}' === 'fillblank' || document.querySelector('.fillblank-question')) {
-                  answerData = [];
-                  for (let i = 0; i < ${q.blankCount || 1}; i++) {
-                    const input = document.getElementById('blank_' + i);
-                    answerData.push(input ? input.value.trim() : '');
-                  }
-                  console.log('[SAVE FILLBLANK] Питання ' + index + ' — збережено ' + answerData.length + ' пропусків', answerData);
-                } 
-                else if (document.getElementById('q' + index + '_input')) {
-                  answerData = [document.getElementById('q' + index + '_input').value.trim()];
+                if (document.querySelector('input[name="q' + index + '"]')) {
+                  // input / single line
+                  answers = document.getElementById('q' + index + '_input').value.trim();
                 } 
                 else if (document.getElementById('sortable-options')) {
-                  answerData = Array.from(document.querySelectorAll('#sortable-options .option-box'))
-                                    .map(el => el.dataset.value.trim());
+                  // ordering
+                  answers = Array.from(document.querySelectorAll('#sortable-options .option-box'))
+                                 .map(el => el.dataset.value.trim());
                 } 
                 else if (document.getElementById('left-column-' + index)) {
+                  // matching
                   updateMatchingPairs();
-                  answerData = currentMatchingPairs;
-                  console.log('[SAVE MATCHING] Питання ' + index + ' — збережено ' + answerData.length + ' пар', answerData);
+                  answers = currentMatchingPairs;
+                  console.log('[SAVE MATCHING] Питання ' + index + ' — збережено ' + answers.length + ' пар', answers);
+                } 
+                else if ('${q.type}' === 'fillblank' || document.querySelector('.fillblank-question') || document.getElementById('blank_0')) {
+                  // fillblank — точна логіка як у saveAndNext
+                  answers = [];
+                  for (let i = 0; i < ${q.blankCount || 1}; i++) {
+                    const input = document.getElementById('blank_' + i);
+                    answers.push(input ? input.value.trim() : '');
+                  }
+                  console.log('[SAVE FILLBLANK] Питання ' + index + ' — збережено ' + answers.length + ' пропусків', answers);
                 } 
                 else {
-                  answerData = Array.from(document.querySelectorAll('.option-box.selected'))
-                                    .map(el => el.dataset.value.trim());
+                  // singlechoice / multiple / truefalse
+                  answers = Array.from(document.querySelectorAll('.option-box.selected'))
+                                 .map(el => el.dataset.value.trim());
                 }
 
                 const responseTime = (Date.now() - (questionStartTimeObj[index] || Date.now())) / 1000;
 
                 const formData = new URLSearchParams();
                 formData.append('index', index);
-                formData.append('answer', JSON.stringify(answerData));
+                formData.append('answer', JSON.stringify(answers));
                 formData.append('timeAway', timeAway);
                 formData.append('switchCount', switchCount);
                 formData.append('responseTime', responseTime);
@@ -3021,7 +3025,7 @@ app.get('/test/question', checkAuth, async (req, res) => {
                 if (resp.ok) {
                   console.log('[SAVE SUCCESS] Питання ' + index + ' успішно збережено');
                 } else {
-                  console.error('[SAVE FAILED] HTTP ' + resp.status + ' для питання ' + index);
+                  console.error('[SAVE FAILED] HTTP ' + resp.status);
                 }
               } catch (err) {
                 console.error('Помилка збереження питання ' + index + ':', err);
