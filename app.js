@@ -3000,7 +3000,7 @@ app.get('/test/question', checkAuth, async (req, res) => {
               if (confirm('Скинути порядок?')) location.reload();
             }
 
-                        // Головна функція збереження (спеціально покращена для matching + fillblank)
+            // Головна функція збереження (спеціально покращена для matching + fillblank)
             async function saveCurrentAnswer(index) {
               if (isSaving) return;
               isSaving = true;
@@ -3008,40 +3008,31 @@ app.get('/test/question', checkAuth, async (req, res) => {
               try {
                 let answers = [];
 
-                if (document.querySelector('input[name="q' + index + '"]')) {
-                  answers = document.getElementById('q' + index + '_input').value.trim();
-                } 
-                else if (document.getElementById('sortable-options')) {
-                  answers = Array.from(document.querySelectorAll('#sortable-options .option-box'))
-                                 .map(el => el.dataset.value.trim());
-                } 
-                else if (document.getElementById('left-column-' + index)) {
-                  // === MATCHING — надійніше збереження ===
-                  updateMatchingPairs();                    // оновлюємо поточний стан
+                // Matching
+                if (document.getElementById('left-column-' + index)) {
+                  updateMatchingPairs();
                   answers = currentMatchingPairs;
-                  
-                  // Додаткове дублювання для надійності
-                  if (answers.length === 0) {
-                    const leftItems = Array.from(document.querySelectorAll('#left-column-' + index + ' .matching-item'));
-                    const rightItems = Array.from(document.querySelectorAll('#right-column-' + index + ' .matching-item'));
-                    answers = [];
-                    for (let i = 0; i < Math.min(leftItems.length, rightItems.length); i++) {
-                      answers.push([
-                        (leftItems[i].dataset.left || '').trim(),
-                        (rightItems[i].dataset.right || '').trim()
-                      ]);
-                    }
-                  }
-                  console.log('[SAVE MATCHING] Питання ' + index + ' — збережено ' + answers.length + ' пар', answers);
+                  console.log('[SAVE MATCHING]', answers.length, 'пар');
                 } 
+                // Fillblank
                 else if ('${q.type}' === 'fillblank' || document.querySelector('.fillblank-question') || document.getElementById('blank_0')) {
                   answers = [];
                   for (let i = 0; i < ${q.blankCount || 1}; i++) {
                     const input = document.getElementById('blank_' + i);
                     answers.push(input ? input.value.trim() : '');
                   }
-                  console.log('[SAVE FILLBLANK] Питання ' + index + ' — збережено ' + answers.length + ' пропусків', answers);
+                  console.log('[SAVE FILLBLANK]', answers);
                 } 
+                // Input
+                else if (document.getElementById('q' + index + '_input')) {
+                  answers = [document.getElementById('q' + index + '_input').value.trim()];
+                } 
+                // Ordering
+                else if (document.getElementById('sortable-options')) {
+                  answers = Array.from(document.querySelectorAll('#sortable-options .option-box'))
+                                 .map(el => el.dataset.value.trim());
+                } 
+                // Single/Multiple/TrueFalse
                 else {
                   answers = Array.from(document.querySelectorAll('.option-box.selected'))
                                  .map(el => el.dataset.value.trim());
@@ -3058,17 +3049,15 @@ app.get('/test/question', checkAuth, async (req, res) => {
                 formData.append('activityCount', activityCount);
                 formData.append('_csrf', '${res.locals._csrf}');
 
-                const resp = await fetch('/answer', {
+                await fetch('/answer', {
                   method: 'POST',
                   headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
                   body: formData
                 });
 
-                if (resp.ok) {
-                  console.log('[SAVE SUCCESS] Питання ' + index + ' успішно збережено');
-                }
+                console.log('[SAVE SUCCESS] Питання', index);
               } catch (err) {
-                console.error('Помилка збереження питання ' + index + ':', err);
+                console.error('Помилка збереження', index, err);
               } finally {
                 isSaving = false;
               }
