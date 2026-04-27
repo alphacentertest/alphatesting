@@ -6444,15 +6444,25 @@ app.get('/admin/view-result', checkAuth, async (req, res) => {
 
     const switchCount = result.suspiciousActivity?.switchCount || 0;
 
-    // === ВИПРАВЛЕНО: Середній час відповіді ===
-    let avgResponseTime = 0;
-    const responseTimes = result.suspiciousActivity?.responseTimes || [];
-    if (responseTimes.length > 0) {
-      const validTimes = responseTimes.filter(t => typeof t === 'number' && t > 0);
-      if (validTimes.length > 0) {
-        avgResponseTime = (validTimes.reduce((sum, t) => sum + t, 0) / validTimes.length).toFixed(2);
+    // === РОЗРАХУНОК СЕРЕДНЬОГО ЧАСУ ВІДПОВІДІ ===
+    let totalResponseTime = 0;
+    let answeredQuestions = 0;
+    const responseTimes = result.answerTimestamps || result.responseTimes || {};
+
+    questions.forEach((q, idx) => {
+      const time = responseTimes[idx] || responseTimes[String(idx)] || 0;
+      if (time > 0) {
+        totalResponseTime += parseFloat(time);
+        answeredQuestions++;
       }
-    }
+    });
+
+    const avgResponseTime = answeredQuestions > 0 
+      ? (totalResponseTime / answeredQuestions).toFixed(1) 
+      : 0;
+
+    console.log('[VIEW-RESULT] Середній час відповіді:', avgResponseTime, 
+                'секунд (на основі', answeredQuestions, 'відповідей)');
 
     const totalActivityCount = result.suspiciousActivity?.activityCounts
       ? result.suspiciousActivity.activityCounts.reduce((sum, c) => sum + (c || 0), 0)
@@ -6594,7 +6604,7 @@ app.get('/admin/view-result', checkAuth, async (req, res) => {
                       ul: [
                         'Час поза вкладкою: ' + viewResultData.timeAwayPercent + '%',
                         'Переключення вкладок: ' + viewResultData.switchCount,
-                        'Середній час відповіді: ' + viewResultData.avgResponseTime + ' с',
+                        'Середній час відповіді: ' + (viewResultData.avgResponseTime || 0) + ' сек',
                         'Загальна активність: ' + viewResultData.totalActivityCount
                       ],
                       margin: [0, 0, 0, 20]
