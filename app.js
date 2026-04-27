@@ -2967,7 +2967,7 @@ app.get('/test/question', checkAuth, async (req, res) => {
               if (confirm('Скинути порядок?')) location.reload();
             }
 
-            // Головна функція збереження (тепер повністю синхронізована з saveAndNext)
+                        // Головна функція збереження (спеціально покращена для matching + fillblank)
             async function saveCurrentAnswer(index) {
               if (isSaving) return;
               isSaving = true;
@@ -2976,22 +2976,32 @@ app.get('/test/question', checkAuth, async (req, res) => {
                 let answers = [];
 
                 if (document.querySelector('input[name="q' + index + '"]')) {
-                  // input / single line
                   answers = document.getElementById('q' + index + '_input').value.trim();
                 } 
                 else if (document.getElementById('sortable-options')) {
-                  // ordering
                   answers = Array.from(document.querySelectorAll('#sortable-options .option-box'))
                                  .map(el => el.dataset.value.trim());
                 } 
                 else if (document.getElementById('left-column-' + index)) {
-                  // matching
-                  updateMatchingPairs();
+                  // === MATCHING — надійніше збереження ===
+                  updateMatchingPairs();                    // оновлюємо поточний стан
                   answers = currentMatchingPairs;
+                  
+                  // Додаткове дублювання для надійності
+                  if (answers.length === 0) {
+                    const leftItems = Array.from(document.querySelectorAll('#left-column-' + index + ' .matching-item'));
+                    const rightItems = Array.from(document.querySelectorAll('#right-column-' + index + ' .matching-item'));
+                    answers = [];
+                    for (let i = 0; i < Math.min(leftItems.length, rightItems.length); i++) {
+                      answers.push([
+                        (leftItems[i].dataset.left || '').trim(),
+                        (rightItems[i].dataset.right || '').trim()
+                      ]);
+                    }
+                  }
                   console.log('[SAVE MATCHING] Питання ' + index + ' — збережено ' + answers.length + ' пар', answers);
                 } 
                 else if ('${q.type}' === 'fillblank' || document.querySelector('.fillblank-question') || document.getElementById('blank_0')) {
-                  // fillblank — точна логіка як у saveAndNext
                   answers = [];
                   for (let i = 0; i < ${q.blankCount || 1}; i++) {
                     const input = document.getElementById('blank_' + i);
@@ -3000,7 +3010,6 @@ app.get('/test/question', checkAuth, async (req, res) => {
                   console.log('[SAVE FILLBLANK] Питання ' + index + ' — збережено ' + answers.length + ' пропусків', answers);
                 } 
                 else {
-                  // singlechoice / multiple / truefalse
                   answers = Array.from(document.querySelectorAll('.option-box.selected'))
                                  .map(el => el.dataset.value.trim());
                 }
@@ -3024,8 +3033,6 @@ app.get('/test/question', checkAuth, async (req, res) => {
 
                 if (resp.ok) {
                   console.log('[SAVE SUCCESS] Питання ' + index + ' успішно збережено');
-                } else {
-                  console.error('[SAVE FAILED] HTTP ' + resp.status);
                 }
               } catch (err) {
                 console.error('Помилка збереження питання ' + index + ':', err);
@@ -3033,7 +3040,7 @@ app.get('/test/question', checkAuth, async (req, res) => {
                 isSaving = false;
               }
             }
-
+              
             async function saveAndNext(index) {
               if (isSaving) return;
               isSaving = true;
