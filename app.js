@@ -423,25 +423,50 @@ const importUsersToMongoDB = async (buffer) => {
     await workbook.xlsx.load(buffer);
     let sheet = workbook.getWorksheet('Users') || workbook.getWorksheet('Sheet1');
     if (!sheet) throw new Error('Лист "Users" або "Sheet1" не знайдено');
+
     const users = [];
     const saltRounds = 10;
-    for (let rowNumber = 2; rowNumber <= sheet.rowCount; rowNumber++) {
-      const row = sheet.getRow(rowNumber);
+
+    sheet.eachRow({ includeEmpty: false }, (row, rowNumber) => {
+      if (rowNumber === 1) return; // пропускаємо заголовок
+
       const username = String(row.getCell(1).value || '').trim();
-      const password = String(row.getCell(2).value || '').trim();
-      const role = String(row.getCell(3).value || '').trim().toLowerCase();
-      if (username && password) {
-        const hashedPassword = await bcrypt.hash(password, saltRounds);
-        const userRole = role === 'admin' ? 'admin' : role === 'instructor' ? 'instructor' : 'user';
-        users.push({ username, password: hashedPassword, role: userRole });
+      let password = String(row.getCell(2).value || '').trim();
+      const roleRaw = String(row.getCell(3).value || '').trim().toLowerCase();
+
+      if (!username || !password) return;
+
+      const userRole = roleRaw === 'admin' ? 'admin' 
+                     : roleRaw === 'instructor' ? 'instructor' 
+                     : 'user';
+
+      // Якщо пароль виглядає як вже хешований — не хешуємо вдруге
+      if (password.startsWith('$2b$') || password.startsWith('$2a$')) {
+        // вже хешований — залишаємо як є
+      } else {
+        // хешуємо тільки простий пароль
+        password = bcrypt.hashSync(password, saltRounds);
       }
-    }
-    if (!users.length) throw new Error('Не знайдено користувачів');
+
+      users.push({
+        username,
+        password,
+        role: userRole
+      });
+    });
+
+    if (users.length === 0) throw new Error('Не знайдено користувачів для імпорту');
+
+    // Видаляємо старих і вставляємо нових
     await db.collection('users').deleteMany({});
     await db.collection('users').insertMany(users);
+
     logger.info(`Імпортовано ${users.length} користувачів`);
+
+    // Обов'язково оновлюємо кеш!
     await CacheManager.invalidateCache('users', null);
     await loadUsersToCache();
+
     return users.length;
   } catch (error) {
     logger.error('Помилка імпорту користувачів', { message: error.message, stack: error.stack });
@@ -3486,9 +3511,8 @@ app.post('/answer', checkAuth, express.urlencoded({ extended: true }), async (re
       { 
         $set: { 
           [`answers.${index}`]: parsedAnswer,
-          currentQuestion: parseInt(index) + 1,
-          [`answerTimestamps.${index}`]: Date.now(),        // головне
-          [`questionStartTime.${index}`]: Date.now()        // допоміжне
+          [`answerTimestamps.${index}`]: Date.now(),   // ← цей рядок має бути!
+          currentQuestion: parseInt(index) + 1
         } 
       }
     );
