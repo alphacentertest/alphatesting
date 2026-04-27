@@ -3752,13 +3752,10 @@ app.get('/result', checkAuth, async (req, res) => {
     // 3. === ВИПРАВЛЕННЯ: ПІДТРИМКА ВИПАДКОВИХ ПИТАНЬ ===
     let questions = [];
 
-    // Пріоритет 1: використовуємо збережені питання з тесту (для випадкового вибору та Quick Test)
     if (testData.questions && Array.isArray(testData.questions) && testData.questions.length > 0) {
       questions = testData.questions;
       logger.info('[RESULT] Використано збережені питання з active_tests / result', { count: questions.length });
-    } 
-    // Пріоритет 2: fallback — завантажуємо з бази (для старих тестів)
-    else {
+    } else {
       let allQuestions = await db.collection('questions')
         .find({ testNumber })
         .sort({ order: 1 })
@@ -3807,7 +3804,7 @@ app.get('/result', checkAuth, async (req, res) => {
       }
     });
 
-    // 5. Час та підозріла активність
+    // 5. Час та підозріла активність — ВИПРАВЛЕНО (без дублювання)
     let endTime = testData.endTime ? new Date(testData.endTime).getTime() : Date.now();
     const maxEndTime = startTimeMs + timeLimit;
     if (endTime > maxEndTime) endTime = maxEndTime;
@@ -3815,11 +3812,10 @@ app.get('/result', checkAuth, async (req, res) => {
     const duration = Math.round((endTime - startTimeMs) / 1000);
     const timeAway = suspiciousActivity.timeAway || 0;
     const correctedTimeAway = Math.min(timeAway, duration);
-    
-    // ←←←←←←←←←←←←←←←←←←←←←←←←←←←←←←←←←←
     const timeAwayPercent = duration > 0 ? Math.round((correctedTimeAway / duration) * 100) : 0;
     const switchCount = suspiciousActivity.switchCount || 0;
-    // ←←←←←←←←←←←←←←←←←←←←←←←←←←←←←←←←←←
+
+    const ipAddress = req.headers['x-forwarded-for'] || req.socket.remoteAddress;
 
     // 6. Збереження результату (якщо потрібно)
     const existingResult = await db.collection('test_results').findOne({ testSessionId });
@@ -3842,7 +3838,7 @@ app.get('/result', checkAuth, async (req, res) => {
         startTimeMs,
         endTime,
         Object.keys(answers).length,
-        fullyCorrect,                    // передаємо правильну кількість
+        fullyCorrect,
         totalQuestions,
         percentage,
         { timeAway: correctedTimeAway, switchCount, responseTimes: suspiciousActivity.responseTimes || [], activityCounts: suspiciousActivity.activityCounts || [] },
