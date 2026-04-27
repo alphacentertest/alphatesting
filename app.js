@@ -3821,10 +3821,9 @@ app.get('/result', checkAuth, async (req, res) => {
     const duration = Math.round((endTime - startTimeMs) / 1000);
     const timeAway = suspiciousActivity.timeAway || 0;
     const correctedTimeAway = Math.min(timeAway, duration);
+    
     const timeAwayPercent = duration > 0 ? Math.round((correctedTimeAway / duration) * 100) : 0;
     const switchCount = suspiciousActivity.switchCount || 0;
-
-    const ipAddress = req.headers['x-forwarded-for'] || req.socket.remoteAddress;
 
     // 6. Збереження результату (якщо потрібно)
     const existingResult = await db.collection('test_results').findOne({ testSessionId });
@@ -6344,11 +6343,6 @@ app.get('/admin/results', checkAuth, async (req, res) => {
         const minutes = Math.floor(durationSec / 60).toString().padStart(2, '0');
         const seconds = (durationSec % 60).toString().padStart(2, '0');
 
-        const timeAwayPercent = result.suspiciousActivity?.timeAway && result.duration
-          ? Math.round((result.suspiciousActivity.timeAway / result.duration) * 100)
-          : 0;
-
-        const switchCount = result.suspiciousActivity?.switchCount || 0;
         const isSuspicious = timeAwayPercent > 50 || switchCount > 10;
 
         html += `
@@ -6482,26 +6476,19 @@ app.get('/admin/view-result', checkAuth, async (req, res) => {
 
     const switchCount = result.suspiciousActivity?.switchCount || 0;
 
-    // === РОЗРАХУНОК СЕРЕДНЬОГО ЧАСУ ===
+    // Середній час відповіді
     let totalResponseTime = 0;
     let answeredQuestions = 0;
+    const responseTimes = testData.answerTimestamps || suspiciousActivity.responseTimes || {};
 
-    const responseTimes = {
-      ...(result.answerTimestamps || {}),
-      ...(result.suspiciousActivity?.responseTimes || {})
-    };
-
-    questions.forEach((q, idx) => {
-      let time = responseTimes[idx] || responseTimes[String(idx)] || 0;
-      if (time > 0) {
-        totalResponseTime += parseFloat(time);
+    Object.keys(responseTimes).forEach(key => {
+      const t = parseFloat(responseTimes[key]);
+      if (t > 0) {
+        totalResponseTime += t;
         answeredQuestions++;
       }
     });
-
-    const avgResponseTime = answeredQuestions > 0 
-      ? (totalResponseTime / answeredQuestions).toFixed(1) 
-      : 0;
+    const avgResponseTime = answeredQuestions > 0 ? (totalResponseTime / answeredQuestions).toFixed(1) : 0;
 
     const totalActivityCount = result.suspiciousActivity?.activityCounts
       ? result.suspiciousActivity.activityCounts.reduce((sum, c) => sum + (c || 0), 0)
@@ -6707,7 +6694,7 @@ app.get('/admin/view-result', checkAuth, async (req, res) => {
               <strong>Підозріла активність:</strong><br>
               Час поза вкладкою: <span class="${timeAwayPercent > 50 ? 'suspicious' : ''}">${timeAwayPercent}%</span><br>
               Переключення вкладок: ${switchCount}<br>
-              Середній час відповіді: ${avgResponseTime} с<br>
+              Середній час відповіді: ${avgResponseTime} сек<br>
               Загальна активність: ${totalActivityCount}
             </div>
 
