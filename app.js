@@ -6462,14 +6462,18 @@ app.get('/admin/view-result', checkAuth, async (req, res) => {
     const totalQuestions = questions.length;
     const correctClicks = scoresPerQuestion.filter(s => s > 0).length;
 
-    // === РОЗРАХУНОК ЧАСТКОВО ПРАВИЛЬНИХ ===
-    const fullyCorrect = scoresPerQuestion.filter((s, idx) => 
-      s > 0 && s === (questions[idx]?.points || 1)
-    ).length;
+    // === РОЗРАХУНОК ПОВНІСТЮ ТА ЧАСТКОВО ПРАВИЛЬНИХ ===
+    let fullyCorrect = 0;
+    let partiallyCorrect = 0;
 
-    const partiallyCorrect = scoresPerQuestion.filter((s, idx) => 
-      s > 0 && s < (questions[idx]?.points || 1)
-    ).length;
+    scoresPerQuestion.forEach((s, idx) => {
+      const maxPoints = questions[idx]?.points || 1;
+      if (s >= maxPoints) {
+        fullyCorrect++;
+      } else if (s > 0) {
+        partiallyCorrect++;
+      }
+    });
 
     const timeAwayPercent = result.suspiciousActivity?.timeAway && result.duration
       ? Math.round((result.suspiciousActivity.timeAway / result.duration) * 100)
@@ -6477,7 +6481,7 @@ app.get('/admin/view-result', checkAuth, async (req, res) => {
 
     const switchCount = result.suspiciousActivity?.switchCount || 0;
 
-    // === РОЗРАХУНОК СЕРЕДНЬОГО ЧАСУ ВІДПОВІДІ ===
+    // === РОЗРАХУНОК СЕРЕДНЬОГО ЧАСУ ===
     let totalResponseTime = 0;
     let answeredQuestions = 0;
 
@@ -6498,16 +6502,14 @@ app.get('/admin/view-result', checkAuth, async (req, res) => {
       ? (totalResponseTime / answeredQuestions).toFixed(1) 
       : 0;
 
-    console.log('[VIEW-RESULT] Середній час відповіді:', avgResponseTime, 
-                'секунд (на основі', answeredQuestions, 'відповідей)');
-
     const totalActivityCount = result.suspiciousActivity?.activityCounts
       ? result.suspiciousActivity.activityCounts.reduce((sum, c) => sum + (c || 0), 0)
       : 0;
 
     logger.info('[VIEW-RESULT] Статистика', { 
-      avgResponseTime, 
-      responseTimesCount: responseTimes.length,
+      fullyCorrect, 
+      partiallyCorrect, 
+      avgResponseTime,
       timeAwayPercent 
     });
 
@@ -6563,7 +6565,6 @@ app.get('/admin/view-result', checkAuth, async (req, res) => {
                   let userDisplay = '—';
                   let correctDisplay = '—';
 
-                  // Відповідь користувача
                   if (Array.isArray(userAns)) {
                     if (q.type === 'matching') {
                       userDisplay = userAns.map(pair => {
@@ -6581,7 +6582,6 @@ app.get('/admin/view-result', checkAuth, async (req, res) => {
                     userDisplay = String(userAns || '—');
                   }
 
-                  // Правильна відповідь
                   if (q.type === 'matching') {
                     const pairs = q.correctPairs || (q.pairs || []).map(p => [p.left, p.right]);
                     correctDisplay = pairs.map(pair => 
@@ -6613,16 +6613,12 @@ app.get('/admin/view-result', checkAuth, async (req, res) => {
                   pageSize: 'A4',
                   pageOrientation: 'portrait',
                   pageMargins: [25, 30, 25, 30],
-                  defaultStyle: { 
-                    fontSize: 9, 
-                    lineHeight: 1.35 
-                  },
+                  defaultStyle: { fontSize: 9, lineHeight: 1.35 },
                   content: [
                     { text: 'Деталі результату для користувача ' + viewResultData.user, style: 'mainHeader' },
                     { text: 'Тест: ' + viewResultData.testName, margin: [0, 8, 0, 5], style: 'subHeader' },
                     { text: 'Варіант: ' + viewResultData.variant, margin: [0, 0, 0, 15] },
 
-                    // Зведена інформація
                     {
                       table: {
                         widths: ['*', 'auto'],
@@ -6630,7 +6626,8 @@ app.get('/admin/view-result', checkAuth, async (req, res) => {
                           [{ text: 'Бали:', bold: true }, viewResultData.roundedScore + ' з ' + viewResultData.totalPoints],
                           [{ text: 'Відсоток:', bold: true }, viewResultData.roundedPercentage + '%'],
                           [{ text: 'Питань:', bold: true }, viewResultData.totalQuestions],
-                          [{ text: 'Правильних:', bold: true }, viewResultData.correctClicks],
+                          [{ text: 'Повністю правильних:', bold: true }, viewResultData.fullyCorrect],
+                          [{ text: 'Частково правильних:', bold: true }, viewResultData.partiallyCorrect],
                           [{ text: 'Дата завершення:', bold: true }, viewResultData.endDateTime]
                         ]
                       },
@@ -6644,8 +6641,6 @@ app.get('/admin/view-result', checkAuth, async (req, res) => {
                         'Час поза вкладкою: ' + viewResultData.timeAwayPercent + '%',
                         'Переключення вкладок: ' + viewResultData.switchCount,
                         'Середній час відповіді: ' + (viewResultData.avgResponseTime || 0) + ' сек',
-                        'Повністю правильних: ' + viewResultData.fullyCorrect,
-                        'Частково правильних: ' + viewResultData.partiallyCorrect,
                         'Загальна активність: ' + viewResultData.totalActivityCount
                       ],
                       margin: [0, 0, 0, 20]
@@ -6653,7 +6648,6 @@ app.get('/admin/view-result', checkAuth, async (req, res) => {
 
                     { text: 'Деталі відповідей:', style: 'subHeader', margin: [0, 0, 0, 10] },
 
-                    // Таблиця з правильними відповідями
                     {
                       table: {
                         headerRows: 1,
@@ -6699,7 +6693,7 @@ app.get('/admin/view-result', checkAuth, async (req, res) => {
               });
             </script>
 
-            <!-- HTML-таблиця (для перегляду в браузері) -->
+            <!-- HTML-таблиця -->
             <div class="summary">
               <strong>Тест:</strong> ${testNames[result.testNumber]?.name?.replace(/"/g, '\\"') || 'Невідомий тест'}<br>
               <strong>Варіант:</strong> ${result.variant || 'Немає'}<br>
@@ -6757,7 +6751,7 @@ app.get('/admin/view-result', checkAuth, async (req, res) => {
 
       html += `
         <tr>
-          <td>${question.text.replace(/</g, '&lt;').replace(/>/g, '&gt;')}</td>
+          <td>${(question.text || '').replace(/</g, '&lt;').replace(/>/g, '&gt;')}</td>
           <td class="details">${userAnswerDisplay}</td>
           <td class="details">${correctAnswerDisplay}</td>
           <td>${questionScore.toFixed(3)} / ${question.points || 1}</td>
