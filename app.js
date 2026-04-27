@@ -3792,15 +3792,26 @@ app.get('/result', checkAuth, async (req, res) => {
     const percentage = totalPoints > 0 ? (score / totalPoints) * 100 : 0;
 
     const totalQuestions = questions.length;
-    const correctClicks = scoresPerQuestion.filter(s => s > 0).length;
 
-    logger.info('[RESULT] Розраховано бали', {
-      score: score.toFixed(2),
-      totalPoints: totalPoints.toFixed(2),
-      percentage: percentage.toFixed(1) + '%',
+    // === ПРАВИЛЬНИЙ РОЗРАХУНОК КІЛЬКОСТІ ===
+    let fullyCorrect = 0;
+    let partiallyCorrect = 0;
+
+    scoresPerQuestion.forEach((score, idx) => {
+      const maxPointsForQuestion = questions[idx]?.points || 1;
+      
+      if (score >= maxPointsForQuestion) {           // повністю правильно
+        fullyCorrect++;
+      } else if (score > 0) {                        // частково правильно
+        partiallyCorrect++;
+      }
+    });
+
+    logger.info('[RESULT] Статистика відповідей', {
+      fullyCorrect,
+      partiallyCorrect,
       totalQuestions,
-      correctClicks,
-      answered: Object.keys(answers).length
+      score: score.toFixed(2)
     });
 
     // 5. Час та підозріла активність
@@ -4003,8 +4014,8 @@ app.get('/result', checkAuth, async (req, res) => {
 
           <div class="summary-text">
             Кількість питань: ${totalQuestions}<br>
-            Повністю правильних відповідей: ${correctClicks}<br>
-            Частково правильних відповідей: ${scoresPerQuestion.filter(s => s > 0 && s < questions[scoresPerQuestion.indexOf(s)].points).length}<br>
+            <strong>Повністю правильних відповідей:</strong> ${fullyCorrect}<br>
+            <strong>Частково правильних відповідей:</strong> ${partiallyCorrect}<br>
             Набрано балів: ${Math.round(score)}<br>
             Максимально можлива кількість балів: ${Math.round(totalPoints)}<br>
           </div>
