@@ -6472,7 +6472,7 @@ app.get('/admin/view-result', checkAuth, async (req, res) => {
     // Середній час відповіді
     let totalResponseTime = 0;
     let answeredQuestions = 0;
-    const responseTimes = testData.answerTimestamps || suspiciousActivity.responseTimes || {};
+    const responseTimes = result.answerTimestamps || result.suspiciousActivity?.responseTimes || {};
 
     Object.keys(responseTimes).forEach(key => {
       const t = parseFloat(responseTimes[key]);
