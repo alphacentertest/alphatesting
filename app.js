@@ -6262,7 +6262,7 @@ app.get('/admin/results', checkAuth, async (req, res) => {
             .search-btn { background: #28a745; color: white; }
             .action-btn.view { background: #4CAF50; color: white; }
             .action-btn.delete { background: #ef5350; color: white; }
-            .suspicious { color: #d32f2f; font-weight: bold; }
+            .suspicious { color: #d32f2f; font-weight: bold; background: #ffebee; }
             input[type="text"] { padding: 10px; width: 250px; font-size: 16px; }
             form { display: inline-block; margin: 10px 0; }
           </style>
@@ -6288,18 +6288,17 @@ app.get('/admin/results', checkAuth, async (req, res) => {
                 <th>Початок</th>
                 <th>Кінець</th>
                 <th>Тривалість</th>
-                <th>Підозріла активність (%)</th>
+                <th>Підозріла активність</th>
                 <th>Дія</th>
               </tr>
     `;
 
     if (results.length === 0) {
-      html += '<tr><td colspan="10">Немає результатів</td></tr>';
+      html += '<tr><td colspan="10" style="text-align:center; padding:20px;">Немає результатів</td></tr>';
     } else {
       for (const result of results) {
         // Завантаження питань
         let questions = [];
-
         if (result.questions && Array.isArray(result.questions) && result.questions.length > 0) {
           questions = result.questions;
         } else {
@@ -6313,29 +6312,31 @@ app.get('/admin/results', checkAuth, async (req, res) => {
           );
         }
 
-        // === ВИПРАВЛЕНИЙ РОЗРАХУНОК ===
+        // Розрахунок балів
         const scoresPerQuestion = questions.map((q, idx) => {
           const userAnswer = result.answers[idx];
-          return calculateQuestionScore(q, userAnswer);   // Твоя функція
+          return calculateQuestionScore(q, userAnswer);
         });
 
         const exactScore = scoresPerQuestion.reduce((sum, s) => sum + s, 0);
         const roundedScore = Math.round(exactScore * 10) / 10;
-        const totalPoints = questions.reduce((sum, q) => sum + (q.points || 0), 0);
+        const totalPoints = questions.reduce((sum, q) => sum + (parseFloat(q.points) || 0), 0);
         const percentage = totalPoints > 0 ? (exactScore / totalPoints) * 100 : 0;
         const roundedPercentage = Math.round(percentage * 10) / 10;
 
-        const totalQuestions = questions.length;
-        const correctClicks = scoresPerQuestion.filter(s => s > 0).length;
+        // Підозріла активність
+        const timeAway = result.suspiciousActivity?.timeAway || 0;
+        const duration = result.duration || 0;
+        const timeAwayPercent = duration > 0 ? Math.round((timeAway / duration) * 100) : 0;
+        const switchCount = result.suspiciousActivity?.switchCount || 0;
+        const isSuspicious = timeAwayPercent > 50 || switchCount > 10;
 
         const startTimeStr = formatKievTime(result.startTime);
         const endTimeStr = formatKievTime(result.endTime);
 
-        const durationSec = result.duration || Math.round((new Date(result.endTime) - new Date(result.startTime)) / 1000);
+        const durationSec = duration || Math.round((new Date(result.endTime) - new Date(result.startTime)) / 1000);
         const minutes = Math.floor(durationSec / 60).toString().padStart(2, '0');
         const seconds = (durationSec % 60).toString().padStart(2, '0');
-
-        const isSuspicious = timeAwayPercent > 50 || switchCount > 10;
 
         html += `
           <tr class="${isSuspicious ? 'suspicious' : ''}">
@@ -6347,7 +6348,7 @@ app.get('/admin/results', checkAuth, async (req, res) => {
             <td>${startTimeStr}</td>
             <td>${endTimeStr}</td>
             <td>${minutes} хв ${seconds} сек</td>
-            <td>${timeAwayPercent}%</td>
+            <td>${timeAwayPercent}% (${switchCount} перекл.)</td>
             <td>
               <button class="action-btn view" onclick="viewResult('${result._id}')">Перегляд</button>
               ${req.userRole === 'admin' ? `<button class="action-btn delete" onclick="deleteResult('${result._id}')">🗑️ Видалити</button>` : ''}
