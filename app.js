@@ -2327,7 +2327,8 @@ app.get('/test/question', checkAuth, async (req, res) => {
           variant,
           ipAddress,
           testSessionId,
-          questions
+          questions,
+          userTest?.answerTimestamps
         );
         logger.info(`Результат збережено для testSessionId: ${testSessionId} через недоступність тесту`);
       }
@@ -3484,10 +3485,18 @@ app.post('/answer', checkAuth, express.urlencoded({ extended: true }), async (re
         $set: { 
           [`answers.${index}`]: parsedAnswer,
           currentQuestion: parseInt(index) + 1,
-          [`answerTimestamps.${index}`]: Date.now()
+          [`answerTimestamps.${index}`]: Date.now(),        // головне
+          [`questionStartTime.${index}`]: Date.now()        // допоміжне
         } 
       }
     );
+
+    logger.info('[ANSWER SUCCESS]', { 
+      index, 
+      type: question?.type || 'unknown',
+      savedLength: Array.isArray(parsedAnswer) ? parsedAnswer.length : 0,
+      timestampSaved: true
+    });
 
     logger.info('[ANSWER SUCCESS]', { 
       index, 
@@ -3835,7 +3844,8 @@ app.get('/result', checkAuth, async (req, res) => {
         variant,
         ipAddress,
         testSessionId,
-        questions  // <-- передаємо збережені питання
+        questions,
+        userTest?.answerTimestamps 
       );
 
       logger.info('[RESULT] Результат збережено успішно');
@@ -6447,10 +6457,22 @@ app.get('/admin/view-result', checkAuth, async (req, res) => {
     // === РОЗРАХУНОК СЕРЕДНЬОГО ЧАСУ ВІДПОВІДІ ===
     let totalResponseTime = 0;
     let answeredQuestions = 0;
-    const responseTimes = result.answerTimestamps || result.responseTimes || {};
+
+    // Беремо з різних можливих місць
+    const responseTimes = {
+      ... (result.answerTimestamps || {}),
+      ... (result.suspiciousActivity?.responseTimes || {}),
+      ... (testData?.answerTimestamps || {})
+    };
 
     questions.forEach((q, idx) => {
-      const time = responseTimes[idx] || responseTimes[String(idx)] || 0;
+      let time = responseTimes[idx] || responseTimes[String(idx)] || 0;
+      
+      // Якщо є questionStartTime — можна приблизно порахувати
+      if (time === 0 && result.questionStartTime && result.questionStartTime[idx]) {
+        time = 30; // fallback 30 секунд, якщо немає точного часу
+      }
+
       if (time > 0) {
         totalResponseTime += parseFloat(time);
         answeredQuestions++;
