@@ -557,20 +557,22 @@ const importQuestionsToMongoDB = async (buffer, testNumber) => {
         if (type === 'fillblank') {
           questionData.text = questionText.replace(/\s*___/g, '___');
           const blankCount = (questionData.text.match(/___/g) || []).length;
+          
           if (blankCount === 0 || blankCount !== correctAnswers.length) {
             throw new Error(`Пропуски (${blankCount}) не відповідають кількості відповідей (${correctAnswers.length})`);
           }
           questionData.blankCount = blankCount;
 
+          // Виправлена валідація — дозволяємо слова!
           correctAnswers.forEach((answer, idx) => {
-            if (answer.includes('-')) {
-              const [min, max] = answer.split('-').map(v => parseFloat(v.trim()));
+            const ans = answer.trim();
+            if (ans.includes('-')) {
+              const [min, max] = ans.split('-').map(v => parseFloat(v.trim()));
               if (isNaN(min) || isNaN(max) || min > max) {
-                throw new Error(`Невірний діапазон у відповіді ${idx + 1}`);
+                throw new Error(`Невірний діапазон у відповіді ${idx + 1} для Fillblank`);
               }
-            } else if (isNaN(parseFloat(answer))) {
-              throw new Error(`Відповідь ${idx + 1} має бути числом або діапазоном`);
             }
+            // Інакше — будь-який текст (слово, фраза) — дозволено
           });
         }
 
@@ -587,14 +589,20 @@ const importQuestionsToMongoDB = async (buffer, testNumber) => {
           if (correctAnswers.length !== 1) {
             throw new Error('Input: потрібна 1 правильна відповідь');
           }
-          const ans = correctAnswers[0];
+          const ans = correctAnswers[0].trim();
+          
+          // Дозволяємо як числа/діапазони, так і звичайний текст
           if (ans.includes('-')) {
             const [min, max] = ans.split('-').map(v => parseFloat(v.trim()));
-            if (isNaN(min) || isNaN(max) || min > max) {
-              throw new Error('Невірний діапазон у Input');
+            if (!isNaN(min) && !isNaN(max) && min <= max) {
+              // це діапазон — OK
+            } else {
+              // якщо не вдалося розпарсити як діапазон — вважаємо текстом
             }
-          } else if (isNaN(parseFloat(ans))) {
-            throw new Error('Input відповідь має бути числом або діапазоном');
+          } else if (!isNaN(parseFloat(ans))) {
+            // це число — OK
+          } else {
+            // звичайний текст — теж OK
           }
         }
 
@@ -2891,6 +2899,20 @@ app.get('/test/question', checkAuth, async (req, res) => {
             let hasMovedToNext = false;
             let questionStartTime = ${questionStartTimeObj[index]};
 
+            // === ФУНКЦІЯ ПЕРЕХОДУ МІЖ ПИТАННЯМИ ===
+            function goToQuestion(targetIndex) {
+              if (targetIndex < 0 || targetIndex >= totalQuestions) return;
+              if (targetIndex === currentQuestionIndex) return;
+
+              saveCurrentAnswer(currentQuestionIndex).then(() => {
+                window.location.href = '/test/question?index=' + targetIndex;
+              }).catch(err => {
+                console.error('Помилка збереження при переході:', err);
+                // Все одно переходимо
+                window.location.href = '/test/question?index=' + targetIndex;
+              });
+            }
+
             // ==================== MATCHING ====================
             let currentMatchingPairs = [];
 
@@ -3258,19 +3280,39 @@ app.get('/test/question', checkAuth, async (req, res) => {
                 const now = Date.now();
                 const elapsed = Math.floor((now - questionStartTime) / 1000);
                 questionTimeRemaining = Math.max(0, timePerQuestion - elapsed);
+
                 const timerText = document.getElementById('timer-text');
                 const timerCircle = document.querySelector('#question-timer .timer-circle');
+
                 if (timerText && timerCircle) {
                   timerText.textContent = Math.round(questionTimeRemaining);
                   const circumference = 251;
                   const offset = (1 - questionTimeRemaining / timePerQuestion) * circumference;
                   timerCircle.style.strokeDashoffset = offset;
                 }
-                if (questionTimeRemaining <= 0 && currentQuestionIndex < totalQuestions - 1 && !hasMovedToNext) {
-                  hasMovedToNext = true;
-                  saveCurrentAnswer(currentQuestionIndex).then(() => {
-                    saveAndNext(currentQuestionIndex);
-                  });
+
+                // === ВИПРАВЛЕННЯ: Автоматичне завершення тесту ===
+                if (questionTimeRemaining <= 0) {
+                  clearInterval(questionTimerInterval);
+                  
+                  if (currentQuestionIndex === totalQuestions - 1) {
+                    // Це останнє питання — зберігаємо відповідь і завершуємо тест
+                    hasMovedToNext = true;
+                    saveCurrentAnswer(currentQuestionIndex).then(() => {
+                      // Перехід на результат
+                      window.location.href = '/result';
+                    }).catch(() => {
+                      window.location.href = '/result';
+                    });
+                  } else if (currentQuestionIndex < totalQuestions - 1 && !hasMovedToNext) {
+                    // Не останнє питання — переходимо далі
+                    hasMovedToNext = true;
+                    saveCurrentAnswer(currentQuestionIndex).then(() => {
+                      saveAndNext(currentQuestionIndex);
+                    }).catch(() => {
+                      saveAndNext(currentQuestionIndex);
+                    });
+                  }
                 }
               }, 50);
             }
@@ -3747,9 +3789,7 @@ app.get('/result', checkAuth, async (req, res) => {
     }
 
     // 8. Форматування дати/часу
-    const endDateTime = new Date(endTime);
-    const formattedTime = endDateTime.toLocaleTimeString('uk-UA', { hour12: false });
-    const formattedDate = endDateTime.toLocaleDateString('uk-UA');
+    const formattedDateTime = formatKievTime(endTime);
 
     // 9. Зображення
     const imagePath = path.join(__dirname, 'public', 'images', 'A.png');
@@ -6349,6 +6389,7 @@ app.get('/admin/view-result', checkAuth, async (req, res) => {
     let questions = [];
     if (result.questions && Array.isArray(result.questions) && result.questions.length > 0) {
       questions = result.questions;
+      logger.info('[VIEW-RESULT] Використано збережені питання', { count: questions.length });
     } else {
       let allQuestions = await db.collection('questions')
         .find({ testNumber: result.testNumber })
@@ -6358,6 +6399,7 @@ app.get('/admin/view-result', checkAuth, async (req, res) => {
       questions = allQuestions.filter(q => 
         !q.variant || q.variant === '' || q.variant === result.variant
       );
+      logger.info('[VIEW-RESULT] Використано питання з бази', { count: questions.length });
     }
 
     // Розрахунок балів
@@ -6380,13 +6422,26 @@ app.get('/admin/view-result', checkAuth, async (req, res) => {
       : 0;
 
     const switchCount = result.suspiciousActivity?.switchCount || 0;
-    const avgResponseTime = result.suspiciousActivity?.responseTimes?.length
-      ? (result.suspiciousActivity.responseTimes.reduce((sum, t) => sum + (t || 0), 0) / result.suspiciousActivity.responseTimes.length).toFixed(2)
-      : 0;
+
+    // === ВИПРАВЛЕНО: Середній час відповіді ===
+    let avgResponseTime = 0;
+    const responseTimes = result.suspiciousActivity?.responseTimes || [];
+    if (responseTimes.length > 0) {
+      const validTimes = responseTimes.filter(t => typeof t === 'number' && t > 0);
+      if (validTimes.length > 0) {
+        avgResponseTime = (validTimes.reduce((sum, t) => sum + t, 0) / validTimes.length).toFixed(2);
+      }
+    }
 
     const totalActivityCount = result.suspiciousActivity?.activityCounts
       ? result.suspiciousActivity.activityCounts.reduce((sum, c) => sum + (c || 0), 0)
       : 0;
+
+    logger.info('[VIEW-RESULT] Статистика', { 
+      avgResponseTime, 
+      responseTimesCount: responseTimes.length,
+      timeAwayPercent 
+    });
 
     let html = `
       <!DOCTYPE html>
@@ -6397,15 +6452,15 @@ app.get('/admin/view-result', checkAuth, async (req, res) => {
           <title>Деталі результату</title>
           <style>
             body { font-family: Arial, sans-serif; padding: 30px 20px; background: #f5f5f5; }
-            .container { max-width: 1200px; margin: 0 auto; background: white; padding: 30px; border-radius: 12px; box-shadow: 0 4px 20px rgba(0,0,0,0.1); }
+            .container { max-width: 1300px; margin: 0 auto; background: white; padding: 30px; border-radius: 12px; box-shadow: 0 4px 20px rgba(0,0,0,0.1); }
             h1 { text-align: center; color: #333; margin-bottom: 25px; }
             table { border-collapse: collapse; width: 100%; margin: 20px 0; }
-            th, td { border: 1px solid #ddd; padding: 12px; text-align: left; }
+            th, td { border: 1px solid #ddd; padding: 12px; text-align: left; vertical-align: top; }
             th { background: #f2f2f2; font-weight: bold; }
             .summary { font-size: 20px; margin: 20px 0 40px; padding: 20px; background: #f8f9fa; border-radius: 8px; }
             .nav-btn { padding: 12px 24px; margin: 10px 5px; cursor: pointer; border: none; border-radius: 8px; background: #007bff; color: white; }
             .nav-btn:hover { background: #0056b3; }
-            .details { white-space: pre-line; }
+            .details { white-space: pre-line; word-break: break-word; }
           </style>
           <script src="/pdfmake/pdfmake.min.js"></script>
           <script src="/pdfmake/vfs_fonts.js"></script>
@@ -6436,7 +6491,9 @@ app.get('/admin/view-result', checkAuth, async (req, res) => {
                 questionsTable: ${JSON.stringify(questions.map((q, idx) => {
                   const userAns = result.answers[idx] !== undefined ? result.answers[idx] : 'Не відповіли';
                   let userDisplay = '—';
+                  let correctDisplay = '—';
 
+                  // Відповідь користувача
                   if (Array.isArray(userAns)) {
                     if (q.type === 'matching') {
                       userDisplay = userAns.map(pair => {
@@ -6451,12 +6508,25 @@ app.get('/admin/view-result', checkAuth, async (req, res) => {
                       userDisplay = userAns.join(', ');
                     }
                   } else {
-                    userDisplay = String(userAns);
+                    userDisplay = String(userAns || '—');
+                  }
+
+                  // Правильна відповідь
+                  if (q.type === 'matching') {
+                    const pairs = q.correctPairs || (q.pairs || []).map(p => [p.left, p.right]);
+                    correctDisplay = pairs.map(pair => 
+                      `${pair[0] || '—'} → ${pair[1] || '—'}`
+                    ).join('<br>');
+                  } else if (Array.isArray(q.correctAnswers)) {
+                    correctDisplay = q.correctAnswers.join('<br>');
+                  } else if (q.correctAnswer) {
+                    correctDisplay = q.correctAnswer;
                   }
 
                   return {
-                    text: String(q.text).replace(/"/g, '\\"').replace(/\n/g, '<br>'),
+                    text: String(q.text || '').replace(/"/g, '\\"').replace(/\n/g, '<br>'),
                     userAnswer: userDisplay,
+                    correctAnswer: correctDisplay,
                     score: scoresPerQuestion[idx].toFixed(3),
                     maxPoints: q.points || 1
                   };
@@ -6472,17 +6542,17 @@ app.get('/admin/view-result', checkAuth, async (req, res) => {
                 const docDefinition = {
                   pageSize: 'A4',
                   pageOrientation: 'portrait',
-                  pageMargins: [20, 30, 20, 30],           // зменшили відступи
+                  pageMargins: [25, 30, 25, 30],
                   defaultStyle: { 
                     fontSize: 9, 
-                    lineHeight: 1.3 
+                    lineHeight: 1.35 
                   },
                   content: [
                     { text: 'Деталі результату для користувача ' + viewResultData.user, style: 'mainHeader' },
-                    { text: 'Тест: ' + viewResultData.testName, margin: [0, 10, 0, 5], style: 'subHeader' },
+                    { text: 'Тест: ' + viewResultData.testName, margin: [0, 8, 0, 5], style: 'subHeader' },
                     { text: 'Варіант: ' + viewResultData.variant, margin: [0, 0, 0, 15] },
 
-                    // Зведена таблиця
+                    // Зведена інформація
                     {
                       table: {
                         widths: ['*', 'auto'],
@@ -6511,11 +6581,11 @@ app.get('/admin/view-result', checkAuth, async (req, res) => {
 
                     { text: 'Деталі відповідей:', style: 'subHeader', margin: [0, 0, 0, 10] },
 
-                    // Головна таблиця — оптимізована під ширину A4
+                    // Таблиця з правильними відповідями
                     {
                       table: {
                         headerRows: 1,
-                        widths: ['42%', '22%', '22%', '14%'],   // <-- головне виправлення
+                        widths: ['40%', '22%', '23%', '15%'],
                         body: [
                           [
                             { text: 'Питання', bold: true, fillColor: '#f2f2f2' },
@@ -6524,9 +6594,9 @@ app.get('/admin/view-result', checkAuth, async (req, res) => {
                             { text: 'Бали', bold: true, fillColor: '#f2f2f2', alignment: 'center' }
                           ],
                           ...viewResultData.questionsTable.map(row => [
-                            { text: row.text, alignment: 'left' },
+                            { text: row.text || '', alignment: 'left' },
                             { text: row.userAnswer || '—', alignment: 'left' },
-                            { text: '', alignment: 'left' },           // поки що порожня правильна відповідь
+                            { text: row.correctAnswer || '—', alignment: 'left' },
                             { text: row.score + ' / ' + row.maxPoints, alignment: 'center' }
                           ])
                         ]
@@ -6557,6 +6627,7 @@ app.get('/admin/view-result', checkAuth, async (req, res) => {
               });
             </script>
 
+            <!-- HTML-таблиця (для перегляду в браузері) -->
             <div class="summary">
               <strong>Тест:</strong> ${testNames[result.testNumber]?.name?.replace(/"/g, '\\"') || 'Невідомий тест'}<br>
               <strong>Варіант:</strong> ${result.variant || 'Немає'}<br>
@@ -6585,26 +6656,14 @@ app.get('/admin/view-result', checkAuth, async (req, res) => {
       const userAnswerRaw = result.answers[index];
       const questionScore = scoresPerQuestion[index];
 
-      logger.info(`[VIEW-RESULT DEBUG] Питання ${index} | Тип: ${question.type}`, {
-        userAnswerRaw: userAnswerRaw,
-        isArray: Array.isArray(userAnswerRaw),
-        firstElement: Array.isArray(userAnswerRaw) ? userAnswerRaw[0] : null,
-        length: Array.isArray(userAnswerRaw) ? userAnswerRaw.length : null,
-        correctPairs: question.correctPairs ? question.correctPairs.length : null,
-        pairs: question.pairs ? question.pairs.length : null
-      });
-
       let userAnswerDisplay = '—';
+      let correctAnswerDisplay = '—';
 
       if (Array.isArray(userAnswerRaw)) {
         if (question.type === 'matching') {
-          if (Array.isArray(userAnswerRaw[0]) && userAnswerRaw[0].length === 2) {
-            userAnswerDisplay = userAnswerRaw.map(pair => 
-              `${pair[0] || '—'} → ${pair[1] || '—'}`
-            ).join('<br>');
-          } else {
-            userAnswerDisplay = userAnswerRaw.map(item => String(item)).join('<br>');
-          }
+          userAnswerDisplay = userAnswerRaw.map(pair => 
+            Array.isArray(pair) && pair.length === 2 ? `${pair[0] || '—'} → ${pair[1] || '—'}` : String(pair)
+          ).join('<br>');
         } else if (question.type === 'fillblank') {
           userAnswerDisplay = userAnswerRaw.join('<br>');
         } else {
@@ -6614,12 +6673,9 @@ app.get('/admin/view-result', checkAuth, async (req, res) => {
         userAnswerDisplay = String(userAnswerRaw);
       }
 
-      let correctAnswerDisplay = '—';
       if (question.type === 'matching') {
         const pairs = question.correctPairs || (question.pairs || []).map(p => [p.left, p.right]);
-        correctAnswerDisplay = pairs.map(pair => 
-          `${pair[0] || '—'} → ${pair[1] || '—'}`
-        ).join('<br>');
+        correctAnswerDisplay = pairs.map(pair => `${pair[0] || '—'} → ${pair[1] || '—'}`).join('<br>');
       } else if (Array.isArray(question.correctAnswers)) {
         correctAnswerDisplay = question.correctAnswers.join('<br>');
       } else if (question.correctAnswer) {
