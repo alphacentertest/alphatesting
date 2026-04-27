@@ -2183,7 +2183,7 @@ app.get('/instructions', checkAuth, (req, res) => {
   }
 });
 
-// Відображення питання тесту — з правильним переносом тексту цілими словами
+
 app.get('/test/question', checkAuth, async (req, res) => {
   const startTime = Date.now();
   try {
@@ -3274,7 +3274,7 @@ app.get('/test/question', checkAuth, async (req, res) => {
                   onEnd: updateMatchingPairs
                 });
 
-                // Відновлюємо збережений порядок matching
+                // Відновлюємо порядок, якщо є збережені пари
                 if (matchingPairs && matchingPairs.length > 0) {
                   setTimeout(() => {
                     restoreMatchingOrder(matchingPairs);
@@ -3316,17 +3316,21 @@ app.get('/test/question', checkAuth, async (req, res) => {
                   timerCircle.style.strokeDashoffset = offset;
                 }
 
+                // === ВИПРАВЛЕННЯ: Автоматичне завершення тесту ===
                 if (questionTimeRemaining <= 0) {
                   clearInterval(questionTimerInterval);
                   
                   if (currentQuestionIndex === totalQuestions - 1) {
+                    // Це останнє питання — зберігаємо відповідь і завершуємо тест
                     hasMovedToNext = true;
                     saveCurrentAnswer(currentQuestionIndex).then(() => {
+                      // Перехід на результат
                       window.location.href = '/result';
                     }).catch(() => {
                       window.location.href = '/result';
                     });
                   } else if (currentQuestionIndex < totalQuestions - 1 && !hasMovedToNext) {
+                    // Не останнє питання — переходимо далі
                     hasMovedToNext = true;
                     saveCurrentAnswer(currentQuestionIndex).then(() => {
                       saveAndNext(currentQuestionIndex);
