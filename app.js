@@ -4029,38 +4029,65 @@ app.get('/result', checkAuth, async (req, res) => {
 
           <script>
             document.addEventListener('DOMContentLoaded', () => {
-              document.getElementById('exportPDF').addEventListener('click', () => {
-                const docDefinition = {
-                  content: [
-                    imageBase64Val ? {
-                        image: 'data:image/png;base64,' + imageBase64Val,
-                        width: 50,
+              const exportBtn = document.getElementById('exportPDF');
+              if (!exportBtn) return;
+
+              exportBtn.addEventListener('click', () => {
+                try {
+                  const docDefinition = {
+                    content: [
+                      // Логотип/зображення (якщо є)
+                      ${imageBase64Val ? `{
+                        image: 'data:image/png;base64,${imageBase64Val}',
+                        width: 60,
                         alignment: 'center',
-                        margin: [0, 0, 0, 20]                      
-                    } : { text: 'Результат тесту користувача ' + "${req.user}" + ' з тесту ' + "${testNames[testNumber]?.name || 'Тест'}", style: 'header' },
-                    { text: 'Кількість питань: ${totalQuestions}', margin: [0, 10, 0, 0] },
-                    { text: 'Повністю правильних: ${fullyCorrect}', margin: [0, 5, 0, 0] },
-                    { text: 'Частково правильних: ${partiallyCorrect}', margin: [0, 5, 0, 0] },
-                    { text: 'Набрано балів: ${Math.round(score)}', margin: [0, 5, 0, 0] },
-                    { text: 'Максимально можлива кількість балів: ${Math.round(totalPoints)}', margin: [0, 5, 0, 0] },
-                    {
-                      columns: [
-                        { text: 'Час: ' + timeVal, width: '50%', lineHeight: 2 },
-                        { text: 'Дата: ' + dateVal, width: '50%', alignment: 'right', lineHeight: 2 }
-                      ],
-                      margin: [0, 10, 0, 0]
+                        margin: [0, 0, 0, 15]
+                      }` : `{ text: 'Результат тесту', style: 'header' }`},
+
+                      { text: 'Користувач: ${req.user}', style: 'subheader' },
+                      { text: '${testNames[testNumber]?.name || "Тест"}', style: 'mainHeader' },
+
+                      { text: 'Кількість питань: ${totalQuestions}', margin: [0, 8, 0, 4] },
+                      { text: 'Повністю правильних: ${fullyCorrect}', margin: [0, 4, 0, 4] },
+                      { text: 'Частково правильних: ${partiallyCorrect}', margin: [0, 4, 0, 4] },
+                      { text: 'Набрано балів: ${Math.round(score)} / ${Math.round(totalPoints)}', margin: [0, 8, 0, 4] },
+                      { text: 'Відсоток: ${roundedPercentage || Math.round((score / totalPoints) * 100)}%', style: 'percentage' },
+
+                      {
+                        columns: [
+                          { text: 'Час проходження: ' + (timeVal || '—'), width: '50%' },
+                          { text: 'Дата: ' + (dateVal || '—'), alignment: 'right', width: '50%' }
+                        ],
+                        margin: [0, 15, 0, 10]
+                      }
+                    ],
+                    styles: {
+                      mainHeader: { fontSize: 20, bold: true, alignment: 'center', margin: [0, 10, 0, 15] },
+                      subheader: { fontSize: 14, bold: true, margin: [0, 5, 0, 5] },
+                      header: { fontSize: 16, bold: true, margin: [0, 0, 0, 10] },
+                      percentage: { fontSize: 18, bold: true, color: '#2c3e50', alignment: 'center', margin: [0, 10, 0, 15] }
+                    },
+                    defaultStyle: {
+                      fontSize: 12,
+                      lineHeight: 1.4
                     }
-                  ],
-                  styles: {
-                    header: { fontSize: 14, bold: true, margin: [0, 0, 0, 10], lineHeight: 2 }
-                  }
-                };
-                pdfMake.createPdf(docDefinition).download(user + 'результат.pdf');
+                  };
+
+                  pdfMake.createPdf(docDefinition).download('${req.user}_результат.pdf');
+        
+                } catch (err) {
+                  console.error('Помилка генерації PDF:', err);
+                  alert('Не вдалося згенерувати PDF. Спробуйте ще раз або оновіть сторінку.');
+                }
               });
 
-              document.getElementById('restart').addEventListener('click', () => {
-                window.location.href = '/select-test';
-              });
+              // Кнопка "Повернутися"
+              const restartBtn = document.getElementById('restart');
+              if (restartBtn) {
+                restartBtn.addEventListener('click', () => {
+                  window.location.href = '/select-test';
+                });
+              }
             });
           </script>
         </body>
