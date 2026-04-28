@@ -7508,6 +7508,50 @@ app.get('/reset-admin', async (req, res) => {
 });
 // ============================================================================
 
+// ====================== ПРИМУСОВЕ СКИДАННЯ + ДІАГНОСТИКА ======================
+app.get('/force-reset-admin', async (req, res) => {
+  try {
+    const newPassword = "admin123";
+    const hashedPassword = await bcrypt.hash(newPassword, 10);
+
+    // Примусово оновлюємо в базі
+    const updateResult = await db.collection('users').updateOne(
+      { username: "admin" },
+      { $set: { 
+          password: hashedPassword, 
+          role: "admin" 
+        } 
+      }
+    );
+
+    // Примусово оновлюємо кеш
+    await CacheManager.invalidateCache('users', null);
+    await loadUsersToCache();
+
+    // Перевіряємо, що в кеші
+    const adminUser = userCache.find(u => u.username === "admin");
+
+    res.send(`
+      <!DOCTYPE html>
+      <html lang="uk">
+        <head><meta charset="UTF-8"><title>Force Reset</title></head>
+        <body style="font-family:Arial;padding:40px;">
+          <h1>✅ Примусове скидання виконано</h1>
+          <p>Оновлено в базі: ${updateResult.modifiedCount} запис</p>
+          <p>Кеш оновлено. Користувач admin знайдений у кеші: ${!!adminUser}</p>
+          <p><strong>Спробуй увійти зараз:</strong></p>
+          <p>Логін: <b>admin</b><br>Пароль: <b>admin123</b></p>
+          <hr>
+          <a href="/">Перейти на сторінку входу</a>
+        </body>
+      </html>
+    `);
+  } catch (e) {
+    res.status(500).send("Помилка: " + e.message);
+  }
+});
+// =============================================================================
+
 // Запуск сервера
 const port = process.env.PORT || 3000;
 app.listen(port, () => {
