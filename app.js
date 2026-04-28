@@ -4036,52 +4036,51 @@ app.get('/result', checkAuth, async (req, res) => {
                 try {
                   const docDefinition = {
                     content: [
-                      // Логотип/зображення (якщо є)
-                      ${imageBase64Val ? `{
-                        image: 'data:image/png;base64,${imageBase64Val}',
+                      // Логотип (якщо є)
+                      <% if (typeof imageBase64Val !== 'undefined' && imageBase64Val) { %>
+                      {
+                        image: 'data:image/png;base64,<%= imageBase64Val %>',
                         width: 60,
                         alignment: 'center',
-                        margin: [0, 0, 0, 15]
-                      }` : `{ text: 'Результат тесту', style: 'header' }`},
+                        margin: [0, 0, 0, 20]
+                      },
+                      <% } %>
 
-                      { text: 'Користувач: ${req.user}', style: 'subheader' },
-                      { text: '${testNames[testNumber]?.name || "Тест"}', style: 'mainHeader' },
+                      { text: 'Результат тесту', style: 'mainHeader' },
+                      { text: 'Користувач: <%= req.user %>', style: 'subheader' },
+                      { text: '<%= testNames && testNames[testNumber] ? testNames[testNumber].name : "Тест" %>', style: 'mainHeader' },
 
-                      { text: 'Кількість питань: ${totalQuestions}', margin: [0, 8, 0, 4] },
-                      { text: 'Повністю правильних: ${fullyCorrect}', margin: [0, 4, 0, 4] },
-                      { text: 'Частково правильних: ${partiallyCorrect}', margin: [0, 4, 0, 4] },
-                      { text: 'Набрано балів: ${Math.round(score)} / ${Math.round(totalPoints)}', margin: [0, 8, 0, 4] },
-                      { text: 'Відсоток: ${roundedPercentage || Math.round((score / totalPoints) * 100)}%', style: 'percentage' },
+                      { text: 'Кількість питань: <%= totalQuestions || 0 %>', margin: [0, 10, 0, 5] },
+                      { text: 'Повністю правильних: <%= fullyCorrect || 0 %>', margin: [0, 5, 0, 5] },
+                      { text: 'Частково правильних: <%= partiallyCorrect || 0 %>', margin: [0, 5, 0, 5] },
+                      { text: 'Набрано балів: <%= Math.round(score || 0) %> / <%= Math.round(totalPoints || 0) %>', margin: [0, 8, 0, 5] },
+                      { text: 'Відсоток: <%= roundedPercentage || 0 %>%', style: 'percentage' },
 
                       {
                         columns: [
-                          { text: 'Час проходження: ' + (timeVal || '—'), width: '50%' },
-                          { text: 'Дата: ' + (dateVal || '—'), alignment: 'right', width: '50%' }
+                          { text: 'Час: <%= timeVal || "—" %>', width: '50%' },
+                          { text: 'Дата: <%= dateVal || "—" %>', alignment: 'right', width: '50%' }
                         ],
                         margin: [0, 15, 0, 10]
                       }
                     ],
                     styles: {
                       mainHeader: { fontSize: 20, bold: true, alignment: 'center', margin: [0, 10, 0, 15] },
-                      subheader: { fontSize: 14, bold: true, margin: [0, 5, 0, 5] },
-                      header: { fontSize: 16, bold: true, margin: [0, 0, 0, 10] },
-                      percentage: { fontSize: 18, bold: true, color: '#2c3e50', alignment: 'center', margin: [0, 10, 0, 15] }
+                      subheader: { fontSize: 14, bold: true, margin: [0, 5, 0, 8] },
+                      percentage: { fontSize: 18, bold: true, color: '#27ae60', alignment: 'center', margin: [0, 10, 0, 15] }
                     },
-                    defaultStyle: {
-                      fontSize: 12,
-                      lineHeight: 1.4
-                    }
+                    defaultStyle: { fontSize: 12, lineHeight: 1.5 }
                   };
 
-                  pdfMake.createPdf(docDefinition).download('${req.user}_результат.pdf');
-        
+                  pdfMake.createPdf(docDefinition).download('<%= req.user %>_результат.pdf');
+
                 } catch (err) {
-                  console.error('Помилка генерації PDF:', err);
-                  alert('Не вдалося згенерувати PDF. Спробуйте ще раз або оновіть сторінку.');
+                  console.error('Помилка PDF:', err);
+                  alert('Не вдалося згенерувати PDF. Спробуйте ще раз.');
                 }
               });
 
-              // Кнопка "Повернутися"
+              // Кнопка назад
               const restartBtn = document.getElementById('restart');
               if (restartBtn) {
                 restartBtn.addEventListener('click', () => {
