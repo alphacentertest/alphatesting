@@ -4032,18 +4032,30 @@ app.get('/result', checkAuth, async (req, res) => {
               document.getElementById('exportPDF').addEventListener('click', () => {
                 const docDefinition = {
                   content: [
-                    { text: 'Результат тесту користувача ' + "${req.user}" + ' з тесту ' + "${testNames[testNumber]?.name || 'Тест'}", style: 'header' },
+                    imageBase64Val ? {
+                        image: 'data:image/png;base64,' + imageBase64Val,
+                        width: 50,
+                        alignment: 'center',
+                        margin: [0, 0, 0, 20]                      
+                    } : { text: 'Результат тесту користувача ' + "${req.user}" + ' з тесту ' + "${testNames[testNumber]?.name || 'Тест'}", style: 'header' },
                     { text: 'Кількість питань: ${totalQuestions}', margin: [0, 10, 0, 0] },
                     { text: 'Повністю правильних: ${fullyCorrect}', margin: [0, 5, 0, 0] },
                     { text: 'Частково правильних: ${partiallyCorrect}', margin: [0, 5, 0, 0] },
                     { text: 'Набрано балів: ${Math.round(score)}', margin: [0, 5, 0, 0] },
-                    { text: 'Максимально можлива кількість балів: ${Math.round(totalPoints)}', margin: [0, 5, 0, 0] }
+                    { text: 'Максимально можлива кількість балів: ${Math.round(totalPoints)}', margin: [0, 5, 0, 0] },
+                    {
+                      columns: [
+                        { text: 'Час: ' + timeVal, width: '50%', lineHeight: 2 },
+                        { text: 'Дата: ' + dateVal, width: '50%', alignment: 'right', lineHeight: 2 }
+                      ],
+                      margin: [0, 10, 0, 0]
+                    }
                   ],
                   styles: {
-                    header: { fontSize: 18, bold: true, margin: [0, 0, 0, 10] }
+                    header: { fontSize: 14, bold: true, margin: [0, 0, 0, 10], lineHeight: 2 }
                   }
                 };
-                pdfMake.createPdf(docDefinition).download('результат.pdf');
+                pdfMake.createPdf(docDefinition).download(user + 'результат.pdf');
               });
 
               document.getElementById('restart').addEventListener('click', () => {
