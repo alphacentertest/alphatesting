@@ -3828,6 +3828,9 @@ app.get('/result', checkAuth, async (req, res) => {
     const switchCount = suspiciousActivity.switchCount || 0;
 
     const ipAddress = req.headers['x-forwarded-for'] || req.socket.remoteAddress;
+    const endDate = new Date(testData.endTime || Date.now());
+    const timeVal = endDate.toLocaleTimeString('uk-UA', { hour: '2-digit', minute: '2-digit' });
+    const dateVal = endDate.toLocaleDateString('uk-UA');
 
     // 6. Збереження результату (якщо потрібно)
     const existingResult = await db.collection('test_results').findOne({ testSessionId });
