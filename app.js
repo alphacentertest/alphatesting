@@ -7477,70 +7477,34 @@ app.use((err, req, res, next) => {
   res.status(500).send('Щось пішло не так! Спробуйте ще раз або зверніться до адміністратора.');
 });
 
-// ====================== АВАРІЙНЕ СКИДАННЯ ПАРОЛЯ ADMIN ======================
-app.get('/reset-admin', async (req, res) => {
+// ====================== СТВОРЕННЯ ADMIN ЗАНОВО ======================
+app.get('/create-admin-now', async (req, res) => {
   try {
-    const newPassword = "admin123";   // ← ти зможеш змінити після входу
-    const hashedPassword = await bcrypt.hash(newPassword, 10);
+    const username = "admin";
+    const password = "admin123";
+    const hashedPassword = await bcrypt.hash(password, 10);
 
-    await db.collection('users').updateOne(
-      { username: "admin" },
-      { $set: { password: hashedPassword, role: "admin" } }
-    );
+    // Видаляємо старий (якщо є) і створюємо новий
+    await db.collection('users').deleteOne({ username });
 
+    await db.collection('users').insertOne({
+      username,
+      password: hashedPassword,
+      role: "admin"
+    });
+
+    // Оновлюємо кеш
     await CacheManager.invalidateCache('users', null);
     await loadUsersToCache();
 
     res.send(`
       <!DOCTYPE html>
       <html lang="uk">
-        <head><meta charset="UTF-8"><title>Пароль скинуто</title></head>
+        <head><meta charset="UTF-8"><title>Admin створено</title></head>
         <body style="font-family:Arial;text-align:center;padding:50px;">
-          <h1>✅ Пароль admin скинуто!</h1>
-          <p>Новий пароль: <strong>admin123</strong></p>
-          <p><a href="/">Перейти на сторінку входу</a></p>
-        </body>
-      </html>
-    `);
-  } catch (e) {
-    res.status(500).send("Помилка: " + e.message);
-  }
-});
-// ============================================================================
-
-// ====================== ПРИМУСОВЕ СКИДАННЯ + ДІАГНОСТИКА ======================
-app.get('/force-reset-admin', async (req, res) => {
-  try {
-    const newPassword = "admin123";
-    const hashedPassword = await bcrypt.hash(newPassword, 10);
-
-    // Примусово оновлюємо в базі
-    const updateResult = await db.collection('users').updateOne(
-      { username: "admin" },
-      { $set: { 
-          password: hashedPassword, 
-          role: "admin" 
-        } 
-      }
-    );
-
-    // Примусово оновлюємо кеш
-    await CacheManager.invalidateCache('users', null);
-    await loadUsersToCache();
-
-    // Перевіряємо, що в кеші
-    const adminUser = userCache.find(u => u.username === "admin");
-
-    res.send(`
-      <!DOCTYPE html>
-      <html lang="uk">
-        <head><meta charset="UTF-8"><title>Force Reset</title></head>
-        <body style="font-family:Arial;padding:40px;">
-          <h1>✅ Примусове скидання виконано</h1>
-          <p>Оновлено в базі: ${updateResult.modifiedCount} запис</p>
-          <p>Кеш оновлено. Користувач admin знайдений у кеші: ${!!adminUser}</p>
-          <p><strong>Спробуй увійти зараз:</strong></p>
-          <p>Логін: <b>admin</b><br>Пароль: <b>admin123</b></p>
+          <h1>✅ Користувач admin успішно створений!</h1>
+          <p><strong>Логін:</strong> admin</p>
+          <p><strong>Пароль:</strong> admin123</p>
           <hr>
           <a href="/">Перейти на сторінку входу</a>
         </body>
@@ -7550,7 +7514,7 @@ app.get('/force-reset-admin', async (req, res) => {
     res.status(500).send("Помилка: " + e.message);
   }
 });
-// =============================================================================
+// ===================================================================
 
 // Запуск сервера
 const port = process.env.PORT || 3000;
