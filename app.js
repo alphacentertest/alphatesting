@@ -4032,34 +4032,33 @@ app.get('/result', checkAuth, async (req, res) => {
 
           <script>
             document.addEventListener('DOMContentLoaded', () => {
+              // Експорт в PDF
               const exportBtn = document.getElementById('exportPDF');
               if (exportBtn) {
                 exportBtn.addEventListener('click', () => {
                   try {
                     const docDefinition = {
                       content: [
-                        // === ЛОГОТИП ЗВЕРХУ ===
-                        <% if (typeof imageBase64Val !== 'undefined' && imageBase64Val) { %>
-                        {
-                          image: 'data:image/png;base64,<%= imageBase64Val %>',
+                        // Логотип (якщо є)
+                        ${imageBase64 ? `{
+                          image: 'data:image/png;base64,${imageBase64}',
                           width: 75,
                           alignment: 'center',
                           margin: [0, 0, 0, 25]
-                        },
-                        <% } %>
+                        }` : ''},
 
                         { 
-                          text: 'Результат тесту користувача ' + "${req.user}" + ' з тесту ' + "${testNames[testNumber]?.name || 'Тест'}", 
+                          text: 'Результат тесту користувача ${req.user} з тесту ${testNames[testNumber]?.name || "Тест"}', 
                           style: 'header' 
                         },
 
                         { text: 'Кількість питань: ${totalQuestions}', margin: [0, 15, 0, 8] },
                         { text: 'Повністю правильних: ${fullyCorrect}', margin: [0, 8, 0, 8] },
                         { text: 'Частково правильних: ${partiallyCorrect}', margin: [0, 8, 0, 8] },
-                        { text: 'Набрано балів: ${Math.round(score)}', margin: [0, 12, 0, 8] },
-                        { text: 'Максимально можлива кількість балів: ${Math.round(totalPoints)}', margin: [0, 8, 0, 15] },
+                        { text: 'Набрано балів: ${Math.round(score)} / ${Math.round(totalPoints)}', margin: [0, 12, 0, 8] },
+                        { text: 'Відсоток: ${percentage}%', style: 'percentage', margin: [0, 15, 0, 20] },
 
-                        // === ЧАС І ДАТА В ОДНІЙ СТРОЦІ ===
+                        // Час і дата в одній строкі
                         {
                           columns: [
                             { text: 'Час: ${timeVal}', width: '50%', alignment: 'left' },
@@ -4069,23 +4068,19 @@ app.get('/result', checkAuth, async (req, res) => {
                         }
                       ],
                       styles: {
-                        header: { 
-                          fontSize: 18, 
-                          bold: true, 
-                          alignment: 'center', 
-                          margin: [0, 0, 0, 15] 
-                        }
+                        header: { fontSize: 18, bold: true, alignment: 'center', margin: [0, 0, 0, 15] },
+                        percentage: { fontSize: 20, bold: true, color: '#27ae60', alignment: 'center' }
                       },
                       defaultStyle: { 
                         fontSize: 13, 
-                        lineHeight: 1.85   // подвійний відступ між рядками
+                        lineHeight: 1.85 
                       }
                     };
 
                     pdfMake.createPdf(docDefinition).download('${req.user}_результат.pdf');
 
                   } catch (err) {
-                    console.error('Помилка PDF:', err);
+                    console.error('PDF Error:', err);
                     alert('Не вдалося згенерувати PDF. Подивіться консоль (F12).');
                   }
                 });
