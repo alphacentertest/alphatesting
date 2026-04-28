@@ -4069,7 +4069,7 @@ app.get('/result', checkAuth, async (req, res) => {
                         { text: 'Набрано балів: ${Math.round(score)} / ${Math.round(totalPoints)}', margin: [0, 12, 0, 8] },
                         // Відсоток — як звичайний текст (ліворуч, чорний)
                         { 
-                          text: 'Відсоток: ' + percentageRounded + '%', 
+                          text: 'Відсоток: ${Math.round(percentage)}%',
                           margin: [0, 12, 0, 15] 
                         },
 
