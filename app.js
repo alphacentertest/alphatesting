@@ -3829,8 +3829,19 @@ app.get('/result', checkAuth, async (req, res) => {
 
     const ipAddress = req.headers['x-forwarded-for'] || req.socket.remoteAddress;
     const endDate = new Date(testData.endTime || Date.now());
-    const timeVal = endDate.toLocaleTimeString('uk-UA', { hour: '2-digit', minute: '2-digit' });
-    const dateVal = endDate.toLocaleDateString('uk-UA');
+    
+    const timeVal = endDate.toLocaleTimeString('uk-UA', { 
+      timeZone: 'Europe/Kiev',
+      hour: '2-digit', 
+      minute: '2-digit' 
+    });
+
+    const dateVal = endDate.toLocaleDateString('uk-UA', { 
+      timeZone: 'Europe/Kiev',
+      day: '2-digit',
+      month: '2-digit',
+      year: 'numeric'
+    });
 
     // 6. Збереження результату (якщо потрібно)
     const existingResult = await db.collection('test_results').findOne({ testSessionId });
@@ -4056,7 +4067,11 @@ app.get('/result', checkAuth, async (req, res) => {
                         { text: 'Повністю правильних: ${fullyCorrect}', margin: [0, 8, 0, 8] },
                         { text: 'Частково правильних: ${partiallyCorrect}', margin: [0, 8, 0, 8] },
                         { text: 'Набрано балів: ${Math.round(score)} / ${Math.round(totalPoints)}', margin: [0, 12, 0, 8] },
-                        { text: 'Відсоток: ${percentage}%', style: 'percentage', margin: [0, 15, 0, 20] },
+                        // Відсоток — як звичайний текст (ліворуч, чорний)
+                        { 
+                          text: 'Відсоток: ' + percentageRounded + '%', 
+                          margin: [0, 12, 0, 15] 
+                        },
 
                         // Час і дата в одній строкі
                         {
@@ -4068,8 +4083,12 @@ app.get('/result', checkAuth, async (req, res) => {
                         }
                       ],
                       styles: {
-                        header: { fontSize: 18, bold: true, alignment: 'center', margin: [0, 0, 0, 15] },
-                        percentage: { fontSize: 20, bold: true, color: '#27ae60', alignment: 'center' }
+                        header: { 
+                          fontSize: 18, 
+                          bold: true, 
+                          alignment: 'center', 
+                          margin: [0, 0, 0, 15] 
+                        }
                       },
                       defaultStyle: { 
                         fontSize: 13, 
