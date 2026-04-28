@@ -4036,47 +4036,51 @@ app.get('/result', checkAuth, async (req, res) => {
                 try {
                   const docDefinition = {
                     content: [
-                      // Логотип (якщо є)
+                      // === ЛОГОТИП ЗВЕРХУ ===
                       <% if (typeof imageBase64Val !== 'undefined' && imageBase64Val) { %>
                       {
                         image: 'data:image/png;base64,<%= imageBase64Val %>',
-                        width: 60,
+                        width: 80,
                         alignment: 'center',
-                        margin: [0, 0, 0, 20]
+                        margin: [0, 0, 0, 25]
                       },
                       <% } %>
 
                       { text: 'Результат тесту', style: 'mainHeader' },
                       { text: 'Користувач: <%= req.user %>', style: 'subheader' },
-                      { text: '<%= testNames && testNames[testNumber] ? testNames[testNumber].name : "Тест" %>', style: 'mainHeader' },
+                      { text: '<%= testNames?.[testNumber]?.name || "Тест" %>', style: 'mainHeader' },
 
-                      { text: 'Кількість питань: <%= totalQuestions || 0 %>', margin: [0, 10, 0, 5] },
-                      { text: 'Повністю правильних: <%= fullyCorrect || 0 %>', margin: [0, 5, 0, 5] },
-                      { text: 'Частково правильних: <%= partiallyCorrect || 0 %>', margin: [0, 5, 0, 5] },
-                      { text: 'Набрано балів: <%= Math.round(score || 0) %> / <%= Math.round(totalPoints || 0) %>', margin: [0, 8, 0, 5] },
-                      { text: 'Відсоток: <%= roundedPercentage || 0 %>%', style: 'percentage' },
+                      { text: 'Кількість питань: <%= totalQuestions || 0 %>', margin: [0, 15, 0, 8] },
+                      { text: 'Повністю правильних: <%= fullyCorrect || 0 %>', margin: [0, 8, 0, 8] },
+                      { text: 'Частково правильних: <%= partiallyCorrect || 0 %>', margin: [0, 8, 0, 8] },
+                      { text: 'Набрано балів: <%= Math.round(score || 0) %> / <%= Math.round(totalPoints || 0) %>', margin: [0, 12, 0, 8] },
+                      { text: 'Відсоток: <%= roundedPercentage || 0 %>%', style: 'percentage', margin: [0, 15, 0, 20] },
 
+                      // === ЧАС І ДАТА В ОДНІЙ СТРОЦІ ===
                       {
                         columns: [
-                          { text: 'Час: <%= timeVal || "—" %>', width: '50%' },
-                          { text: 'Дата: <%= dateVal || "—" %>', alignment: 'right', width: '50%' }
+                          { text: 'Час: <%= timeVal || "—" %>', width: '50%', alignment: 'left' },
+                          { text: 'Дата: <%= dateVal || "—" %>', width: '50%', alignment: 'right' }
                         ],
-                        margin: [0, 15, 0, 10]
+                        margin: [0, 10, 0, 0]
                       }
                     ],
                     styles: {
-                      mainHeader: { fontSize: 20, bold: true, alignment: 'center', margin: [0, 10, 0, 15] },
-                      subheader: { fontSize: 14, bold: true, margin: [0, 5, 0, 8] },
-                      percentage: { fontSize: 18, bold: true, color: '#27ae60', alignment: 'center', margin: [0, 10, 0, 15] }
+                      mainHeader: { fontSize: 22, bold: true, alignment: 'center', margin: [0, 10, 0, 15] },
+                      subheader: { fontSize: 15, bold: true, margin: [0, 5, 0, 12] },
+                      percentage: { fontSize: 20, bold: true, color: '#27ae60', alignment: 'center' }
                     },
-                    defaultStyle: { fontSize: 12, lineHeight: 1.5 }
+                    defaultStyle: { 
+                      fontSize: 13, 
+                      lineHeight: 1.8   // подвійні відступи між рядками
+                    }
                   };
 
                   pdfMake.createPdf(docDefinition).download('<%= req.user %>_результат.pdf');
 
                 } catch (err) {
                   console.error('Помилка PDF:', err);
-                  alert('Не вдалося згенерувати PDF. Спробуйте ще раз.');
+                  alert('Не вдалося згенерувати PDF. Подивіться консоль (F12).');
                 }
               });
 
