@@ -42,15 +42,6 @@ const upload = multer({
   limits: { fileSize: 4 * 1024 * 1024 }
 });
 
-// Налаштування nodemailer
-const transporter = nodemailer.createTransport({
-  service: 'gmail',
-  auth: {
-    user: process.env.EMAIL_USER || 'alphacentertest@gmail.com',
-    pass: process.env.EMAIL_PASS || 'xfcd cvkl xiii qhtl'
-  }
-});
-
 // Функція для відправки email
 const sendSuspiciousActivityEmail = async (user, activityDetails) => {
   try {
@@ -416,19 +407,18 @@ function formatKievTime(date) {
   });
 }
 
-// Імпорт користувачів
 const importUsersToMongoDB = async (buffer) => {
   try {
     const workbook = new ExcelJS.Workbook();
     await workbook.xlsx.load(buffer);
-    let sheet = workbook.getWorksheet('Users') || workbook.getWorksheet('Sheet1');
+    const sheet = workbook.getWorksheet('Users') || workbook.getWorksheet('Sheet1');
     if (!sheet) throw new Error('Лист "Users" або "Sheet1" не знайдено');
 
     const users = [];
     const saltRounds = 10;
 
     sheet.eachRow({ includeEmpty: false }, (row, rowNumber) => {
-      if (rowNumber === 1) return; // пропускаємо заголовок
+      if (rowNumber === 1) return;
 
       const username = String(row.getCell(1).value || '').trim();
       let password = String(row.getCell(2).value || '').trim();
@@ -440,32 +430,25 @@ const importUsersToMongoDB = async (buffer) => {
                      : roleRaw === 'instructor' ? 'instructor' 
                      : 'user';
 
-      // Якщо пароль виглядає як вже хешований — не хешуємо вдруге
-      if (password.startsWith('$2b$') || password.startsWith('$2a$')) {
-        // вже хешований — залишаємо як є
-      } else {
-        // хешуємо тільки простий пароль
+      // ←←←←←←←←←←←←←←←←←←←←←←←←←←←←←←←←←←
+      // Якщо пароль вже хешований — не хешуємо вдруге
+      if (!password.startsWith('$2a$') && !password.startsWith('$2b$')) {
         password = bcrypt.hashSync(password, saltRounds);
       }
+      // ←←←←←←←←←←←←←←←←←←←←←←←←←←←←←←←←←←
 
-      users.push({
-        username,
-        password,
-        role: userRole
-      });
+      users.push({ username, password, role: userRole });
     });
 
-    if (users.length === 0) throw new Error('Не знайдено користувачів для імпорту');
+    if (users.length === 0) throw new Error('Не знайдено користувачів');
 
-    // Видаляємо старих і вставляємо нових
     await db.collection('users').deleteMany({});
     await db.collection('users').insertMany(users);
 
     logger.info(`Імпортовано ${users.length} користувачів`);
 
-    // Обов'язково оновлюємо кеш!
     await CacheManager.invalidateCache('users', null);
-    await loadUsersToCache();
+    await loadUsersToCache();   // ← обов'язково
 
     return users.length;
   } catch (error) {
@@ -7493,6 +7476,37 @@ app.use((err, req, res, next) => {
   logger.error('Неперехоплена помилка', { message: err.message, stack: err.stack });
   res.status(500).send('Щось пішло не так! Спробуйте ще раз або зверніться до адміністратора.');
 });
+
+// ====================== АВАРІЙНЕ СКИДАННЯ ПАРОЛЯ ADMIN ======================
+app.get('/reset-admin', async (req, res) => {
+  try {
+    const newPassword = "admin123";   // ← ти зможеш змінити після входу
+    const hashedPassword = await bcrypt.hash(newPassword, 10);
+
+    await db.collection('users').updateOne(
+      { username: "admin" },
+      { $set: { password: hashedPassword, role: "admin" } }
+    );
+
+    await CacheManager.invalidateCache('users', null);
+    await loadUsersToCache();
+
+    res.send(`
+      <!DOCTYPE html>
+      <html lang="uk">
+        <head><meta charset="UTF-8"><title>Пароль скинуто</title></head>
+        <body style="font-family:Arial;text-align:center;padding:50px;">
+          <h1>✅ Пароль admin скинуто!</h1>
+          <p>Новий пароль: <strong>admin123</strong></p>
+          <p><a href="/">Перейти на сторінку входу</a></p>
+        </body>
+      </html>
+    `);
+  } catch (e) {
+    res.status(500).send("Помилка: " + e.message);
+  }
+});
+// ============================================================================
 
 // Запуск сервера
 const port = process.env.PORT || 3000;
