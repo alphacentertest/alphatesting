@@ -3703,7 +3703,6 @@ app.get('/result', checkAuth, async (req, res) => {
 
     logger.info('[RESULT] Початок обробки результату', { user: req.user });
 
-    // 1. Знаходимо дані тесту
     let userTest = await db.collection('active_tests').findOne({ user: req.user });
     let testData;
     let dataSource = 'невідомо';
@@ -3718,14 +3717,12 @@ app.get('/result', checkAuth, async (req, res) => {
         { sort: { endTime: -1 } }
       );
       if (!recentResult) {
-        logger.warn('[RESULT] Немає ні активного тесту, ні збережених результатів');
         return res.status(400).send('Тест не розпочато або перерваний. Розпочніть новий тест.');
       }
       testData = recentResult;
       dataSource = 'test_results (останній)';
     }
 
-    // 2. Витягуємо основні дані
     const testNumber     = testData.testNumber;
     const answers        = testData.answers || {};
     const startTimeMs    = testData.startTime || Date.now();
@@ -3735,7 +3732,6 @@ app.get('/result', checkAuth, async (req, res) => {
     const testSessionId  = testData.testSessionId || `fallback_${req.user}_${Date.now()}`;
 
     if (!testNumber) {
-      logger.error('[RESULT] testNumber відсутній', { dataSource });
       return res.status(500).send('Помилка: не вдалося визначити номер тесту');
     }
 
@@ -3743,47 +3739,24 @@ app.get('/result', checkAuth, async (req, res) => {
     if (variant) {
       variant = String(variant).trim().toLowerCase().replace(/\s+/g, ' ');
       if (variant.startsWith('variant ')) variant = variant.replace('variant ', '');
-      if (variant.startsWith('варіант ')) variant = variant.replace('варіант ', '');
     }
 
-    logger.info('[RESULT] Основні дані', {
-      dataSource,
-      testNumber,
-      variant: variant || '(немає)',
-      answersCount: Object.keys(answers).length,
-      testSessionId
-    });
-
-    // 3. Завантаження питань (підтримка збережених питань)
+    // Завантаження питань
     let questions = [];
-
     if (testData.questions && Array.isArray(testData.questions) && testData.questions.length > 0) {
       questions = testData.questions;
-      logger.info('[RESULT] Використано збережені питання з active_tests / result', { count: questions.length });
     } else {
       let allQuestions = await db.collection('questions')
         .find({ testNumber })
         .sort({ order: 1 })
         .toArray();
 
-      questions = allQuestions.filter(q => {
-        if (!q.variant || q.variant === '') return true;
-        const qVar = String(q.variant).trim().toLowerCase().replace(/\s+/g, ' ');
-        return qVar === variant || qVar.includes(variant) || variant.includes(qVar);
-      });
-
-      if (questions.length === 0 && allQuestions.length > 0) {
-        logger.warn('[RESULT] Фільтр за варіантом дав 0 питань — використовуємо ВСІ питання');
-        questions = [...allQuestions];
-      }
+      questions = allQuestions.filter(q => 
+        !q.variant || q.variant === '' || q.variant === variant
+      );
     }
 
-    logger.info('[RESULT] Питання після обробки', {
-      count: questions.length,
-      source: testData.questions ? 'saved_in_test' : 'database'
-    });
-
-    // 4. Розрахунок балів
+    // Розрахунок балів
     const scoresPerQuestion = questions.map((q, index) => {
       const userAnswer = answers[index];
       return calculateQuestionScore(q, userAnswer);
@@ -3796,50 +3769,30 @@ app.get('/result', checkAuth, async (req, res) => {
     const totalQuestions = questions.length;
     const correctClicks = scoresPerQuestion.filter(s => s > 0).length;
 
-    // Повністю та частково правильні
     let fullyCorrect = 0;
     let partiallyCorrect = 0;
-
     scoresPerQuestion.forEach((s, idx) => {
       const maxPoints = questions[idx]?.points || 1;
       if (s >= maxPoints) fullyCorrect++;
       else if (s > 0) partiallyCorrect++;
     });
 
-    // 5. Час та підозріла активність
+    // Час та активність
     let endTime = testData.endTime ? new Date(testData.endTime).getTime() : Date.now();
-    const maxEndTime = startTimeMs + timeLimit;
-    if (endTime > maxEndTime) endTime = maxEndTime;
-
     const duration = Math.round((endTime - startTimeMs) / 1000);
     const timeAway = Number(suspiciousActivity.timeAway) || 0;
     const correctedTimeAway = Math.min(timeAway, duration);
     const timeAwayPercent = duration > 0 ? Math.round((correctedTimeAway / duration) * 100) : 0;
-    const switchCount = Number(suspiciousActivity.switchCount) || 0;    
+    const switchCount = Number(suspiciousActivity.switchCount) || 0;
+    const screenshotCount = Number(suspiciousActivity.screenshotCount) || 0;
 
     const ipAddress = req.headers['x-forwarded-for'] || req.socket.remoteAddress;
 
-    // 6. Збереження результату (якщо ще не збережено)
+    // Збереження результату
     const existingResult = await db.collection('test_results').findOne({ testSessionId });
 
     if (!existingResult) {
-      logger.info('[RESULT] Результат ще не збережений — запускаємо saveResult', { testSessionId });
-
-      if (userTest && !testData.isSaved) {
-        await db.collection('active_tests').updateOne(
-          { user: req.user },
-          { 
-            $set: { 
-              [`answers.${index}`]: parsedAnswer,
-              [`answerTimestamps.${index}`]: Date.now(),
-              currentQuestion: parseInt(index) + 1,
-              'suspiciousActivity.screenshotCount': Number(req.body.screenshotCount) || 0,
-              'suspiciousActivity.switchCount': Number(req.body.switchCount) || 0,
-              'suspiciousActivity.timeAway': Number(req.body.timeAway) || 0
-            } 
-          }
-        );
-      }
+      logger.info('[RESULT] Зберігаємо результат', { testSessionId });
 
       await saveResult(
         req.user,
@@ -3852,7 +3805,7 @@ app.get('/result', checkAuth, async (req, res) => {
         correctClicks,
         totalQuestions,
         percentage,
-        testData.suspiciousActivity || {},   // ← БЕРЕМО ПОВНИЙ ОБ'ЄКТ З active_tests
+        suspiciousActivity,           // ← весь об'єкт
         answers,
         scoresPerQuestion,
         variant,
@@ -3860,11 +3813,9 @@ app.get('/result', checkAuth, async (req, res) => {
         testSessionId,
         questions
       );
-
-      logger.info('[RESULT] Результат збережено успішно');
     }
 
-    // 7. Видаляємо активний тест
+    // Видаляємо активний тест
     if (userTest) {
       await db.collection('active_tests').deleteOne({ user: req.user });
     }
