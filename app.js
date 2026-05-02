@@ -2949,63 +2949,78 @@ app.get('/test/question', checkAuth, async (req, res) => {
             let questionStartTime = questionStartTimeObj[currentQuestionIndex] || Date.now();
 
             // ==================== АНТИ-ЧИТ З ФІКСАЦІЄЮ СКРІНШОТІВ ====================
-            if (typeof screenshotCount === 'undefined') screenshotCount = 0;
+           if (typeof screenshotCount === 'undefined') screenshotCount = 0;
             if (typeof switchCount === 'undefined') switchCount = 0;
             if (typeof timeAway === 'undefined') timeAway = 0;
 
-            let lastActionTime = 0;
             let notificationTimeout = null;
+            let lastScreenshotTime = 0;
+            let lastVolumePress = 0;
+            let lastSwitchTime = 0;
 
             function showScreenshotWarning() {
                 if (notificationTimeout) return;
 
                 const notif = document.createElement('div');
-                notif.style.cssText = 'position:fixed;top:20px;left:50%;transform:translateX(-50%);background:#ef4444;color:white;padding:18px 36px;border-radius:12px;font-weight:700;z-index:99999;box-shadow:0 10px 25px rgba(0,0,0,0.6);font-size:17px;';
-                notif.textContent = '⚠️ СКРІНШОТ ЗАФІКСОВАНО!';
+                notif.style.cssText = 'position:fixed;top:20px;left:50%;transform:translateX(-50%);background:#ef4444;color:white;padding:16px 32px;border-radius:12px;font-weight:700;z-index:99999;box-shadow:0 10px 25px rgba(0,0,0,0.6);white-space:nowrap;font-size:16px;';
+                notif.textContent = '⚠️ Зафіксована спроба скріншоту!';
                 document.body.appendChild(notif);
 
                 notificationTimeout = setTimeout(function() {
+                    notif.style.transition = 'opacity 0.5s';
                     notif.style.opacity = '0';
-                    setTimeout(function() { notif.remove(); }, 600);
-                    notificationTimeout = null;
-                }, 2500);
+                    setTimeout(function() { notif.remove(); notificationTimeout = null; }, 600);
+                }, 2200);
             }
 
-            function registerAction(type) {
+            function registerScreenshot(source) {
                 const now = Date.now();
-                if (now - lastActionTime < 3500) return;   // 3.5 секунди анти-флуд
+                if (now - lastScreenshotTime < 900) return;
 
-                lastActionTime = now;
-
-                if (type === 'screenshot') {
-                    screenshotCount++;
-                    console.log('[ANTI-CHEAT] 📸 Скріншот #' + screenshotCount);
-                    showScreenshotWarning();
-                } else if (type === 'switch') {
-                    switchCount++;
-                    console.log('[ANTI-CHEAT] 🔄 Перемикання #' + switchCount);
-                }
-
+                screenshotCount++;
+                lastScreenshotTime = now;
+                showScreenshotWarning();
+                console.log('[ANTI-CHEAT] Скріншот #' + screenshotCount + ' (' + source + ')');
                 saveSuspiciousActivity();
             }
 
-            // Скріншоти
+            function registerSwitch(source = 'blur') {
+                const now = Date.now();
+                if (now - lastSwitchTime < 1000) return;
+
+                switchCount++;
+                lastSwitchTime = now;
+                console.log('[ANTI-CHEAT] Перемикання #' + switchCount + ' (' + source + ')');
+                saveSuspiciousActivity();
+            }
+
+            // ПК — PrintScreen
             document.addEventListener('keyup', function(e) {
-                if (e.key === 'PrintScreen' || e.keyCode === 44) registerAction('screenshot');
+                if (e.key === 'PrintScreen' || e.keyCode === 44) {
+                    registerScreenshot('PrintScreen');
+                }
             });
 
+            // Мобільні — Volume Up
             document.addEventListener('keydown', function(e) {
-                if (e.key === 'AudioVolumeUp' || e.keyCode === 175) registerAction('screenshot');
+                if (e.key === 'AudioVolumeUp' || e.keyCode === 175) {
+                    lastVolumePress = Date.now();
+                    registerScreenshot('VolumeUp');
+                }
             });
 
-            // Перемикання — тільки blur
+            // Blur
             window.addEventListener('blur', function() {
-                registerAction('switch');
+                const now = Date.now();
+                if (now - lastVolumePress < 2000) {
+                    registerScreenshot('Blur+Volume');
+                } else {
+                    registerSwitch('blur');
+                }
                 lastBlurTime = Date.now() / 1000;
             });
 
-            // Видаляємо visibilitychange повністю для мобільних
-
+            // Час відсутності
             window.addEventListener('focus', function() {
                 if (lastBlurTime > 0) {
                     const awayTime = (Date.now() / 1000) - lastBlurTime;
