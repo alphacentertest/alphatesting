@@ -42,6 +42,28 @@ const upload = multer({
   limits: { fileSize: 4 * 1024 * 1024 }
 });
 
+// Функція для відправки email
+const sendSuspiciousActivityEmail = async (user, activityDetails) => {
+  try {
+    const mailOptions = {
+      from: process.env.EMAIL_USER,
+      to: process.env.EMAIL_USER,
+      subject: 'Підозріла активність',
+      text: `
+        Користувач: ${user}
+        Час поза вкладкою: ${activityDetails.timeAwayPercent}%
+        Переключення вкладок: ${activityDetails.switchCount}
+        Середній час відповіді (сек): ${activityDetails.avgResponseTime}
+        Загальна кількість дій: ${activityDetails.totalActivityCount}
+      `
+    };
+    await transporter.sendMail(mailOptions);
+    logger.info(`Email відправлено для ${user}`);
+  } catch (error) {
+    logger.error('Помилка відправки email', { message: error.message, stack: error.stack });
+  }
+};
+
 // Конфігурація
 const config = {
   suspiciousActivity: {
@@ -325,110 +347,44 @@ app.use((err, req, res, next) => {
   }
 });
 
-// Водяний знак + моніторинг скріншотів (тільки для HTML-сторінок)
+// Водяний знак
 app.use((req, res, next) => {
   const originalSend = res.send;
   res.send = function (body) {
-    // Виконуємо тільки для HTML-відповідей і тільки якщо є req.user
-    if (typeof body === 'string' && 
-        body.includes('</body>') && 
-        req.user && 
-        !req.url.startsWith('/save-suspicious-activity')) {   // ←←←←←←←←←←←←←←←←
-
+    if (typeof body === 'string' && body.includes('</body>') && req.user) {
       const watermarkScript = `
         <style>
-          .watermark { position:fixed; top:10px; right:10px; color:rgba(255,0,0,0.3); font-size:24px; pointer-events:none; z-index:10000; }
+          .watermark {
+            position: fixed;
+            top: 10px;
+            right: 10px;
+            color: rgba(255, 0, 0, 0.3);
+            font-size: 24px;
+            pointer-events: none;
+            z-index: 10000;
+          }
         </style>
         <div class="watermark">Користувач: ${req.user}</div>
-
         <script>
-          window.screenshotCount = 0;
-          window.switchCount = 0;
-          window.timeAway = 0;
-
-          let lastScreenshotTime = 0;
-          let lastVolumePress = 0;
-          let lastSwitchTime = 0;
-          let lastBlurTime = 0;
-          let notificationTimeout = null;
-
-          function showScreenshotWarning() {
-            if (notificationTimeout) return;
-            const notif = document.createElement('div');
-            notif.style.cssText = \`position:fixed;top:20px;left:50%;transform:translateX(-50%);background:#ef4444;color:white;padding:16px 32px;border-radius:12px;font-weight:700;z-index:99999;box-shadow:0 10px 25px rgba(0,0,0,0.6);\`;
-            notif.textContent = '⚠️ Зафіксована спроба скріншоту';
-            document.body.appendChild(notif);
-            notificationTimeout = setTimeout(() => {
-              notif.style.transition = 'opacity 0.5s';
-              notif.style.opacity = '0';
-              setTimeout(() => { notif.remove(); notificationTimeout = null; }, 600);
-            }, 2200);
-          }
-
-          function registerScreenshot(source) {
-            const now = Date.now();
-            if (now - lastScreenshotTime < 900) return;
-            lastScreenshotTime = now;
-            window.screenshotCount++;
-            showScreenshotWarning();
-            saveSuspiciousActivity();
-          }
-
-          function registerSwitch() {
-            const now = Date.now();
-            if (now - lastSwitchTime < 1000) return;
-            lastSwitchTime = now;
-            window.switchCount = (window.switchCount || 0) + 1;
-            saveSuspiciousActivity();
-          }
-
-          // ПК
-          document.addEventListener('keyup', e => {
-            if (e.key === 'PrintScreen' || e.keyCode === 44) registerScreenshot('PrintScreen');
-          });
-
-          // Мобільні
-          document.addEventListener('keydown', e => {
-            if (e.key === 'AudioVolumeUp' || e.keyCode === 175) {
-              lastVolumePress = Date.now();
-              registerScreenshot('VolumeUp');
+          document.addEventListener('keydown', (e) => {
+            if (
+              e.key === 'PrintScreen' ||
+              (e.ctrlKey && ['p', 'P', 's', 'S'].includes(e.key)) ||
+              (e.metaKey && ['p', 'P', 's', 'S'].includes(e.key)) ||
+              (e.altKey && e.key === 'PrintScreen') ||
+              (e.metaKey && e.shiftKey && ['3', '4'].includes(e.key))
+            ) {
+              e.preventDefault();
             }
           });
-
-          window.addEventListener('blur', () => {
-            const now = Date.now();
-            if (now - lastVolumePress < 2000) registerScreenshot('Blur+Volume');
-            registerSwitch();
-            lastBlurTime = Date.now() / 1000;
-          });
-
+          document.addEventListener('contextmenu', (e) => e.preventDefault());
+          document.addEventListener('selectstart', (e) => e.preventDefault());
+          document.addEventListener('copy', (e) => e.preventDefault());
           document.addEventListener('visibilitychange', () => {
-            if (document.hidden && /Mobi|Android|iPhone/i.test(navigator.userAgent)) {
-              registerScreenshot('visibilitychange (mobile)');
-            }
+            if (document.hidden) console.log('Вкладка невидима');
           });
-
-          window.addEventListener('focus', () => {
-            if (lastBlurTime > 0) {
-              window.timeAway += (Date.now() / 1000) - lastBlurTime;
-              lastBlurTime = 0;
-            }
-            saveSuspiciousActivity();
-          });
-
-          async function saveSuspiciousActivity() {
-            const formData = new FormData();
-            formData.append('screenshotCount', window.screenshotCount);
-            formData.append('switchCount', window.switchCount);
-            formData.append('timeAway', window.timeAway);
-            formData.append('_csrf', '${res.locals?._csrf || ''}');   // ← Захищено
-            try {
-              await fetch('/save-suspicious-activity', { method: 'POST', body: formData });
-            } catch(e){}
-          }
         </script>
       `;
-
       body = body.replace('</body>', `${watermarkScript}</body>`);
     }
     return originalSend.call(this, body);
@@ -857,32 +813,6 @@ setInterval(cleanupActiveTests, 24 * 60 * 60 * 1000);
   }
 })();
 
-// Middleware для перевірки авторизації через JWT
-const checkAuth = (req, res, next) => {
-  const token = req.headers['authorization']?.split(' ')[1] || req.cookies.token;
-  if (!token) {
-    return res.redirect('/');
-  }
-
-  try {
-    const decoded = jwt.verify(token, process.env.JWT_SECRET);
-    req.user = decoded.username;
-    req.userRole = decoded.role;
-    next();
-  } catch (error) {
-    logger.error('Помилка перевірки JWT', { message: error.message, stack: error.stack });
-    res.redirect('/');
-  }
-};
-
-// Middleware для перевірки ролі адміністратора
-const checkAdmin = (req, res, next) => {
-  if (req.userRole !== 'admin') {
-    return res.status(403).send('Доступно тільки для адміністратора (403 Forbidden)');
-  }
-  next();
-};
-
 // Обмеження спроб входу
 const MAX_LOGIN_ATTEMPTS = 30;
 const ONE_DAY_MS = 24 * 60 * 60 * 1000;
@@ -1156,6 +1086,32 @@ app.post('/login', [
     logger.info('Маршрут /login виконано', { duration: `${Date.now() - startTime} мс` });
   }
 });
+
+// Middleware для перевірки авторизації через JWT
+const checkAuth = (req, res, next) => {
+  const token = req.headers['authorization']?.split(' ')[1] || req.cookies.token;
+  if (!token) {
+    return res.redirect('/');
+  }
+
+  try {
+    const decoded = jwt.verify(token, process.env.JWT_SECRET);
+    req.user = decoded.username;
+    req.userRole = decoded.role;
+    next();
+  } catch (error) {
+    logger.error('Помилка перевірки JWT', { message: error.message, stack: error.stack });
+    res.redirect('/');
+  }
+};
+
+// Middleware для перевірки ролі адміністратора
+const checkAdmin = (req, res, next) => {
+  if (req.userRole !== 'admin') {
+    return res.status(403).send('Доступно тільки для адміністратора (403 Forbidden)');
+  }
+  next();
+};
 
 // Сторінка вибору тесту
 app.get('/select-test', checkAuth, async (req, res) => {
@@ -2259,34 +2215,19 @@ app.get('/test/question', checkAuth, async (req, res) => {
       return res.status(400).send('Тест не розпочато');
     }
 
-    const result = {
-      user,
-      testNumber,
-      score: actualScore,
-      totalPoints: actualTotalPoints,
-      totalClicks,
-      correctClicks: actualCorrectClicks,
-      totalQuestions: actualTotalQuestions,
-      percentage: actualPercentage,
-      startTime: new Date(startTime).toISOString(),
-      endTime: new Date(endTime).toISOString(),
-      duration,
-      answers: Object.fromEntries(Object.entries(answers).sort((a, b) => parseInt(a[0]) - parseInt(b[0]))),
-      
-      // ←←←←←←←←←←←←←←←←←←←←←←←←←←←←←←←←←←←←←←←←←
-      suspiciousActivity: {
-        screenshotCount: suspiciousActivity?.screenshotCount || 0,
-        switchCount: suspiciousActivity?.switchCount || 0,
-        timeAway: suspiciousActivity?.timeAway || 0
-      },
-      // ←←←←←←←←←←←←←←←←←←←←←←←←←←←←←←←←←←←←←←←←←
-      
-      variant: variant ? `Variant ${variant}` : 'Немає',
-      testSessionId,
-      createdAt: new Date(),
-      ipAddress,
-      questions: questionsToSave
-    };
+    const { 
+      questions, 
+      testNumber, 
+      answers, 
+      currentQuestion, 
+      startTime: testStartTime, 
+      timeLimit, 
+      isQuickTest, 
+      timePerQuestion, 
+      suspiciousActivity, 
+      variant, 
+      testSessionId 
+    } = userTest;    
 
     // Перевірка кешу тестів
     if (!testNames[testNumber]) {
@@ -3592,29 +3533,6 @@ app.post('/answer', checkAuth, express.urlencoded({ extended: true }), async (re
   }
 });
 
-// Збереження підозрілої активності
-app.post('/save-suspicious-activity', checkAuth, async (req, res) => {
-  try {
-    const { screenshotCount = 0, switchCount = 0, timeAway = 0 } = req.body;
-    const user = req.user;
-
-    await db.collection('active_tests').updateOne(
-      { user },
-      { $set: { 
-          'suspiciousActivity.screenshotCount': parseInt(screenshotCount),
-          'suspiciousActivity.switchCount': parseInt(switchCount),
-          'suspiciousActivity.timeAway': parseFloat(timeAway)
-        }
-      }
-    );
-
-    res.json({ success: true });
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ success: false });
-  }
-});
-
 /**
  * Обчислює точний бал за одне питання
  * Підтримує частковий підрахунок + м'яке порівняння для fillblank
@@ -3898,20 +3816,16 @@ app.get('/result', checkAuth, async (req, res) => {
       }
     });
 
-    // 5. Час та підозріла активність — ОНОВЛЕНО
+    // 5. Час та підозріла активність — ВИПРАВЛЕНО (без дублювання)
     let endTime = testData.endTime ? new Date(testData.endTime).getTime() : Date.now();
     const maxEndTime = startTimeMs + timeLimit;
     if (endTime > maxEndTime) endTime = maxEndTime;
 
     const duration = Math.round((endTime - startTimeMs) / 1000);
-
-    // Отримуємо всі дані з frontend
     const timeAway = suspiciousActivity.timeAway || 0;
-    const switchCount = suspiciousActivity.switchCount || 0;
-    const screenshotCount = suspiciousActivity.screenshotCount || 0;   // ← НОВЕ
-
     const correctedTimeAway = Math.min(timeAway, duration);
     const timeAwayPercent = duration > 0 ? Math.round((correctedTimeAway / duration) * 100) : 0;
+    const switchCount = suspiciousActivity.switchCount || 0;
 
     const ipAddress = req.headers['x-forwarded-for'] || req.socket.remoteAddress;
     const endDate = new Date(testData.endTime || Date.now());
@@ -3953,13 +3867,7 @@ app.get('/result', checkAuth, async (req, res) => {
         fullyCorrect,
         totalQuestions,
         percentage,
-        { 
-          timeAway: correctedTimeAway, 
-          switchCount, 
-          screenshotCount,                    
-          responseTimes: suspiciousActivity.responseTimes || [], 
-          activityCounts: suspiciousActivity.activityCounts || [] 
-        },
+        { timeAway: correctedTimeAway, switchCount, responseTimes: suspiciousActivity.responseTimes || [], activityCounts: suspiciousActivity.activityCounts || [] },
         answers,
         scoresPerQuestion,
         variant,
@@ -6515,11 +6423,7 @@ app.get('/admin/results', checkAuth, async (req, res) => {
             <td>${startTimeStr}</td>
             <td>${endTimeStr}</td>
             <td>${minutes} хв ${seconds} сек</td>
-            <td class="${isSuspicious ? 'suspicious' : ''}">
-              📸 ${result.suspiciousActivity?.screenshotCount || 0}<br>
-              🔄 ${switchCount}<br>
-              ⏳ ${timeAwayPercent}%
-            </td>
+            <td>${timeAwayPercent}% (${switchCount} перекл.)</td>
             <td>
               <button class="action-btn view" onclick="viewResult('${result._id}')">Перегляд</button>
               ${req.userRole === 'admin' ? `<button class="action-btn delete" onclick="deleteResult('${result._id}')">🗑️ Видалити</button>` : ''}
@@ -6727,7 +6631,6 @@ app.get('/admin/view-result', checkAuth, async (req, res) => {
                 endDateTime: "${formatKievTime(result.endTime)}",                
                 timeAwayPercent: ${timeAwayPercent},
                 switchCount: ${switchCount},
-                screenshotCount: ${result.suspiciousActivity?.screenshotCount || 0},   // ← НОВЕ
                 avgResponseTime: ${avgResponseTime},
                 totalActivityCount: ${totalActivityCount},
                 questionsTable: ${JSON.stringify(questions.map((q, idx) => {
@@ -6771,7 +6674,7 @@ app.get('/admin/view-result', checkAuth, async (req, res) => {
                     maxPoints: q.points || 1
                   };
                 }))}
-            };
+              };
 
               function exportToPDF() {
                 if (typeof pdfMake === 'undefined' || typeof pdfMake.createPdf === 'undefined') {
@@ -6808,9 +6711,8 @@ app.get('/admin/view-result', checkAuth, async (req, res) => {
                     { text: 'Підозріла активність:', style: 'subHeader', margin: [0, 0, 0, 5] },
                     {
                       ul: [
-                        'Скріншотів: ' + viewResultData.screenshotCount,
-                        'Переключень вкладок: ' + viewResultData.switchCount,
                         'Час поза вкладкою: ' + viewResultData.timeAwayPercent + '%',
+                        'Переключення вкладок: ' + viewResultData.switchCount,
                         'Середній час відповіді: ' + (viewResultData.avgResponseTime || 0) + ' сек',
                         'Загальна активність: ' + viewResultData.totalActivityCount
                       ],
@@ -6875,12 +6777,8 @@ app.get('/admin/view-result', checkAuth, async (req, res) => {
               <strong>Частково правильних:</strong> ${partiallyCorrect}<br>
               <strong>Дата завершення:</strong> ${formatKievTime(result.endTime)}<br><br>
               <strong>Підозріла активність:</strong><br>
-              📸 Скріншотів: 
-              <span class="${(result.suspiciousActivity?.screenshotCount || 0) > 0 ? 'suspicious' : ''}">
-                <strong>${result.suspiciousActivity?.screenshotCount || 0}</strong>
-              </span><br>
-              🔄 Переключень: <strong>${switchCount}</strong><br>
-              ⏳ Час поза вкладкою: <span class="${timeAwayPercent > 50 ? 'suspicious' : ''}">${timeAwayPercent}%</span><br>
+              Час поза вкладкою: <span class="${timeAwayPercent > 50 ? 'suspicious' : ''}">${timeAwayPercent}%</span><br>
+              Переключення вкладок: ${switchCount}<br>
               Середній час відповіді: ${avgResponseTime} сек<br>
               Загальна активність: ${totalActivityCount}
             </div>
