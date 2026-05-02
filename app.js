@@ -2948,11 +2948,12 @@ app.get('/test/question', checkAuth, async (req, res) => {
             let questionStartTimeObj = ${JSON.stringify(questionStartTimeObj || {})};
             let questionStartTime = questionStartTimeObj[currentQuestionIndex] || Date.now();
 
-            // ==================== АНТИ-ЧИТ З ФІКСАЦІЄЮ СКРІНШОТІВ ====================
-           screenshotCount = screenshotCount || 0;
-            switchCount = switchCount || 0;
-            timeAway = timeAway || 0;
+            // ==================== ІНІЦІАЛІЗАЦІЯ ДЛЯ АНТИ-ЧИТУ ====================
+            let screenshotCount = 0;
+            let switchCount = ${userTest.suspiciousActivity?.switchCount || 0};
+            let timeAway = ${userTest.suspiciousActivity?.timeAway || 0};
 
+            // ==================== АНТИ-ЧИТ З ФІКСАЦІЄЮ СКРІНШОТІВ ====================
             let notificationTimeout = null;
             let lastScreenshotTime = 0;
             let lastVolumePress = 0;
@@ -2996,12 +2997,17 @@ app.get('/test/question', checkAuth, async (req, res) => {
 
             // ПК — PrintScreen
             document.addEventListener('keyup', function(e) {
-                if (e.key === 'PrintScreen' || e.keyCode === 44) registerScreenshot('PrintScreen');
+                if (e.key === 'PrintScreen' || e.keyCode === 44) {
+                    registerScreenshot('PrintScreen');
+                }
             });
 
             // Мобільні — Volume Up
             document.addEventListener('keydown', function(e) {
-                if (e.key === 'AudioVolumeUp' || e.keyCode === 175) registerScreenshot('VolumeUp');
+                if (e.key === 'AudioVolumeUp' || e.keyCode === 175) {
+                    lastVolumePress = Date.now();
+                    registerScreenshot('VolumeUp');
+                }
             });
 
             // Blur
