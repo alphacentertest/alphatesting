@@ -2956,15 +2956,6 @@ app.get('/test/question', checkAuth, async (req, res) => {
             let lastActionTime = 0;
             let notificationTimeout = null;
 
-            // Великі видимі логи на екрані
-            function addBigLog(text, color = '#333') {
-                const log = document.createElement('div');
-                log.style.cssText = `position:fixed;bottom:10px;left:10px;right:10px;background:rgba(0,0,0,0.85);color:${color};padding:12px;border-radius:8px;font-size:15px;z-index:999999;text-align:center;`;
-                log.textContent = text;
-                document.body.appendChild(log);
-                setTimeout(() => log.remove(), 6000);
-            }
-
             function showScreenshotWarning() {
                 if (notificationTimeout) return;
 
@@ -2973,9 +2964,9 @@ app.get('/test/question', checkAuth, async (req, res) => {
                 notif.textContent = '⚠️ СКРІНШОТ ЗАФІКСОВАНО!';
                 document.body.appendChild(notif);
 
-                notificationTimeout = setTimeout(() => {
+                notificationTimeout = setTimeout(function() {
                     notif.style.opacity = '0';
-                    setTimeout(() => notif.remove(), 600);
+                    setTimeout(function() { notif.remove(); }, 600);
                     notificationTimeout = null;
                 }, 2500);
             }
@@ -2988,33 +2979,36 @@ app.get('/test/question', checkAuth, async (req, res) => {
 
                 if (type === 'screenshot') {
                     screenshotCount++;
-                    addBigLog('📸 Скріншот #' + screenshotCount, '#ef4444');
+                    console.log('[ANTI-CHEAT] 📸 Скріншот #' + screenshotCount);
                     showScreenshotWarning();
                 } else if (type === 'switch') {
                     switchCount++;
-                    addBigLog('🔄 Перемикання #' + switchCount, '#ff9800');
+                    console.log('[ANTI-CHEAT] 🔄 Перемикання #' + switchCount);
                 }
 
                 saveSuspiciousActivity();
             }
 
             // Скріншоти
-            document.addEventListener('keyup', e => {
+            document.addEventListener('keyup', function(e) {
                 if (e.key === 'PrintScreen' || e.keyCode === 44) registerAction('screenshot');
             });
 
-            document.addEventListener('keydown', e => {
+            document.addEventListener('keydown', function(e) {
                 if (e.key === 'AudioVolumeUp' || e.keyCode === 175) registerAction('screenshot');
             });
 
             // Перемикання
-            window.addEventListener('blur', () => registerAction('switch'));
+            window.addEventListener('blur', function() {
+                registerAction('switch');
+                lastBlurTime = Date.now() / 1000;
+            });
 
-            window.addEventListener('visibilitychange', () => {
+            window.addEventListener('visibilitychange', function() {
                 if (document.hidden) registerAction('switch');
             });
 
-            window.addEventListener('focus', () => {
+            window.addEventListener('focus', function() {
                 if (lastBlurTime > 0) {
                     const awayTime = (Date.now() / 1000) - lastBlurTime;
                     timeAway = (timeAway || 0) + awayTime;
