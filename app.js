@@ -2953,86 +2953,76 @@ app.get('/test/question', checkAuth, async (req, res) => {
             if (typeof switchCount === 'undefined') switchCount = 0;
             if (typeof timeAway === 'undefined') timeAway = 0;
 
+            let lastActionTime = 0;
             let notificationTimeout = null;
-            let lastScreenshotTime = 0;
-            let lastVolumePress = 0;
-            let lastSwitchTime = 0;
+
+            // Видимі логи на екрані
+            function addLog(text) {
+                const logDiv = document.createElement('div');
+                logDiv.style.cssText = 'position:fixed;bottom:10px;left:10px;background:rgba(0,0,0,0.8);color:white;padding:8px 12px;border-radius:6px;font-size:13px;z-index:999999;max-width:280px;';
+                logDiv.textContent = text;
+                document.body.appendChild(logDiv);
+                setTimeout(() => logDiv.remove(), 5000);
+            }
 
             function showScreenshotWarning() {
                 if (notificationTimeout) return;
 
                 const notif = document.createElement('div');
-                notif.style.cssText = 'position:fixed;top:20px;left:50%;transform:translateX(-50%);background:#ef4444;color:white;padding:16px 32px;border-radius:12px;font-weight:700;z-index:99999;box-shadow:0 10px 25px rgba(0,0,0,0.6);white-space:nowrap;font-size:16px;';
+                notif.style.cssText = 'position:fixed;top:20px;left:50%;transform:translateX(-50%);background:#ef4444;color:white;padding:16px 32px;border-radius:12px;font-weight:700;z-index:99999;box-shadow:0 10px 25px rgba(0,0,0,0.6);';
                 notif.textContent = '⚠️ Зафіксована спроба скріншоту!';
                 document.body.appendChild(notif);
 
                 notificationTimeout = setTimeout(() => {
-                    notif.style.transition = 'opacity 0.5s';
                     notif.style.opacity = '0';
-                    setTimeout(() => { notif.remove(); notificationTimeout = null; }, 600);
+                    setTimeout(() => notif.remove(), 600);
+                    notificationTimeout = null;
                 }, 2200);
             }
 
-            function registerScreenshot(source) {
+            function registerAction(type) {
                 const now = Date.now();
-                if (now - lastScreenshotTime < 1500) return;
+                if (now - lastActionTime < 2500) return;   // сильний анти-флуд
 
-                screenshotCount++;
-                lastScreenshotTime = now;
-                showScreenshotWarning();
-                console.log('[ANTI-CHEAT] Скріншот #' + screenshotCount + ' (' + source + ')');
+                lastActionTime = now;
+
+                if (type === 'screenshot') {
+                    screenshotCount++;
+                    addLog('📸 Скріншот #' + screenshotCount);
+                    showScreenshotWarning();
+                } else if (type === 'switch') {
+                    switchCount++;
+                    addLog('🔄 Перемикання #' + switchCount);
+                }
+
                 saveSuspiciousActivity();
             }
 
-            function registerSwitch(source = 'blur') {
-                const now = Date.now();
-                if (now - lastSwitchTime < 3000) return;   // 3 секунди — для мобільних
-
-                switchCount++;
-                lastSwitchTime = now;
-                console.log('[ANTI-CHEAT] Перемикання #' + switchCount + ' (' + source + ')');
-                saveSuspiciousActivity();
-            }
-
-            // ПК — PrintScreen
+            // Скріншоти
             document.addEventListener('keyup', e => {
                 if (e.key === 'PrintScreen' || e.keyCode === 44) {
-                    registerScreenshot('PrintScreen');
+                    registerAction('screenshot');
                 }
             });
 
-            // Мобільні — Volume Up
             document.addEventListener('keydown', e => {
                 if (e.key === 'AudioVolumeUp' || e.keyCode === 175) {
-                    lastVolumePress = Date.now();
-                    registerScreenshot('VolumeUp');
+                    registerAction('screenshot');
                 }
             });
 
-            // Blur
+            // Перемикання
             window.addEventListener('blur', () => {
-                const now = Date.now();
-                if (now - lastVolumePress < 2500) {
-                    registerScreenshot('Blur+Volume');
-                } else {
-                    registerSwitch('blur');
-                }
+                registerAction('switch');
                 lastBlurTime = Date.now() / 1000;
             });
 
-            // Visibility Change — дуже обмежено для мобільних
-            document.addEventListener('visibilitychange', () => {
+            window.addEventListener('visibilitychange', () => {
                 if (document.hidden) {
-                    if (/Mobi|Android|iPhone|iPad/i.test(navigator.userAgent)) {
-                        // На мобільних вважаємо тільки сильні зміни
-                        if (Date.now() - lastSwitchTime > 5000) {   // тільки раз на 5 секунд
-                            registerSwitch('visibilitychange (mobile)');
-                        }
-                    }
+                    registerAction('switch');
                 }
             });
 
-            // Час відсутності
             window.addEventListener('focus', () => {
                 if (lastBlurTime > 0) {
                     const awayTime = (Date.now() / 1000) - lastBlurTime;
