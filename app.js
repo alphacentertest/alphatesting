@@ -2949,9 +2949,9 @@ app.get('/test/question', checkAuth, async (req, res) => {
             let questionStartTime = questionStartTimeObj[currentQuestionIndex] || Date.now();
 
             // ==================== АНТИ-ЧИТ З ФІКСАЦІЄЮ СКРІНШОТІВ ====================
-            if (typeof screenshotCount === 'undefined') screenshotCount = 0;
-            if (typeof switchCount === 'undefined') switchCount = 0;
-            if (typeof timeAway === 'undefined') timeAway = 0;
+            let screenshotCount = parseInt(localStorage.getItem('screenshotCount') || '0');
+            let switchCount = parseInt(localStorage.getItem('switchCount') || '0');
+            let timeAway = parseFloat(localStorage.getItem('timeAway') || '0');
 
             let notificationTimeout = null;
             let lastScreenshotTime = 0;
@@ -2979,6 +2979,7 @@ app.get('/test/question', checkAuth, async (req, res) => {
 
                 screenshotCount++;
                 lastScreenshotTime = now;
+                localStorage.setItem('screenshotCount', screenshotCount);   // зберігаємо
                 showScreenshotWarning();
                 console.log('[ANTI-CHEAT] Скріншот #' + screenshotCount + ' (' + source + ')');
                 saveSuspiciousActivity();
@@ -2990,6 +2991,7 @@ app.get('/test/question', checkAuth, async (req, res) => {
 
                 switchCount++;
                 lastSwitchTime = now;
+                localStorage.setItem('switchCount', switchCount);   // зберігаємо
                 console.log('[ANTI-CHEAT] Перемикання #' + switchCount + ' (' + source + ')');
                 saveSuspiciousActivity();
             }
@@ -3025,6 +3027,7 @@ app.get('/test/question', checkAuth, async (req, res) => {
                 if (lastBlurTime > 0) {
                     const awayTime = (Date.now() / 1000) - lastBlurTime;
                     timeAway = (timeAway || 0) + awayTime;
+                    localStorage.setItem('timeAway', timeAway);
                     lastBlurTime = 0;
                 }
                 saveSuspiciousActivity();
