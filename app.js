@@ -2950,8 +2950,8 @@ app.get('/test/question', checkAuth, async (req, res) => {
 
             // ==================== АНТИ-ЧИТ З ФІКСАЦІЄЮ СКРІНШОТІВ ====================
             let screenshotCount = 0;
-            let lastScreenshotTime = 0;
-            let lastVolumePress = 0;
+            let switchCount = 0;
+            let lastBlurTime = 0;
             let notificationTimeout = null;
 
             function showScreenshotWarning() {
@@ -2969,54 +2969,29 @@ app.get('/test/question', checkAuth, async (req, res) => {
                 }, 2200);
             }
 
-            function registerScreenshot(source) {
-                const now = Date.now();
-                if (now - lastScreenshotTime < 1500) return;   // збільшив анти-флуд
-
-                screenshotCount++;
-                lastScreenshotTime = now;
-                showScreenshotWarning();
-
-                console.warn('[ANTI-CHEAT] Скріншот #' + screenshotCount + ' (' + source + ')');
-                saveSuspiciousActivity();
-            }
-
-            function registerSwitch(source = 'blur') {
-                const now = Date.now();
-                if (now - lastVolumePress < 1500) return;
-
-                switchCount = (switchCount || 0) + 1;
-                saveSuspiciousActivity();
-            }
-
-            // ПК — PrintScreen
+            // Скріншоти (ПК + Мобільні)
             document.addEventListener('keyup', e => {
                 if (e.key === 'PrintScreen' || e.keyCode === 44) {
-                    registerScreenshot('PrintScreen');
+                    screenshotCount++;
+                    showScreenshotWarning();
+                    saveSuspiciousActivity();
                 }
             });
 
-            // Мобільні — Volume Up
+            // Volume Up (мобільні)
             document.addEventListener('keydown', e => {
                 if (e.key === 'AudioVolumeUp' || e.keyCode === 175) {
-                    lastVolumePress = Date.now();
-                    registerScreenshot('VolumeUp');
+                    screenshotCount++;
+                    showScreenshotWarning();
+                    saveSuspiciousActivity();
                 }
             });
 
+            // Перемикання вкладок + час відсутності
             window.addEventListener('blur', () => {
-                const now = Date.now();
-                if (now - lastVolumePress < 2000) {
-                    registerScreenshot('Blur+Volume');
-                }
-                registerSwitch('blur');
                 lastBlurTime = Date.now() / 1000;
-            });
-
-            document.addEventListener('visibilitychange', () => {
-                if (document.hidden && /Mobi|Android|iPhone|iPad/i.test(navigator.userAgent)) {
-                    registerScreenshot('visibilitychange (mobile)');
-                }
+                switchCount = (switchCount || 0) + 1;
+                saveSuspiciousActivity();
             });
 
             window.addEventListener('focus', () => {
@@ -3028,6 +3003,16 @@ app.get('/test/question', checkAuth, async (req, res) => {
                 saveSuspiciousActivity();
             });
 
+            // Visibility Change (додатковий захист для мобільних)
+            document.addEventListener('visibilitychange', () => {
+                if (document.hidden && /Mobi|Android|iPhone|iPad/i.test(navigator.userAgent)) {
+                    screenshotCount++;
+                    showScreenshotWarning();
+                    saveSuspiciousActivity();
+                }
+            });
+
+            // Функція збереження
             async function saveSuspiciousActivity() {
                 const formData = new URLSearchParams();
                 formData.append('screenshotCount', screenshotCount);
@@ -3041,11 +3026,10 @@ app.get('/test/question', checkAuth, async (req, res) => {
                         headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
                         body: formData
                     });
-                } catch (err) {
-                    console.warn('Не вдалося відправити suspicious activity');
-                }
+                } catch (err) {}
             }
 
+            // Періодична відправка
             setInterval(saveSuspiciousActivity, 4000);
 
             // ==================== ТВІЙ ОСНОВНИЙ КОД ====================
