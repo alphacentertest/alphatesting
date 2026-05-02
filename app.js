@@ -2949,9 +2949,13 @@ app.get('/test/question', checkAuth, async (req, res) => {
             let questionStartTime = questionStartTimeObj[currentQuestionIndex] || Date.now();
 
             // ==================== АНТИ-ЧИТ З ФІКСАЦІЄЮ СКРІНШОТІВ ====================
-            screenshotCount = screenshotCount || 0;   // використовуємо вже існуючу
+            // Ініціалізація змінних (якщо їх ще немає)
+            if (typeof screenshotCount === 'undefined') screenshotCount = 0;
+            if (typeof switchCount === 'undefined') switchCount = 0;
+            if (typeof timeAway === 'undefined') timeAway = 0;
 
-            notificationTimeout = notificationTimeout || null;
+            let lastBlurTime = 0;
+            let notificationTimeout = null;
 
             function showScreenshotWarning() {
                 if (notificationTimeout) return;
