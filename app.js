@@ -3878,8 +3878,7 @@ app.get('/result', checkAuth, async (req, res) => {
     const timeAway = Number(suspiciousActivity.timeAway) || 0;
     const correctedTimeAway = Math.min(timeAway, duration);
     const timeAwayPercent = duration > 0 ? Math.round((correctedTimeAway / duration) * 100) : 0;
-    const switchCount = Number(suspiciousActivity.switchCount) || 0;
-    const screenshotCount = Number(suspicious.screenshotCount) || 0;
+    const switchCount = Number(suspiciousActivity.switchCount) || 0;    
 
     const ipAddress = req.headers['x-forwarded-for'] || req.socket.remoteAddress;
 
@@ -4163,7 +4162,6 @@ app.get('/result', checkAuth, async (req, res) => {
 });
 
 // Маршрут для перегляду результатів користувача (з таблицею питань)
-// Маршрут для перегляду результатів користувача (з таблицею питань)
 app.get('/results', checkAuth, async (req, res) => {
   const startTime = Date.now();
   try {
@@ -4435,7 +4433,6 @@ app.get('/results', checkAuth, async (req, res) => {
     logger.info('Маршрут /results виконано', { duration: Date.now() - startTime });
   }
 });
-
 
 // Маршрут для адмін-панелі
 app.get('/admin', checkAuth, checkAdmin, async (req, res) => {
