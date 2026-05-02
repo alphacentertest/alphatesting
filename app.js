@@ -2966,16 +2966,16 @@ app.get('/test/question', checkAuth, async (req, res) => {
                 notif.textContent = '⚠️ Зафіксована спроба скріншоту!';
                 document.body.appendChild(notif);
 
-                notificationTimeout = setTimeout(function() {
+                notificationTimeout = setTimeout(() => {
                     notif.style.transition = 'opacity 0.5s';
                     notif.style.opacity = '0';
-                    setTimeout(function() { notif.remove(); notificationTimeout = null; }, 600);
+                    setTimeout(() => { notif.remove(); notificationTimeout = null; }, 600);
                 }, 2200);
             }
 
             function registerScreenshot(source) {
                 const now = Date.now();
-                if (now - lastScreenshotTime < 900) return;
+                if (now - lastScreenshotTime < 1200) return;   // 1.2 секунди
 
                 screenshotCount++;
                 lastScreenshotTime = now;
@@ -2986,7 +2986,7 @@ app.get('/test/question', checkAuth, async (req, res) => {
 
             function registerSwitch(source = 'blur') {
                 const now = Date.now();
-                if (now - lastSwitchTime < 1000) return;
+                if (now - lastSwitchTime < 2500) return;   // 2.5 секунди — важливо для мобільних
 
                 switchCount++;
                 lastSwitchTime = now;
@@ -2995,14 +2995,14 @@ app.get('/test/question', checkAuth, async (req, res) => {
             }
 
             // ПК — PrintScreen
-            document.addEventListener('keyup', function(e) {
+            document.addEventListener('keyup', e => {
                 if (e.key === 'PrintScreen' || e.keyCode === 44) {
                     registerScreenshot('PrintScreen');
                 }
             });
 
             // Мобільні — Volume Up
-            document.addEventListener('keydown', function(e) {
+            document.addEventListener('keydown', e => {
                 if (e.key === 'AudioVolumeUp' || e.keyCode === 175) {
                     lastVolumePress = Date.now();
                     registerScreenshot('VolumeUp');
@@ -3010,9 +3010,9 @@ app.get('/test/question', checkAuth, async (req, res) => {
             });
 
             // Blur
-            window.addEventListener('blur', function() {
+            window.addEventListener('blur', () => {
                 const now = Date.now();
-                if (now - lastVolumePress < 2000) {
+                if (now - lastVolumePress < 2500) {
                     registerScreenshot('Blur+Volume');
                 } else {
                     registerSwitch('blur');
@@ -3020,15 +3020,15 @@ app.get('/test/question', checkAuth, async (req, res) => {
                 lastBlurTime = Date.now() / 1000;
             });
 
-            // Visibility Change — тільки для мобільних
-            document.addEventListener('visibilitychange', function() {
+            // Visibility Change — тільки для мобільних і з сильним анти-флуд
+            document.addEventListener('visibilitychange', () => {
                 if (document.hidden && /Mobi|Android|iPhone|iPad/i.test(navigator.userAgent)) {
-                    registerScreenshot('visibilitychange (mobile)');
+                    registerSwitch('visibilitychange (mobile)');   // не screenshot, а switch
                 }
             });
 
             // Час відсутності
-            window.addEventListener('focus', function() {
+            window.addEventListener('focus', () => {
                 if (lastBlurTime > 0) {
                     const awayTime = (Date.now() / 1000) - lastBlurTime;
                     timeAway = (timeAway || 0) + awayTime;
