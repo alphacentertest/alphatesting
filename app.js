@@ -1330,7 +1330,6 @@ app.post('/logout', checkAuth, async (req, res) => {
   }
 });
 
-// Збереження результатів тесту (оновлено: перераховуємо все перед збереженням)
 const saveResult = async (user, testNumber, score, totalPoints, startTime, endTime, totalClicks, correctClicks, totalQuestions, percentage, suspiciousActivity, answers, scoresPerQuestion, variant, ipAddress, testSessionId, savedQuestions = null) => {
   const startTimeLog = Date.now();
 
@@ -1372,15 +1371,22 @@ const saveResult = async (user, testNumber, score, totalPoints, startTime, endTi
 
     const duration = Math.round((endTime - startTime) / 1000);
 
-    // === ЗАХИСТ ВІД ПОРОЖНЬОГО suspiciousActivity ===
+    // === ВИПРАВЛЕНО: ПОВНИЙ ОБ'ЄКТ З screenshotCount ===
     const finalSuspiciousActivity = suspiciousActivity && typeof suspiciousActivity === 'object' 
       ? {
           timeAway: Number(suspiciousActivity.timeAway) || 0,
           switchCount: Number(suspiciousActivity.switchCount) || 0,
+          screenshotCount: Number(suspiciousActivity.screenshotCount) || 0,   // ← Додано
           responseTimes: Array.isArray(suspiciousActivity.responseTimes) ? suspiciousActivity.responseTimes : [],
           activityCounts: Array.isArray(suspiciousActivity.activityCounts) ? suspiciousActivity.activityCounts : []
         }
-      : { timeAway: 0, switchCount: 0, responseTimes: [], activityCounts: [] };
+      : { 
+          timeAway: 0, 
+          switchCount: 0, 
+          screenshotCount: 0, 
+          responseTimes: [], 
+          activityCounts: [] 
+        };
 
     const result = {
       user,
@@ -1395,7 +1401,7 @@ const saveResult = async (user, testNumber, score, totalPoints, startTime, endTi
       endTime: new Date(endTime).toISOString(),
       duration,
       answers: Object.fromEntries(Object.entries(answers).sort((a, b) => parseInt(a[0]) - parseInt(b[0]))),
-      suspiciousActivity: finalSuspiciousActivity,     // ← гарантовано не порожній
+      suspiciousActivity: finalSuspiciousActivity,
       variant: variant ? `Variant ${variant}` : 'Немає',
       testSessionId,
       createdAt: new Date(),
@@ -1409,7 +1415,8 @@ const saveResult = async (user, testNumber, score, totalPoints, startTime, endTi
       insertedId: insertResult.insertedId.toString(),
       testSessionId,
       timeAway: finalSuspiciousActivity.timeAway,
-      switchCount: finalSuspiciousActivity.switchCount
+      switchCount: finalSuspiciousActivity.switchCount,
+      screenshotCount: finalSuspiciousActivity.screenshotCount   // ← для логів
     });
 
     await logActivity(
@@ -3573,13 +3580,27 @@ app.post('/update-suspicious-activity', checkAuth, async (req, res) => {
 
     const update = { $set: {} };
 
-    if (screenshotCount !== undefined) update.$set['suspiciousActivity.screenshotCount'] = Number(screenshotCount);
-    if (switchCount !== undefined) update.$set['suspiciousActivity.switchCount'] = Number(switchCount);
-    if (timeAway !== undefined) update.$set['suspiciousActivity.timeAway'] = Number(timeAway);
+    if (screenshotCount !== undefined) {
+      update.$set['suspiciousActivity.screenshotCount'] = Number(screenshotCount);
+    }
+    if (switchCount !== undefined) {
+      update.$set['suspiciousActivity.switchCount'] = Number(switchCount);
+    }
+    if (timeAway !== undefined) {
+      update.$set['suspiciousActivity.timeAway'] = Number(timeAway);
+    }
+
+    // Додаємо $inc для надійності (якщо кілька оновлень одночасно)
+    const inc = {};
+    if (screenshotCount !== undefined) inc['suspiciousActivity.screenshotCount'] = Number(screenshotCount);
+    if (switchCount !== undefined) inc['suspiciousActivity.switchCount'] = Number(switchCount);
 
     await db.collection('active_tests').updateOne(
       { user: req.user },
-      update
+      { 
+        $set: update.$set,
+        $inc: Object.keys(inc).length > 0 ? inc : undefined
+      }
     );
 
     res.json({ success: true });
@@ -3906,7 +3927,7 @@ app.get('/result', checkAuth, async (req, res) => {
         correctClicks,
         totalQuestions,
         percentage,
-        suspiciousActivity,                    // ← передаємо весь об'єкт
+        testData.suspiciousActivity || {},   // ← БЕРЕМО ПОВНИЙ ОБ'ЄКТ З active_tests
         answers,
         scoresPerQuestion,
         variant,
