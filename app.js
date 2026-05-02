@@ -3595,54 +3595,52 @@ app.post('/answer', checkAuth, express.urlencoded({ extended: true }), async (re
 
 // === ОНОВЛЕННЯ ПІДОЗРІЛОЇ АКТИВНОСТІ ===
 app.post('/update-suspicious-activity', checkAuth, async (req, res) => {
+  const startTime = Date.now();
   try {
-    const { screenshotCount, switchCount, timeAway, activityCount } = req.body;
+    const { screenshotCount, switchCount, timeAway } = req.body;
 
     logger.info('[UPDATE-SUSPICIOUS] Отримані дані', {
       user: req.user,
       screenshotCount,
       switchCount,
       timeAway,
-      activityCount,
-      rawBody: req.body
+      fullBody: req.body
     });
 
     const update = { $set: {} };
-    const inc = {};
 
     if (screenshotCount !== undefined) {
-      update.$set['suspiciousActivity.screenshotCount'] = Number(screenshotCount);
-      inc['suspiciousActivity.screenshotCount'] = Number(screenshotCount);
+      update.$set['suspiciousActivity.screenshotCount'] = Number(screenshotCount) || 0;
     }
     if (switchCount !== undefined) {
-      update.$set['suspiciousActivity.switchCount'] = Number(switchCount);
-      inc['suspiciousActivity.switchCount'] = Number(switchCount);
+      update.$set['suspiciousActivity.switchCount'] = Number(switchCount) || 0;
     }
     if (timeAway !== undefined) {
-      update.$set['suspiciousActivity.timeAway'] = Number(timeAway);
-    }
-    if (activityCount !== undefined) {
-      inc['suspiciousActivity.activityCounts'] = Number(activityCount); // якщо потрібно
+      update.$set['suspiciousActivity.timeAway'] = Number(timeAway) || 0;
     }
 
     const result = await db.collection('active_tests').updateOne(
       { user: req.user },
-      { 
-        $set: update.$set,
-        $inc: Object.keys(inc).length > 0 ? inc : undefined
-      }
+      update
     );
 
-    logger.info('[UPDATE-SUSPICIOUS] Оновлення виконано', {
+    logger.info('[UPDATE-SUSPICIOUS] Успішно оновлено', {
       user: req.user,
-      matchedCount: result.matchedCount,
-      modifiedCount: result.modifiedCount
+      matched: result.matchedCount,
+      modified: result.modifiedCount,
+      duration: Date.now() - startTime
     });
 
     res.json({ success: true });
+
   } catch (error) {
-    logger.error('Помилка /update-suspicious-activity', error);
-    res.status(500).json({ success: false });
+    logger.error('[UPDATE-SUSPICIOUS] Критична помилка', {
+      message: error.message,
+      stack: error.stack,
+      user: req.user,
+      body: req.body
+    });
+    res.status(500).json({ success: false, error: error.message });
   }
 });
 
