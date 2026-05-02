@@ -2948,11 +2948,6 @@ app.get('/test/question', checkAuth, async (req, res) => {
             let questionStartTimeObj = ${JSON.stringify(questionStartTimeObj || {})};
             let questionStartTime = questionStartTimeObj[currentQuestionIndex] || Date.now();
 
-            // ==================== ІНІЦІАЛІЗАЦІЯ ДЛЯ АНТИ-ЧИТУ ====================
-            let screenshotCount = 0;
-            let switchCount = ${userTest.suspiciousActivity?.switchCount || 0};
-            let timeAway = ${userTest.suspiciousActivity?.timeAway || 0};
-
             // ==================== АНТИ-ЧИТ З ФІКСАЦІЄЮ СКРІНШОТІВ ====================
             screenshotCount = screenshotCount || 0;
             // switchCount вже оголошений вище, просто використовуємо його
