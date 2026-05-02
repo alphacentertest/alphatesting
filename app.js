@@ -4331,15 +4331,21 @@ app.get('/results', checkAuth, async (req, res) => {
             <h1>Ваші результати</h1>
 
             <div class="summary">
-              <strong>Тест:</strong> ${testNames[testNumber]?.name?.replace(/"/g, '\\"') || 'Тест'}<br>
-              <strong>Варіант:</strong> ${variant || 'Немає'}<br>
+              <strong>Тест:</strong> ${testNames[result.testNumber]?.name?.replace(/"/g, '\\"') || 'Невідомий тест'}<br>
+              <strong>Варіант:</strong> ${result.variant || 'Немає'}<br>
               <strong>Бали:</strong> ${roundedScore.toFixed(1)} з ${totalPoints}<br>
               <strong>Відсоток:</strong> ${roundedPercentage.toFixed(1)}%<br>
               <strong>Питань:</strong> ${totalQuestions}<br>
               <strong>Повністю правильних:</strong> ${fullyCorrect}<br>
               <strong>Частково правильних:</strong> ${partiallyCorrect}<br>
-              <strong>Час поза вкладкою:</strong> ${timeAwayPercent}%<br>
-              <strong>Переключень вкладок:</strong> ${switchCount}
+              <strong>Дата завершення:</strong> ${formatKievTime(result.endTime)}<br><br>
+              
+              <strong>Підозріла активність:</strong><br>
+              Час поза вкладкою: <span class="${timeAwayPercent > 50 ? 'suspicious' : ''}">${timeAwayPercent}%</span><br>
+              Переключення вкладок: ${switchCount}<br>
+              ${screenshotCount > 0 ? `<span style="color:#ef4444;font-weight:bold;">📸 Скріншотів: ${screenshotCount}</span><br>` : 'Скріншотів: 0<br>'}
+              Середній час відповіді: ${avgResponseTime} сек<br>
+              Загальна активність: ${totalActivityCount}
             </div>
 
             <table>
@@ -6547,7 +6553,7 @@ app.get('/admin/results', checkAuth, async (req, res) => {
         const suspicious = result.suspiciousActivity || {};
         const timeAway = Number(suspicious.timeAway) || 0;
         const switchCount = Number(suspicious.switchCount) || 0;
-        const screenshotCount = Number(suspicious.screenshotCount) || 0;        
+        const screenshotCount = Number(suspicious.screenshotCount) || 0;
         const duration = Number(result.duration) || 0;
         
         const timeAwayPercent = duration > 0 
@@ -6573,7 +6579,7 @@ app.get('/admin/results', checkAuth, async (req, res) => {
             <td>${startTimeStr}</td>
             <td>${endTimeStr}</td>
             <td>${minutes} хв ${seconds} сек</td>
-            <td>
+            <td style="line-height:1.5;">
               ${timeAwayPercent}% (${switchCount} перекл.)
               ${screenshotCount > 0 ? `<br><span style="color:#ef4444;font-weight:bold;">📸 ${screenshotCount} скріншотів</span>` : ''}
             </td>
@@ -6911,10 +6917,11 @@ app.get('/admin/view-result', checkAuth, async (req, res) => {
               <strong>Повністю правильних:</strong> ${fullyCorrect}<br>
               <strong>Частково правильних:</strong> ${partiallyCorrect}<br>
               <strong>Дата завершення:</strong> ${formatKievTime(result.endTime)}<br><br>
+              
               <strong>Підозріла активність:</strong><br>
               Час поза вкладкою: <span class="${timeAwayPercent > 50 ? 'suspicious' : ''}">${timeAwayPercent}%</span><br>
               Переключення вкладок: ${switchCount}<br>
-              ${screenshotCount > 0 ? `<span style="color:#ef4444;font-weight:bold;">📸 Скріншотів: ${screenshotCount}</span><br>` : ''}
+              ${screenshotCount > 0 ? `<span style="color:#ef4444;font-weight:bold;">📸 Скріншотів: ${screenshotCount}</span><br>` : 'Скріншотів: 0<br>'}
               Середній час відповіді: ${avgResponseTime} сек<br>
               Загальна активність: ${totalActivityCount}
             </div>
