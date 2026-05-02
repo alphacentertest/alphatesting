@@ -2949,9 +2949,9 @@ app.get('/test/question', checkAuth, async (req, res) => {
             let questionStartTime = questionStartTimeObj[currentQuestionIndex] || Date.now();
 
             // ==================== АНТИ-ЧИТ З ФІКСАЦІЄЮ СКРІНШОТІВ ====================
-            if (typeof screenshotCount === 'undefined') screenshotCount = 0;
-            if (typeof switchCount === 'undefined') switchCount = 0;
-            if (typeof timeAway === 'undefined') timeAway = 0;
+            let screenshotCount = parseInt(localStorage.getItem('screenshotCount') || '0');
+            let switchCount = parseInt(localStorage.getItem('switchCount') || '0');
+            let timeAway = parseFloat(localStorage.getItem('timeAway') || '0');
 
             let lastActionTime = 0;
             let notificationTimeout = null;
@@ -2973,18 +2973,22 @@ app.get('/test/question', checkAuth, async (req, res) => {
 
             function registerAction(type) {
                 const now = Date.now();
-                if (now - lastActionTime < 3000) return;
+                if (now - lastActionTime < 2500) return;
 
                 lastActionTime = now;
 
                 if (type === 'screenshot') {
                     screenshotCount++;
+                    localStorage.setItem('screenshotCount', screenshotCount);
                     console.log('[ANTI-CHEAT] 📸 Скріншот #' + screenshotCount);
                     showScreenshotWarning();
                 } else if (type === 'switch') {
                     switchCount++;
+                    localStorage.setItem('switchCount', switchCount);
                     console.log('[ANTI-CHEAT] 🔄 Перемикання #' + switchCount);
                 }
+
+                saveSuspiciousActivity();
             }
 
             // Скріншоти
@@ -3006,9 +3010,27 @@ app.get('/test/question', checkAuth, async (req, res) => {
                 if (lastBlurTime > 0) {
                     const awayTime = (Date.now() / 1000) - lastBlurTime;
                     timeAway = (timeAway || 0) + awayTime;
+                    localStorage.setItem('timeAway', timeAway);
                     lastBlurTime = 0;
                 }
+                saveSuspiciousActivity();
             });
+
+            async function saveSuspiciousActivity() {
+                const formData = new URLSearchParams();
+                formData.append('screenshotCount', screenshotCount);
+                formData.append('switchCount', switchCount);
+                formData.append('timeAway', timeAway);
+                formData.append('_csrf', '${res.locals._csrf}');
+
+                try {
+                    await fetch('/answer', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                        body: formData
+                    });
+                } catch (err) {}
+            }
 
             // ==================== ОСНОВНИЙ КОД ====================
             function goToQuestion(targetIndex) {
