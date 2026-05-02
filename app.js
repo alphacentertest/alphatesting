@@ -2949,104 +2949,66 @@ app.get('/test/question', checkAuth, async (req, res) => {
             let questionStartTime = questionStartTimeObj[currentQuestionIndex] || Date.now();
 
             // ==================== АНТИ-ЧИТ З ФІКСАЦІЄЮ СКРІНШОТІВ ====================
-           if (typeof screenshotCount === 'undefined') screenshotCount = 0;
+            if (typeof screenshotCount === 'undefined') screenshotCount = 0;
             if (typeof switchCount === 'undefined') switchCount = 0;
             if (typeof timeAway === 'undefined') timeAway = 0;
 
+            let lastActionTime = 0;
             let notificationTimeout = null;
-            let lastScreenshotTime = 0;
-            let lastVolumePress = 0;
-            let lastSwitchTime = 0;
 
             function showScreenshotWarning() {
                 if (notificationTimeout) return;
 
                 const notif = document.createElement('div');
-                notif.style.cssText = 'position:fixed;top:20px;left:50%;transform:translateX(-50%);background:#ef4444;color:white;padding:16px 32px;border-radius:12px;font-weight:700;z-index:99999;box-shadow:0 10px 25px rgba(0,0,0,0.6);white-space:nowrap;font-size:16px;';
-                notif.textContent = '⚠️ Зафіксована спроба скріншоту!';
+                notif.style.cssText = 'position:fixed;top:20px;left:50%;transform:translateX(-50%);background:#ef4444;color:white;padding:18px 36px;border-radius:12px;font-weight:700;z-index:99999;box-shadow:0 10px 25px rgba(0,0,0,0.6);font-size:17px;';
+                notif.textContent = '⚠️ СКРІНШОТ ЗАФІКСОВАНО!';
                 document.body.appendChild(notif);
 
                 notificationTimeout = setTimeout(function() {
-                    notif.style.transition = 'opacity 0.5s';
                     notif.style.opacity = '0';
-                    setTimeout(function() { notif.remove(); notificationTimeout = null; }, 600);
-                }, 2200);
+                    setTimeout(function() { notif.remove(); }, 600);
+                    notificationTimeout = null;
+                }, 2500);
             }
 
-            function registerScreenshot(source) {
+            function registerAction(type) {
                 const now = Date.now();
-                if (now - lastScreenshotTime < 900) return;
+                if (now - lastActionTime < 3000) return;
 
-                screenshotCount++;
-                lastScreenshotTime = now;
-                showScreenshotWarning();
-                console.log('[ANTI-CHEAT] Скріншот #' + screenshotCount + ' (' + source + ')');
-                saveSuspiciousActivity();
+                lastActionTime = now;
+
+                if (type === 'screenshot') {
+                    screenshotCount++;
+                    console.log('[ANTI-CHEAT] 📸 Скріншот #' + screenshotCount);
+                    showScreenshotWarning();
+                } else if (type === 'switch') {
+                    switchCount++;
+                    console.log('[ANTI-CHEAT] 🔄 Перемикання #' + switchCount);
+                }
             }
 
-            function registerSwitch(source = 'blur') {
-                const now = Date.now();
-                if (now - lastSwitchTime < 1000) return;
-
-                switchCount++;
-                lastSwitchTime = now;
-                console.log('[ANTI-CHEAT] Перемикання #' + switchCount + ' (' + source + ')');
-                saveSuspiciousActivity();
-            }
-
-            // ПК — PrintScreen
+            // Скріншоти
             document.addEventListener('keyup', function(e) {
-                if (e.key === 'PrintScreen' || e.keyCode === 44) {
-                    registerScreenshot('PrintScreen');
-                }
+                if (e.key === 'PrintScreen' || e.keyCode === 44) registerAction('screenshot');
             });
 
-            // Мобільні — Volume Up
             document.addEventListener('keydown', function(e) {
-                if (e.key === 'AudioVolumeUp' || e.keyCode === 175) {
-                    lastVolumePress = Date.now();
-                    registerScreenshot('VolumeUp');
-                }
+                if (e.key === 'AudioVolumeUp' || e.keyCode === 175) registerAction('screenshot');
             });
 
-            // Blur
+            // Перемикання
             window.addEventListener('blur', function() {
-                const now = Date.now();
-                if (now - lastVolumePress < 2000) {
-                    registerScreenshot('Blur+Volume');
-                } else {
-                    registerSwitch('blur');
-                }
+                registerAction('switch');
                 lastBlurTime = Date.now() / 1000;
             });
 
-            // Час відсутності
             window.addEventListener('focus', function() {
                 if (lastBlurTime > 0) {
                     const awayTime = (Date.now() / 1000) - lastBlurTime;
                     timeAway = (timeAway || 0) + awayTime;
                     lastBlurTime = 0;
                 }
-                saveSuspiciousActivity();
             });
-
-            async function saveSuspiciousActivity() {
-                const formData = new URLSearchParams();
-                formData.append('screenshotCount', screenshotCount);
-                formData.append('switchCount', switchCount);
-                formData.append('timeAway', timeAway);
-                formData.append('_csrf', '${res.locals._csrf}');
-
-                try {
-                    await fetch('/update-suspicious-activity', {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-                        body: formData
-                    });
-                } catch (err) {}
-            }
-
-            setInterval(saveSuspiciousActivity, 4000);
 
             // ==================== ОСНОВНИЙ КОД ====================
             function goToQuestion(targetIndex) {
@@ -3098,7 +3060,7 @@ app.get('/test/question', checkAuth, async (req, res) => {
               if (confirm('Скинути порядок?')) location.reload();
             }
 
-            async function saveCurrentAnswer(index) {
+                        async function saveCurrentAnswer(index) {
               if (isSaving) return;
               isSaving = true;
 
@@ -3129,8 +3091,9 @@ app.get('/test/question', checkAuth, async (req, res) => {
                 const formData = new URLSearchParams();
                 formData.append('index', index);
                 formData.append('answer', JSON.stringify(answers));
-                formData.append('timeAway', timeAway);
+                formData.append('screenshotCount', screenshotCount);
                 formData.append('switchCount', switchCount);
+                formData.append('timeAway', timeAway);
                 formData.append('responseTime', responseTime);
                 formData.append('activityCount', activityCount);
                 formData.append('_csrf', '${res.locals._csrf}');
@@ -3140,6 +3103,8 @@ app.get('/test/question', checkAuth, async (req, res) => {
                   headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
                   body: formData
                 });
+
+                console.log('[SAVE SUCCESS] Питання', index);
               } catch (err) {
                 console.error('Помилка збереження', index, err);
               } finally {
@@ -3167,23 +3132,28 @@ app.get('/test/question', checkAuth, async (req, res) => {
                     answers.push(input ? input.value.trim() : '');
                   }
                 }
+
                 const responseTime = (Date.now() - (questionStartTimeObj[index] || Date.now())) / 1000;
+
                 const formData = new URLSearchParams();
                 formData.append('index', index);
-                const safeAnswer = JSON.stringify(answers);
-                formData.append('answer', safeAnswer);
-                formData.append('timeAway', timeAway);
+                formData.append('answer', JSON.stringify(answers));
+                formData.append('screenshotCount', screenshotCount);
                 formData.append('switchCount', switchCount);
+                formData.append('timeAway', timeAway);
                 formData.append('responseTime', responseTime);
                 formData.append('activityCount', activityCount);
                 formData.append('_csrf', '${res.locals._csrf}');
+
                 const response = await fetch('/answer', {
                   method: 'POST',
                   headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
                   body: formData
                 });
+
                 if (!response.ok) throw new Error('HTTP ' + response.status);
                 const result = await response.json();
+
                 if (result.success) {
                   const nextIndex = index + 1;
                   fetch('/set-question-start-time?index=' + nextIndex, {
@@ -3210,6 +3180,7 @@ app.get('/test/question', checkAuth, async (req, res) => {
               isSaving = true;
               try {
                 await saveCurrentAnswer(index);
+
                 let answers = selectedOptions;
                 if (document.querySelector('input[name="q' + index + '"]')) {
                   answers = document.getElementById('q' + index + '_input').value;
@@ -3225,23 +3196,28 @@ app.get('/test/question', checkAuth, async (req, res) => {
                     answers.push(input ? input.value.trim() : '');
                   }
                 }
+
                 const responseTime = (Date.now() - (questionStartTimeObj[index] || Date.now())) / 1000;
+
                 const formData = new URLSearchParams();
                 formData.append('index', index);
-                const safeAnswer = JSON.stringify(answers);
-                formData.append('answer', safeAnswer);
-                formData.append('timeAway', timeAway);
+                formData.append('answer', JSON.stringify(answers));
+                formData.append('screenshotCount', screenshotCount);
                 formData.append('switchCount', switchCount);
+                formData.append('timeAway', timeAway);
                 formData.append('responseTime', responseTime);
                 formData.append('activityCount', activityCount);
                 formData.append('_csrf', '${res.locals._csrf}');
+
                 const response = await fetch('/answer', {
                   method: 'POST',
                   headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
                   body: formData
                 });
+
                 if (!response.ok) throw new Error('HTTP ' + response.status);
                 const result = await response.json();
+
                 if (result.success) {
                   setTimeout(() => window.location.href = '/result', 300);
                 } else {
@@ -3454,18 +3430,18 @@ app.post('/answer', checkAuth, express.urlencoded({ extended: true }), async (re
     const { 
       index, 
       answer,
-      timeAway,
-      switchCount,
+      screenshotCount = 0,
+      switchCount = 0,
+      timeAway = 0,
       responseTime,
       activityCount 
     } = req.body;
 
-    logger.info('[ANSWER DEBUG]', { 
+    logger.info('[ANSWER] Отримані дані', { 
       index, 
-      answerType: typeof answer, 
-      rawAnswer: answer,
-      timeAway,
+      screenshotCount,
       switchCount,
+      timeAway,
       responseTime,
       activityCount
     });
@@ -3484,7 +3460,7 @@ app.post('/answer', checkAuth, express.urlencoded({ extended: true }), async (re
         parsedAnswer = answer;
       }
     } catch (e) {
-      logger.warn('[ANSWER] Помилка парсингу JSON', { answer, error: e.message });
+      logger.warn('[ANSWER] Помилка парсингу JSON', { answer });
       parsedAnswer = [];
     }
 
@@ -3493,83 +3469,47 @@ app.post('/answer', checkAuth, express.urlencoded({ extended: true }), async (re
     const question = userTestCheck?.questions?.[parseInt(index)];
 
     if (question?.type === 'matching') {
-      logger.info('[ANSWER MATCHING RAW]', { 
-        index, 
-        raw: parsedAnswer, 
-        length: Array.isArray(parsedAnswer) ? parsedAnswer.length : 0 
-      });
-
-      if (!Array.isArray(parsedAnswer)) {
-        parsedAnswer = [];
-      }
+      if (!Array.isArray(parsedAnswer)) parsedAnswer = [];
 
       // Якщо прийшов плоский масив — перетворюємо в пари
       if (parsedAnswer.length > 0 && !Array.isArray(parsedAnswer[0])) {
         const pairs = [];
         for (let i = 0; i < parsedAnswer.length; i += 2) {
-          pairs.push([
-            String(parsedAnswer[i] || ''),
-            String(parsedAnswer[i + 1] || '')
-          ]);
+          pairs.push([String(parsedAnswer[i] || ''), String(parsedAnswer[i + 1] || '')]);
         }
         parsedAnswer = pairs;
-        logger.info('[ANSWER] Matching: перетворено плоский масив у пари', { count: pairs.length });
       }
     }
 
     // === СПЕЦІАЛЬНА ОБРОБКА ДЛЯ FILLBLANK ===
     if (question?.type === 'fillblank') {
       if (!Array.isArray(parsedAnswer)) {
-        parsedAnswer = typeof parsedAnswer === 'string' 
-          ? [parsedAnswer] 
-          : [];
+        parsedAnswer = typeof parsedAnswer === 'string' ? [parsedAnswer] : [];
       }
-      logger.info('[ANSWER FILLBLANK]', { 
-        index, 
-        parsed: parsedAnswer,
-        length: parsedAnswer.length 
-      });
     }
 
-    // === ПІДГОТОВКА ОНОВЛЕННЯ ===
-    const updateObj = {
-      [`answers.${index}`]: parsedAnswer,
-      [`answerTimestamps.${index}`]: Date.now(),
-      currentQuestion: parseInt(index) + 1
-    };
-
-    // === ОНОВЛЕННЯ ПІДОЗРІЛОЇ АКТИВНОСТІ ===
-    if (timeAway !== undefined || switchCount !== undefined) {
-      updateObj['suspiciousActivity.timeAway'] = Number(timeAway) || 0;
-      updateObj['suspiciousActivity.switchCount'] = Number(switchCount) || 0;
-    }
-
-    const pushObj = {};
-    if (responseTime !== undefined) {
-      pushObj['suspiciousActivity.responseTimes'] = Number(responseTime);
-    }
-    if (activityCount !== undefined) {
-      pushObj['suspiciousActivity.activityCounts'] = Number(activityCount);
-    }
-
-    const updateOperation = { $set: updateObj };
-    if (Object.keys(pushObj).length > 0) {
-      updateOperation.$push = pushObj;
-    }
-
-    // Збереження в БД
+    // Збереження
     await db.collection('active_tests').updateOne(
       { user: req.user },
-      updateOperation
+      { 
+        $set: { 
+          [`answers.${index}`]: parsedAnswer,
+          [`answerTimestamps.${index}`]: Date.now(),
+          currentQuestion: parseInt(index) + 1,
+          'suspiciousActivity.screenshotCount': Number(screenshotCount) || 0,
+          'suspiciousActivity.switchCount': Number(switchCount) || 0,
+          'suspiciousActivity.timeAway': Number(timeAway) || 0
+        } 
+      }
     );
 
     logger.info('[ANSWER SUCCESS]', { 
       index, 
       type: question?.type || 'unknown',
       savedLength: Array.isArray(parsedAnswer) ? parsedAnswer.length : 0,
-      timeAway: Number(timeAway) || 0,
-      switchCount: Number(switchCount) || 0,
-      responseTime: Number(responseTime) || 0
+      screenshotCount: Number(screenshotCount),
+      switchCount: Number(switchCount),
+      timeAway: Number(timeAway)
     });
 
     res.json({ success: true });
@@ -3583,48 +3523,6 @@ app.post('/answer', checkAuth, express.urlencoded({ extended: true }), async (re
     res.status(500).json({ success: false, error: 'Не вдалося зберегти відповідь' });
   } finally {
     logger.info('Маршрут /answer виконано', { duration: Date.now() - startTime });
-  }
-});
-
-// === ОНОВЛЕННЯ ПІДОЗРІЛОЇ АКТИВНОСТІ ===
-app.post('/update-suspicious-activity', checkAuth, async (req, res) => {
-  try {
-    const { screenshotCount = 0, switchCount = 0, timeAway = 0 } = req.body;
-
-    logger.info('[UPDATE-SUSPICIOUS] Отримані дані', {
-      user: req.user,
-      screenshotCount,
-      switchCount,
-      timeAway
-    });
-
-    // Використовуємо $inc для надійного додавання
-    const update = {
-      $inc: {
-        'suspiciousActivity.screenshotCount': Number(screenshotCount) || 0,
-        'suspiciousActivity.switchCount': Number(switchCount) || 0
-      },
-      $set: {
-        'suspiciousActivity.timeAway': Number(timeAway) || 0
-      }
-    };
-
-    const result = await db.collection('active_tests').updateOne(
-      { user: req.user },
-      update
-    );
-
-    logger.info('[UPDATE-SUSPICIOUS] Успішно оновлено', {
-      matched: result.matchedCount,
-      modified: result.modifiedCount,
-      screenshotAdded: Number(screenshotCount)
-    });
-
-    res.json({ success: true });
-
-  } catch (error) {
-    logger.error('[UPDATE-SUSPICIOUS] Помилка', error);
-    res.status(500).json({ success: false });
   }
 });
 
@@ -3930,7 +3828,16 @@ app.get('/result', checkAuth, async (req, res) => {
       if (userTest && !testData.isSaved) {
         await db.collection('active_tests').updateOne(
           { user: req.user },
-          { $set: { isSavingResult: true } }
+          { 
+            $set: { 
+              [`answers.${index}`]: parsedAnswer,
+              [`answerTimestamps.${index}`]: Date.now(),
+              currentQuestion: parseInt(index) + 1,
+              'suspiciousActivity.screenshotCount': Number(req.body.screenshotCount) || 0,
+              'suspiciousActivity.switchCount': Number(req.body.switchCount) || 0,
+              'suspiciousActivity.timeAway': Number(req.body.timeAway) || 0
+            } 
+          }
         );
       }
 
