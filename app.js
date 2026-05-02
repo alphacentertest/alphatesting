@@ -2899,7 +2899,7 @@ app.get('/test/question', checkAuth, async (req, res) => {
             </div>
           </div>
 
-          <script>
+                    <script>
             const startTime = ${testStartTime};
             const timeLimit = ${timeLimit};
             const totalTestTime = ${totalTestTime};
@@ -2926,6 +2926,110 @@ app.get('/test/question', checkAuth, async (req, res) => {
             let hasMovedToNext = false;
             let questionStartTimeObj = ${JSON.stringify(questionStartTimeObj || {})};
             let questionStartTime = questionStartTimeObj[currentQuestionIndex] || Date.now();
+
+            // ==================== АНТИ-ЧИТ З ФІКСАЦІЄЮ СКРІНШОТІВ ====================
+            let screenshotCount = 0;
+            let lastScreenshotTime = 0;
+            let lastVolumePress = 0;
+            let notificationTimeout = null;
+
+            function showScreenshotWarning() {
+              if (notificationTimeout) return;
+
+              const notif = document.createElement('div');
+              notif.style.cssText = 'position:fixed; top:20px; left:50%; transform:translateX(-50%); background:#ef4444; color:white; padding:16px 32px; border-radius:12px; font-weight:700; z-index:99999; box-shadow:0 10px 25px rgba(0,0,0,0.6); white-space:nowrap; font-size:16px;';
+              notif.textContent = '⚠️ Зафіксована спроба скріншоту!';
+              document.body.appendChild(notif);
+
+              notificationTimeout = setTimeout(() => {
+                notif.style.transition = 'opacity 0.5s';
+                notif.style.opacity = '0';
+                setTimeout(() => { notif.remove(); notificationTimeout = null; }, 600);
+              }, 2200);
+            }
+
+            function registerScreenshot(source) {
+              const now = Date.now();
+              if (now - lastScreenshotTime < 900) return;
+
+              screenshotCount++;
+              lastScreenshotTime = now;
+              showScreenshotWarning();
+
+              console.warn('[ANTI-CHEAT] Скріншот #' + screenshotCount + ' (' + source + ')');
+              saveSuspiciousActivity();
+            }
+
+            function registerSwitch(source = 'blur') {
+              const now = Date.now();
+              if (now - lastVolumePress < 1500) return;
+
+              switchCount = (switchCount || 0) + 1;
+              saveSuspiciousActivity();
+            }
+
+            // ПК — PrintScreen
+            document.addEventListener('keyup', function(e) {
+              if (e.key === 'PrintScreen' || e.keyCode === 44) {
+                registerScreenshot('PrintScreen');
+              }
+            });
+
+            // Мобільні — Volume Up
+            document.addEventListener('keydown', function(e) {
+              if (e.key === 'AudioVolumeUp' || e.keyCode === 175) {
+                lastVolumePress = Date.now();
+                registerScreenshot('VolumeUp');
+              }
+            });
+
+            // Blur
+            window.addEventListener('blur', function() {
+              const now = Date.now();
+              if (now - lastVolumePress < 2000) {
+                registerScreenshot('Blur+Volume');
+              }
+              registerSwitch('blur');
+              lastBlurTime = Date.now() / 1000;
+            });
+
+            // Visibility Change
+            document.addEventListener('visibilitychange', function() {
+              if (document.hidden && /Mobi|Android|iPhone|iPad/i.test(navigator.userAgent)) {
+                registerScreenshot('visibilitychange (mobile)');
+              }
+            });
+
+            // Focus
+            window.addEventListener('focus', function() {
+              if (lastBlurTime > 0) {
+                const awayTime = (Date.now() / 1000) - lastBlurTime;
+                timeAway = (timeAway || 0) + awayTime;
+                lastBlurTime = 0;
+              }
+              saveSuspiciousActivity();
+            });
+
+            // Відправка на сервер
+            async function saveSuspiciousActivity() {
+              const formData = new URLSearchParams();
+              formData.append('screenshotCount', screenshotCount);
+              formData.append('switchCount', switchCount);
+              formData.append('timeAway', timeAway);
+              formData.append('_csrf', '${res.locals._csrf}');
+
+              try {
+                await fetch('/update-suspicious-activity', {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                  body: formData
+                });
+              } catch (err) {
+                console.warn('Не вдалося відправити suspicious activity');
+              }
+            }
+
+            setInterval(saveSuspiciousActivity, 4000);
 
             // === ФУНКЦІЯ ПЕРЕХОДУ МІЖ ПИТАННЯМИ ===
             function goToQuestion(targetIndex) {
@@ -2959,7 +3063,7 @@ app.get('/test/question', checkAuth, async (req, res) => {
               }
             }
 
-                        function restoreMatchingOrder(savedPairs) {
+            function restoreMatchingOrder(savedPairs) {
               if (!savedPairs || !Array.isArray(savedPairs) || savedPairs.length === 0) return;
 
               const rightColumn = document.getElementById('right-column-' + currentQuestionIndex);
@@ -2975,7 +3079,7 @@ app.get('/test/question', checkAuth, async (req, res) => {
                 );
 
                 if (correctItem) {
-                  rightColumn.appendChild(correctItem);   // переміщуємо в кінець у потрібному порядку
+                  rightColumn.appendChild(correctItem);
                 }
               });
 
@@ -2986,7 +3090,7 @@ app.get('/test/question', checkAuth, async (req, res) => {
               if (confirm('Скинути порядок?')) location.reload();
             }
 
-            // Головна функція збереження (спеціально покращена для matching + fillblank)
+            // Головна функція збереження
             async function saveCurrentAnswer(index) {
               if (isSaving) return;
               isSaving = true;
@@ -2994,32 +3098,23 @@ app.get('/test/question', checkAuth, async (req, res) => {
               try {
                 let answers = [];
 
-                // Matching
                 if (document.getElementById('left-column-' + index)) {
                   updateMatchingPairs();
                   answers = currentMatchingPairs;
                   console.log('[SAVE MATCHING]', answers.length, 'пар');
-                } 
-                // Fillblank
-                else if ('${q.type}' === 'fillblank' || document.querySelector('.fillblank-question') || document.getElementById('blank_0')) {
+                } else if ('${q.type}' === 'fillblank' || document.querySelector('.fillblank-question') || document.getElementById('blank_0')) {
                   answers = [];
                   for (let i = 0; i < ${q.blankCount || 1}; i++) {
                     const input = document.getElementById('blank_' + i);
                     answers.push(input ? input.value.trim() : '');
                   }
                   console.log('[SAVE FILLBLANK]', answers);
-                } 
-                // Input
-                else if (document.getElementById('q' + index + '_input')) {
+                } else if (document.getElementById('q' + index + '_input')) {
                   answers = [document.getElementById('q' + index + '_input').value.trim()];
-                } 
-                // Ordering
-                else if (document.getElementById('sortable-options')) {
+                } else if (document.getElementById('sortable-options')) {
                   answers = Array.from(document.querySelectorAll('#sortable-options .option-box'))
                                  .map(el => el.dataset.value.trim());
-                } 
-                // Single/Multiple/TrueFalse
-                else {
+                } else {
                   answers = Array.from(document.querySelectorAll('.option-box.selected'))
                                  .map(el => el.dataset.value.trim());
                 }
@@ -3205,50 +3300,6 @@ app.get('/test/question', checkAuth, async (req, res) => {
               const questionTimerInterval = setInterval(updateQuestionTimer, 50);
             }
 
-            window.addEventListener('blur', () => {
-              if (!blurTimeout) {
-                blurTimeout = setTimeout(() => {
-                  if (lastBlurTime === 0) {
-                    lastBlurTime = performance.now();
-                    switchCount = Math.min(switchCount + 1, 1000);
-                  }
-                  blurTimeout = null;
-                }, blurDebounceDelay);
-              }
-            });
-
-            window.addEventListener('focus', () => {
-              if (blurTimeout) {
-                clearTimeout(blurTimeout);
-                blurTimeout = null;
-              }
-              if (lastBlurTime > 0) {
-                const now = performance.now();
-                const awayDuration = Math.min((now - lastBlurTime) / 1000, 60);
-                timeAway += awayDuration;
-                lastBlurTime = 0;
-                saveCurrentAnswer(currentQuestionIndex);
-              }
-            });
-
-            function debounceMouseMove() {
-              const now = Date.now();
-              if (now - lastMouseMoveTime >= debounceDelay) {
-                lastMouseMoveTime = now;
-                lastActivityTime = now;
-                activityCount++;
-              }
-            }
-
-            function debounceKeydown() {
-              const now = Date.now();
-              if (now - lastKeydownTime >= debounceDelay) {
-                lastKeydownTime = now;
-                lastActivityTime = now;
-                activityCount++;
-              }
-            }
-
             document.addEventListener('mousemove', debounceMouseMove);
             document.addEventListener('keydown', debounceKeydown);
 
@@ -3293,7 +3344,6 @@ app.get('/test/question', checkAuth, async (req, res) => {
               new Sortable(sortable, { animation: 150 });
             }
 
-            // Ініціалізація Sortable для matching
             window.addEventListener('load', () => {
               const leftColumn = document.getElementById('left-column-' + currentQuestionIndex);
               const rightColumn = document.getElementById('right-column-' + currentQuestionIndex);
@@ -3312,7 +3362,7 @@ app.get('/test/question', checkAuth, async (req, res) => {
                 if (matchingPairs && matchingPairs.length > 0) {
                   setTimeout(() => {
                     restoreMatchingOrder(matchingPairs);
-                    updateMatchingPairs();   // синхронізуємо стан
+                    updateMatchingPairs();
                   }, 180);
                 }
               }
@@ -3560,6 +3610,29 @@ app.post('/answer', checkAuth, express.urlencoded({ extended: true }), async (re
     res.status(500).json({ success: false, error: 'Не вдалося зберегти відповідь' });
   } finally {
     logger.info('Маршрут /answer виконано', { duration: Date.now() - startTime });
+  }
+});
+
+// === ОНОВЛЕННЯ ПІДОЗРІЛОЇ АКТИВНОСТІ ===
+app.post('/update-suspicious-activity', checkAuth, async (req, res) => {
+  try {
+    const { screenshotCount, switchCount, timeAway } = req.body;
+
+    const update = { $set: {} };
+
+    if (screenshotCount !== undefined) update.$set['suspiciousActivity.screenshotCount'] = Number(screenshotCount);
+    if (switchCount !== undefined) update.$set['suspiciousActivity.switchCount'] = Number(switchCount);
+    if (timeAway !== undefined) update.$set['suspiciousActivity.timeAway'] = Number(timeAway);
+
+    await db.collection('active_tests').updateOne(
+      { user: req.user },
+      update
+    );
+
+    res.json({ success: true });
+  } catch (error) {
+    logger.error('Помилка /update-suspicious-activity', error);
+    res.status(500).json({ success: false });
   }
 });
 
