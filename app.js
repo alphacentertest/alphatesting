@@ -3879,6 +3879,7 @@ app.get('/result', checkAuth, async (req, res) => {
     const correctedTimeAway = Math.min(timeAway, duration);
     const timeAwayPercent = duration > 0 ? Math.round((correctedTimeAway / duration) * 100) : 0;
     const switchCount = Number(suspiciousActivity.switchCount) || 0;
+    const screenshotCount = Number(suspicious.screenshotCount) || 0;
 
     const ipAddress = req.headers['x-forwarded-for'] || req.socket.remoteAddress;
 
@@ -4259,6 +4260,7 @@ app.get('/results', checkAuth, async (req, res) => {
     const correctedTimeAway = Math.min(timeAway, duration);
     const timeAwayPercent = duration > 0 ? Math.round((correctedTimeAway / duration) * 100) : 0;
     const switchCount = Number(suspiciousActivity.switchCount) || 0;
+    const screenshotCount = Number(suspicious.screenshotCount) || 0;
 
     const ipAddress = req.headers['x-forwarded-for'] || req.socket.remoteAddress;
 
@@ -6548,13 +6550,15 @@ app.get('/admin/results', checkAuth, async (req, res) => {
         const suspicious = result.suspiciousActivity || {};
         const timeAway = Number(suspicious.timeAway) || 0;
         const switchCount = Number(suspicious.switchCount) || 0;
+        const screenshotCount = Number(suspicious.screenshotCount) || 0;
+        const screenshotCount = Number(suspicious.screenshotCount) || 0;
         const duration = Number(result.duration) || 0;
         
         const timeAwayPercent = duration > 0 
           ? Math.round((timeAway / duration) * 100) 
           : 0;
 
-        const isSuspicious = timeAwayPercent > 50 || switchCount > 10;
+        const isSuspicious = timeAwayPercent > 50 || switchCount > 10 || screenshotCount > 0;
 
         const startTimeStr = formatKievTime(result.startTime);
         const endTimeStr = formatKievTime(result.endTime);
@@ -6573,7 +6577,10 @@ app.get('/admin/results', checkAuth, async (req, res) => {
             <td>${startTimeStr}</td>
             <td>${endTimeStr}</td>
             <td>${minutes} хв ${seconds} сек</td>
-            <td>${timeAwayPercent}% (${switchCount} перекл.)</td>
+            <td>
+              ${timeAwayPercent}% (${switchCount} перекл.)
+              ${screenshotCount > 0 ? `<br><span style="color:#ef4444;font-weight:bold;">📸 ${screenshotCount} скріншотів</span>` : ''}
+            </td>
             <td>
               <button class="action-btn view" onclick="viewResult('${result._id}')">Перегляд</button>
               ${req.userRole === 'admin' ? `<button class="action-btn delete" onclick="deleteResult('${result._id}')">🗑️ Видалити</button>` : ''}
@@ -6685,6 +6692,7 @@ app.get('/admin/view-result', checkAuth, async (req, res) => {
     const suspicious = result.suspiciousActivity || {};
     const timeAway = Number(suspicious.timeAway) || 0;
     const switchCount = Number(suspicious.switchCount) || 0;
+    const screenshotCount = Number(suspicious.screenshotCount) || 0;
     const duration = Number(result.duration) || 0;
     
     const timeAwayPercent = duration > 0 
@@ -6910,6 +6918,7 @@ app.get('/admin/view-result', checkAuth, async (req, res) => {
               <strong>Підозріла активність:</strong><br>
               Час поза вкладкою: <span class="${timeAwayPercent > 50 ? 'suspicious' : ''}">${timeAwayPercent}%</span><br>
               Переключення вкладок: ${switchCount}<br>
+              ${screenshotCount > 0 ? `<span style="color:#ef4444;font-weight:bold;">📸 Скріншотів: ${screenshotCount}</span><br>` : ''}
               Середній час відповіді: ${avgResponseTime} сек<br>
               Загальна активність: ${totalActivityCount}
             </div>
