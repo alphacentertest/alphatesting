@@ -2973,7 +2973,7 @@ app.get('/test/question', checkAuth, async (req, res) => {
 
             function registerAction(type) {
                 const now = Date.now();
-                if (now - lastActionTime < 3000) return;   // 3 секунди анти-флуд
+                if (now - lastActionTime < 3500) return;   // 3.5 секунди анти-флуд
 
                 lastActionTime = now;
 
@@ -2998,15 +2998,13 @@ app.get('/test/question', checkAuth, async (req, res) => {
                 if (e.key === 'AudioVolumeUp' || e.keyCode === 175) registerAction('screenshot');
             });
 
-            // Перемикання
+            // Перемикання — тільки blur
             window.addEventListener('blur', function() {
                 registerAction('switch');
                 lastBlurTime = Date.now() / 1000;
             });
 
-            window.addEventListener('visibilitychange', function() {
-                if (document.hidden) registerAction('switch');
-            });
+            // Видаляємо visibilitychange повністю для мобільних
 
             window.addEventListener('focus', function() {
                 if (lastBlurTime > 0) {
