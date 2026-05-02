@@ -6550,8 +6550,7 @@ app.get('/admin/results', checkAuth, async (req, res) => {
         const suspicious = result.suspiciousActivity || {};
         const timeAway = Number(suspicious.timeAway) || 0;
         const switchCount = Number(suspicious.switchCount) || 0;
-        const screenshotCount = Number(suspicious.screenshotCount) || 0;
-        const screenshotCount = Number(suspicious.screenshotCount) || 0;
+        const screenshotCount = Number(suspicious.screenshotCount) || 0;        
         const duration = Number(result.duration) || 0;
         
         const timeAwayPercent = duration > 0 
