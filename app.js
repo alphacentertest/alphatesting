@@ -42,28 +42,6 @@ const upload = multer({
   limits: { fileSize: 4 * 1024 * 1024 }
 });
 
-// Функція для відправки email
-const sendSuspiciousActivityEmail = async (user, activityDetails) => {
-  try {
-    const mailOptions = {
-      from: process.env.EMAIL_USER,
-      to: process.env.EMAIL_USER,
-      subject: 'Підозріла активність',
-      text: `
-        Користувач: ${user}
-        Час поза вкладкою: ${activityDetails.timeAwayPercent}%
-        Переключення вкладок: ${activityDetails.switchCount}
-        Середній час відповіді (сек): ${activityDetails.avgResponseTime}
-        Загальна кількість дій: ${activityDetails.totalActivityCount}
-      `
-    };
-    await transporter.sendMail(mailOptions);
-    logger.info(`Email відправлено для ${user}`);
-  } catch (error) {
-    logger.error('Помилка відправки email', { message: error.message, stack: error.stack });
-  }
-};
-
 // Конфігурація
 const config = {
   suspiciousActivity: {
@@ -1174,29 +1152,6 @@ const checkAdmin = (req, res, next) => {
   next();
 };
 
-// Збереження підозрілої активності
-app.post('/save-suspicious-activity', checkAuth, async (req, res) => {
-  try {
-    const { screenshotCount = 0, switchCount = 0, timeAway = 0 } = req.body;
-    const user = req.user;
-
-    await db.collection('active_tests').updateOne(
-      { user },
-      { $set: { 
-          'suspiciousActivity.screenshotCount': parseInt(screenshotCount),
-          'suspiciousActivity.switchCount': parseInt(switchCount),
-          'suspiciousActivity.timeAway': parseFloat(timeAway)
-        }
-      }
-    );
-
-    res.json({ success: true });
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ success: false });
-  }
-});
-
 // Сторінка вибору тесту
 app.get('/select-test', checkAuth, async (req, res) => {
   const startTime = Date.now();
@@ -1513,6 +1468,29 @@ const saveResult = async (user, testNumber, score, totalPoints, startTime, endTi
     logger.info('[SAVE-RESULT] Завершено', { duration: `${duration} мс` });
   }
 };
+
+// Збереження підозрілої активності
+app.post('/save-suspicious-activity', checkAuth, async (req, res) => {
+  try {
+    const { screenshotCount = 0, switchCount = 0, timeAway = 0 } = req.body;
+    const user = req.user;
+
+    await db.collection('active_tests').updateOne(
+      { user },
+      { $set: { 
+          'suspiciousActivity.screenshotCount': parseInt(screenshotCount),
+          'suspiciousActivity.switchCount': parseInt(switchCount),
+          'suspiciousActivity.timeAway': parseFloat(timeAway)
+        }
+      }
+    );
+
+    res.json({ success: true });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ success: false });
+  }
+});
 
 // Перевірка кількості спроб проходження тесту
 const checkTestAttempts = async (user, testNumber) => {
