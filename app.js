@@ -2956,43 +2956,43 @@ app.get('/test/question', checkAuth, async (req, res) => {
             let lastActionTime = 0;
             let notificationTimeout = null;
 
-            // Видимі логи на екрані
-            function addLog(text) {
-                const logDiv = document.createElement('div');
-                logDiv.style.cssText = 'position:fixed;bottom:10px;left:10px;background:rgba(0,0,0,0.8);color:white;padding:8px 12px;border-radius:6px;font-size:13px;z-index:999999;max-width:280px;';
-                logDiv.textContent = text;
-                document.body.appendChild(logDiv);
-                setTimeout(() => logDiv.remove(), 5000);
+            // Великі видимі логи на екрані
+            function addBigLog(text, color = '#333') {
+                const log = document.createElement('div');
+                log.style.cssText = `position:fixed;bottom:10px;left:10px;right:10px;background:rgba(0,0,0,0.85);color:${color};padding:12px;border-radius:8px;font-size:15px;z-index:999999;text-align:center;`;
+                log.textContent = text;
+                document.body.appendChild(log);
+                setTimeout(() => log.remove(), 6000);
             }
 
             function showScreenshotWarning() {
                 if (notificationTimeout) return;
 
                 const notif = document.createElement('div');
-                notif.style.cssText = 'position:fixed;top:20px;left:50%;transform:translateX(-50%);background:#ef4444;color:white;padding:16px 32px;border-radius:12px;font-weight:700;z-index:99999;box-shadow:0 10px 25px rgba(0,0,0,0.6);';
-                notif.textContent = '⚠️ Зафіксована спроба скріншоту!';
+                notif.style.cssText = 'position:fixed;top:20px;left:50%;transform:translateX(-50%);background:#ef4444;color:white;padding:18px 36px;border-radius:12px;font-weight:700;z-index:99999;box-shadow:0 10px 25px rgba(0,0,0,0.6);font-size:17px;';
+                notif.textContent = '⚠️ СКРІНШОТ ЗАФІКСОВАНО!';
                 document.body.appendChild(notif);
 
                 notificationTimeout = setTimeout(() => {
                     notif.style.opacity = '0';
                     setTimeout(() => notif.remove(), 600);
                     notificationTimeout = null;
-                }, 2200);
+                }, 2500);
             }
 
             function registerAction(type) {
                 const now = Date.now();
-                if (now - lastActionTime < 2500) return;   // сильний анти-флуд
+                if (now - lastActionTime < 3000) return;   // 3 секунди анти-флуд
 
                 lastActionTime = now;
 
                 if (type === 'screenshot') {
                     screenshotCount++;
-                    addLog('📸 Скріншот #' + screenshotCount);
+                    addBigLog('📸 Скріншот #' + screenshotCount, '#ef4444');
                     showScreenshotWarning();
                 } else if (type === 'switch') {
                     switchCount++;
-                    addLog('🔄 Перемикання #' + switchCount);
+                    addBigLog('🔄 Перемикання #' + switchCount, '#ff9800');
                 }
 
                 saveSuspiciousActivity();
@@ -3000,27 +3000,18 @@ app.get('/test/question', checkAuth, async (req, res) => {
 
             // Скріншоти
             document.addEventListener('keyup', e => {
-                if (e.key === 'PrintScreen' || e.keyCode === 44) {
-                    registerAction('screenshot');
-                }
+                if (e.key === 'PrintScreen' || e.keyCode === 44) registerAction('screenshot');
             });
 
             document.addEventListener('keydown', e => {
-                if (e.key === 'AudioVolumeUp' || e.keyCode === 175) {
-                    registerAction('screenshot');
-                }
+                if (e.key === 'AudioVolumeUp' || e.keyCode === 175) registerAction('screenshot');
             });
 
             // Перемикання
-            window.addEventListener('blur', () => {
-                registerAction('switch');
-                lastBlurTime = Date.now() / 1000;
-            });
+            window.addEventListener('blur', () => registerAction('switch'));
 
             window.addEventListener('visibilitychange', () => {
-                if (document.hidden) {
-                    registerAction('switch');
-                }
+                if (document.hidden) registerAction('switch');
             });
 
             window.addEventListener('focus', () => {
