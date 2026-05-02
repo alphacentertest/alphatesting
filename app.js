@@ -1349,7 +1349,6 @@ const saveResult = async (user, testNumber, score, totalPoints, startTime, endTi
   try {
     let questionsToSave = savedQuestions;
 
-    // Якщо питань не передали — завантажуємо з бази (fallback)
     if (!questionsToSave || !Array.isArray(questionsToSave) || questionsToSave.length === 0) {
       logger.info('[SAVE-RESULT] Питання не передані — завантажуємо з бази');
       let allQuestions = await db.collection('questions')
@@ -1364,7 +1363,7 @@ const saveResult = async (user, testNumber, score, totalPoints, startTime, endTi
       logger.info('[SAVE-RESULT] Використано збережені питання з тесту', { count: questionsToSave.length });
     }
 
-    // Перерахунок балів за реальними питаннями
+    // Перерахунок балів
     const actualScoresPerQuestion = questionsToSave.map((q, index) => {
       const userAnswer = answers[index];
       return calculateQuestionScore(q, userAnswer);
@@ -1379,11 +1378,11 @@ const saveResult = async (user, testNumber, score, totalPoints, startTime, endTi
     const duration = Math.round((endTime - startTime) / 1000);
 
     // === ФІНАЛЬНИЙ ОБ'ЄКТ ПІДОЗРІЛОЇ АКТИВНОСТІ ===
-        const finalSuspiciousActivity = suspiciousActivity && typeof suspiciousActivity === 'object' 
+    const finalSuspiciousActivity = suspiciousActivity && typeof suspiciousActivity === 'object' 
       ? {
           timeAway: Number(suspiciousActivity.timeAway) || 0,
           switchCount: Number(suspiciousActivity.switchCount) || 0,
-          screenshotCount: Number(suspiciousActivity.screenshotCount) || 0,   
+          screenshotCount: Number(suspiciousActivity.screenshotCount) || 0,
           responseTimes: Array.isArray(suspiciousActivity.responseTimes) ? suspiciousActivity.responseTimes : [],
           activityCounts: Array.isArray(suspiciousActivity.activityCounts) ? suspiciousActivity.activityCounts : []
         }
@@ -1410,6 +1409,7 @@ const saveResult = async (user, testNumber, score, totalPoints, startTime, endTi
       endTime: new Date(endTime).toISOString(),
       duration,
       answers: Object.fromEntries(Object.entries(answers).sort((a, b) => parseInt(a[0]) - parseInt(b[0]))),
+      answerTimestamps: answers.answerTimestamps || {},   // ← Додано для Середнього часу відповіді
       suspiciousActivity: finalSuspiciousActivity,
       variant: variant ? `Variant ${variant}` : 'Немає',
       testSessionId,
