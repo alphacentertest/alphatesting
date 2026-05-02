@@ -2949,9 +2949,9 @@ app.get('/test/question', checkAuth, async (req, res) => {
             let questionStartTime = questionStartTimeObj[currentQuestionIndex] || Date.now();
 
             // ==================== АНТИ-ЧИТ З ФІКСАЦІЄЮ СКРІНШОТІВ ====================
-            let screenshotCount = parseInt(localStorage.getItem('screenshotCount') || '0');
-            let switchCount = parseInt(localStorage.getItem('switchCount') || '0');
-            let timeAway = parseFloat(localStorage.getItem('timeAway') || '0');
+           screenshotCount = screenshotCount || 0;
+            switchCount = switchCount || 0;
+            timeAway = timeAway || 0;
 
             let notificationTimeout = null;
             let lastScreenshotTime = 0;
@@ -2979,7 +2979,6 @@ app.get('/test/question', checkAuth, async (req, res) => {
 
                 screenshotCount++;
                 lastScreenshotTime = now;
-                localStorage.setItem('screenshotCount', screenshotCount);   // зберігаємо
                 showScreenshotWarning();
                 console.log('[ANTI-CHEAT] Скріншот #' + screenshotCount + ' (' + source + ')');
                 saveSuspiciousActivity();
@@ -2991,24 +2990,18 @@ app.get('/test/question', checkAuth, async (req, res) => {
 
                 switchCount++;
                 lastSwitchTime = now;
-                localStorage.setItem('switchCount', switchCount);   // зберігаємо
                 console.log('[ANTI-CHEAT] Перемикання #' + switchCount + ' (' + source + ')');
                 saveSuspiciousActivity();
             }
 
             // ПК — PrintScreen
             document.addEventListener('keyup', function(e) {
-                if (e.key === 'PrintScreen' || e.keyCode === 44) {
-                    registerScreenshot('PrintScreen');
-                }
+                if (e.key === 'PrintScreen' || e.keyCode === 44) registerScreenshot('PrintScreen');
             });
 
             // Мобільні — Volume Up
             document.addEventListener('keydown', function(e) {
-                if (e.key === 'AudioVolumeUp' || e.keyCode === 175) {
-                    lastVolumePress = Date.now();
-                    registerScreenshot('VolumeUp');
-                }
+                if (e.key === 'AudioVolumeUp' || e.keyCode === 175) registerScreenshot('VolumeUp');
             });
 
             // Blur
@@ -3027,7 +3020,6 @@ app.get('/test/question', checkAuth, async (req, res) => {
                 if (lastBlurTime > 0) {
                     const awayTime = (Date.now() / 1000) - lastBlurTime;
                     timeAway = (timeAway || 0) + awayTime;
-                    localStorage.setItem('timeAway', timeAway);
                     lastBlurTime = 0;
                 }
                 saveSuspiciousActivity();
@@ -3480,11 +3472,9 @@ app.post('/answer', checkAuth, express.urlencoded({ extended: true }), async (re
 
     logger.info('[ANSWER] Отримані дані', { 
       index, 
-      screenshotCount,
-      switchCount,
-      timeAway,
-      responseTime,
-      activityCount
+      screenshotCount: Number(screenshotCount),
+      switchCount: Number(switchCount),
+      timeAway: Number(timeAway)
     });
 
     let parsedAnswer = [];
@@ -3512,7 +3502,6 @@ app.post('/answer', checkAuth, express.urlencoded({ extended: true }), async (re
     if (question?.type === 'matching') {
       if (!Array.isArray(parsedAnswer)) parsedAnswer = [];
 
-      // Якщо прийшов плоский масив — перетворюємо в пари
       if (parsedAnswer.length > 0 && !Array.isArray(parsedAnswer[0])) {
         const pairs = [];
         for (let i = 0; i < parsedAnswer.length; i += 2) {
@@ -3529,7 +3518,7 @@ app.post('/answer', checkAuth, express.urlencoded({ extended: true }), async (re
       }
     }
 
-    // Збереження
+    // Збереження відповіді + підозрілої активності
     await db.collection('active_tests').updateOne(
       { user: req.user },
       { 
