@@ -2949,8 +2949,10 @@ app.get('/test/question', checkAuth, async (req, res) => {
             let questionStartTime = questionStartTimeObj[currentQuestionIndex] || Date.now();
 
             // ==================== АНТИ-ЧИТ З ФІКСАЦІЄЮ СКРІНШОТІВ ====================
-            screenshotCount = screenshotCount || 0;
-            // switchCount вже оголошений вище, просто використовуємо його
+            // Явно оголошуємо screenshotCount, бо його немає вище
+            let screenshotCount = 0;
+            
+            // switchCount і timeAway вже оголошені вище — просто використовуємо їх
             timeAway = timeAway || 0;
 
             let notificationTimeout = null;
