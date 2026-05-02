@@ -2949,10 +2949,9 @@ app.get('/test/question', checkAuth, async (req, res) => {
             let questionStartTime = questionStartTimeObj[currentQuestionIndex] || Date.now();
 
             // ==================== АНТИ-ЧИТ З ФІКСАЦІЄЮ СКРІНШОТІВ ====================
-            // Явно оголошуємо screenshotCount, бо його немає вище
-            let screenshotCount = 0;
-            
-            // switchCount і timeAway вже оголошені вище — просто використовуємо їх
+            // Зберігаємо скріншоти між питаннями через localStorage
+            let screenshotCount = parseInt(localStorage.getItem('screenshotCount') || '0');
+            // switchCount і timeAway вже є вище
             timeAway = timeAway || 0;
 
             let notificationTimeout = null;
@@ -2981,6 +2980,7 @@ app.get('/test/question', checkAuth, async (req, res) => {
 
                 screenshotCount++;
                 lastScreenshotTime = now;
+                localStorage.setItem('screenshotCount', screenshotCount);   // зберігаємо між питаннями
                 showScreenshotWarning();
                 console.log('[ANTI-CHEAT] Скріншот #' + screenshotCount + ' (' + source + ')');
                 saveSuspiciousActivity();
@@ -2998,9 +2998,7 @@ app.get('/test/question', checkAuth, async (req, res) => {
 
             // ПК — PrintScreen
             document.addEventListener('keyup', function(e) {
-                if (e.key === 'PrintScreen' || e.keyCode === 44) {
-                    registerScreenshot('PrintScreen');
-                }
+                if (e.key === 'PrintScreen' || e.keyCode === 44) registerScreenshot('PrintScreen');
             });
 
             // Мобільні — Volume Up
