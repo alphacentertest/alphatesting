@@ -2971,7 +2971,7 @@ app.get('/test/question', checkAuth, async (req, res) => {
 
             function registerScreenshot(source) {
                 const now = Date.now();
-                if (now - lastScreenshotTime < 900) return;
+                if (now - lastScreenshotTime < 1500) return;   // збільшив анти-флуд
 
                 screenshotCount++;
                 lastScreenshotTime = now;
@@ -3046,7 +3046,6 @@ app.get('/test/question', checkAuth, async (req, res) => {
                 }
             }
 
-            // Періодична відправка
             setInterval(saveSuspiciousActivity, 4000);
 
             // ==================== ТВІЙ ОСНОВНИЙ КОД ====================
