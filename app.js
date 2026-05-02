@@ -2949,9 +2949,9 @@ app.get('/test/question', checkAuth, async (req, res) => {
             let questionStartTime = questionStartTimeObj[currentQuestionIndex] || Date.now();
 
             // ==================== АНТИ-ЧИТ З ФІКСАЦІЄЮ СКРІНШОТІВ ====================
-            screenshotCount = screenshotCount || 0;
-            switchCount = switchCount || 0;
-            timeAway = timeAway || 0;
+            if (typeof screenshotCount === 'undefined') screenshotCount = 0;
+            if (typeof switchCount === 'undefined') switchCount = 0;
+            if (typeof timeAway === 'undefined') timeAway = 0;
 
             let notificationTimeout = null;
             let lastScreenshotTime = 0;
