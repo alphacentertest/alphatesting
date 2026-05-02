@@ -1469,29 +1469,6 @@ const saveResult = async (user, testNumber, score, totalPoints, startTime, endTi
   }
 };
 
-// Збереження підозрілої активності
-app.post('/save-suspicious-activity', checkAuth, async (req, res) => {
-  try {
-    const { screenshotCount = 0, switchCount = 0, timeAway = 0 } = req.body;
-    const user = req.user;
-
-    await db.collection('active_tests').updateOne(
-      { user },
-      { $set: { 
-          'suspiciousActivity.screenshotCount': parseInt(screenshotCount),
-          'suspiciousActivity.switchCount': parseInt(switchCount),
-          'suspiciousActivity.timeAway': parseFloat(timeAway)
-        }
-      }
-    );
-
-    res.json({ success: true });
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ success: false });
-  }
-});
-
 // Перевірка кількості спроб проходження тесту
 const checkTestAttempts = async (user, testNumber) => {
   try {
@@ -3607,6 +3584,29 @@ app.post('/answer', checkAuth, express.urlencoded({ extended: true }), async (re
     res.status(500).json({ success: false, error: 'Не вдалося зберегти відповідь' });
   } finally {
     logger.info('Маршрут /answer виконано', { duration: Date.now() - startTime });
+  }
+});
+
+// Збереження підозрілої активності
+app.post('/save-suspicious-activity', checkAuth, async (req, res) => {
+  try {
+    const { screenshotCount = 0, switchCount = 0, timeAway = 0 } = req.body;
+    const user = req.user;
+
+    await db.collection('active_tests').updateOne(
+      { user },
+      { $set: { 
+          'suspiciousActivity.screenshotCount': parseInt(screenshotCount),
+          'suspiciousActivity.switchCount': parseInt(switchCount),
+          'suspiciousActivity.timeAway': parseFloat(timeAway)
+        }
+      }
+    );
+
+    res.json({ success: true });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ success: false });
   }
 });
 
