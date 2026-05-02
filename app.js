@@ -2897,9 +2897,9 @@ app.get('/test/question', checkAuth, async (req, res) => {
               <button onclick="finishTest(${index})">Так</button>
               <button onclick="hideConfirm()">Ні</button>
             </div>
-          </div>
+          </div>             
 
-                    <script>
+          <script>
             const startTime = ${testStartTime};
             const timeLimit = ${timeLimit};
             const totalTestTime = ${totalTestTime};
@@ -2934,104 +2934,101 @@ app.get('/test/question', checkAuth, async (req, res) => {
             let notificationTimeout = null;
 
             function showScreenshotWarning() {
-              if (notificationTimeout) return;
+                if (notificationTimeout) return;
 
-              const notif = document.createElement('div');
-              notif.style.cssText = 'position:fixed; top:20px; left:50%; transform:translateX(-50%); background:#ef4444; color:white; padding:16px 32px; border-radius:12px; font-weight:700; z-index:99999; box-shadow:0 10px 25px rgba(0,0,0,0.6); white-space:nowrap; font-size:16px;';
-              notif.textContent = '⚠️ Зафіксована спроба скріншоту!';
-              document.body.appendChild(notif);
+                const notif = document.createElement('div');
+                notif.style.cssText = 'position:fixed;top:20px;left:50%;transform:translateX(-50%);background:#ef4444;color:white;padding:16px 32px;border-radius:12px;font-weight:700;z-index:99999;box-shadow:0 10px 25px rgba(0,0,0,0.6);white-space:nowrap;font-size:16px;';
+                notif.textContent = '⚠️ Зафіксована спроба скріншоту!';
+                document.body.appendChild(notif);
 
-              notificationTimeout = setTimeout(() => {
-                notif.style.transition = 'opacity 0.5s';
-                notif.style.opacity = '0';
-                setTimeout(() => { notif.remove(); notificationTimeout = null; }, 600);
-              }, 2200);
+                notificationTimeout = setTimeout(() => {
+                    notif.style.transition = 'opacity 0.5s';
+                    notif.style.opacity = '0';
+                    setTimeout(() => { notif.remove(); notificationTimeout = null; }, 600);
+                }, 2200);
             }
 
             function registerScreenshot(source) {
-              const now = Date.now();
-              if (now - lastScreenshotTime < 900) return;
+                const now = Date.now();
+                if (now - lastScreenshotTime < 900) return;
 
-              screenshotCount++;
-              lastScreenshotTime = now;
-              showScreenshotWarning();
+                screenshotCount++;
+                lastScreenshotTime = now;
+                showScreenshotWarning();
 
-              console.warn('[ANTI-CHEAT] Скріншот #' + screenshotCount + ' (' + source + ')');
-              saveSuspiciousActivity();
+                console.warn('[ANTI-CHEAT] Скріншот #' + screenshotCount + ' (' + source + ')');
+                saveSuspiciousActivity();
             }
 
             function registerSwitch(source = 'blur') {
-              const now = Date.now();
-              if (now - lastVolumePress < 1500) return;
+                const now = Date.now();
+                if (now - lastVolumePress < 1500) return;
 
-              switchCount = (switchCount || 0) + 1;
-              saveSuspiciousActivity();
+                switchCount = (switchCount || 0) + 1;
+                saveSuspiciousActivity();
             }
 
             // ПК — PrintScreen
-            document.addEventListener('keyup', function(e) {
-              if (e.key === 'PrintScreen' || e.keyCode === 44) {
-                registerScreenshot('PrintScreen');
-              }
+            document.addEventListener('keyup', e => {
+                if (e.key === 'PrintScreen' || e.keyCode === 44) {
+                    registerScreenshot('PrintScreen');
+                }
             });
 
             // Мобільні — Volume Up
-            document.addEventListener('keydown', function(e) {
-              if (e.key === 'AudioVolumeUp' || e.keyCode === 175) {
-                lastVolumePress = Date.now();
-                registerScreenshot('VolumeUp');
-              }
+            document.addEventListener('keydown', e => {
+                if (e.key === 'AudioVolumeUp' || e.keyCode === 175) {
+                    lastVolumePress = Date.now();
+                    registerScreenshot('VolumeUp');
+                }
             });
 
-            // Blur
-            window.addEventListener('blur', function() {
-              const now = Date.now();
-              if (now - lastVolumePress < 2000) {
-                registerScreenshot('Blur+Volume');
-              }
-              registerSwitch('blur');
-              lastBlurTime = Date.now() / 1000;
+            window.addEventListener('blur', () => {
+                const now = Date.now();
+                if (now - lastVolumePress < 2000) {
+                    registerScreenshot('Blur+Volume');
+                }
+                registerSwitch('blur');
+                lastBlurTime = Date.now() / 1000;
             });
 
-            // Visibility Change
-            document.addEventListener('visibilitychange', function() {
-              if (document.hidden && /Mobi|Android|iPhone|iPad/i.test(navigator.userAgent)) {
-                registerScreenshot('visibilitychange (mobile)');
-              }
+            document.addEventListener('visibilitychange', () => {
+                if (document.hidden && /Mobi|Android|iPhone|iPad/i.test(navigator.userAgent)) {
+                    registerScreenshot('visibilitychange (mobile)');
+                }
             });
 
-            // Focus
-            window.addEventListener('focus', function() {
-              if (lastBlurTime > 0) {
-                const awayTime = (Date.now() / 1000) - lastBlurTime;
-                timeAway = (timeAway || 0) + awayTime;
-                lastBlurTime = 0;
-              }
-              saveSuspiciousActivity();
+            window.addEventListener('focus', () => {
+                if (lastBlurTime > 0) {
+                    const awayTime = (Date.now() / 1000) - lastBlurTime;
+                    timeAway = (timeAway || 0) + awayTime;
+                    lastBlurTime = 0;
+                }
+                saveSuspiciousActivity();
             });
 
-            // Відправка на сервер
             async function saveSuspiciousActivity() {
-              const formData = new URLSearchParams();
-              formData.append('screenshotCount', screenshotCount);
-              formData.append('switchCount', switchCount);
-              formData.append('timeAway', timeAway);
-              formData.append('_csrf', '${res.locals._csrf}');
+                const formData = new URLSearchParams();
+                formData.append('screenshotCount', screenshotCount);
+                formData.append('switchCount', switchCount);
+                formData.append('timeAway', timeAway);
+                formData.append('_csrf', '${res.locals._csrf}');
 
-              try {
-                await fetch('/update-suspicious-activity', {
-                  method: 'POST',
-                  headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-                  body: formData
-                });
-              } catch (err) {
-                console.warn('Не вдалося відправити suspicious activity');
-              }
+                try {
+                    await fetch('/update-suspicious-activity', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                        body: formData
+                    });
+                } catch (err) {
+                    console.warn('Не вдалося відправити suspicious activity');
+                }
             }
 
+            // Періодична відправка
             setInterval(saveSuspiciousActivity, 4000);
 
-            // === ФУНКЦІЯ ПЕРЕХОДУ МІЖ ПИТАННЯМИ ===
+            // ==================== ТВІЙ ОСНОВНИЙ КОД ====================
             function goToQuestion(targetIndex) {
               if (targetIndex < 0 || targetIndex >= totalQuestions) return;
               if (targetIndex === currentQuestionIndex) return;
@@ -3044,7 +3041,6 @@ app.get('/test/question', checkAuth, async (req, res) => {
               });
             }
 
-            // ==================== MATCHING ====================
             let currentMatchingPairs = [];
 
             function updateMatchingPairs() {
@@ -3073,24 +3069,15 @@ app.get('/test/question', checkAuth, async (req, res) => {
 
               savedPairs.forEach((pair) => {
                 const targetRightText = (pair[1] || '').trim();
-                
-                const correctItem = allRightItems.find(item => 
-                  (item.dataset.right || '').trim() === targetRightText
-                );
-
-                if (correctItem) {
-                  rightColumn.appendChild(correctItem);
-                }
+                const correctItem = allRightItems.find(item => (item.dataset.right || '').trim() === targetRightText);
+                if (correctItem) rightColumn.appendChild(correctItem);
               });
-
-              console.log('[RESTORE MATCHING] Відновлено', savedPairs.length, 'пар');
             }
 
             function resetMatching(idx) {
               if (confirm('Скинути порядок?')) location.reload();
             }
 
-            // Головна функція збереження
             async function saveCurrentAnswer(index) {
               if (isSaving) return;
               isSaving = true;
@@ -3101,14 +3088,12 @@ app.get('/test/question', checkAuth, async (req, res) => {
                 if (document.getElementById('left-column-' + index)) {
                   updateMatchingPairs();
                   answers = currentMatchingPairs;
-                  console.log('[SAVE MATCHING]', answers.length, 'пар');
-                } else if ('${q.type}' === 'fillblank' || document.querySelector('.fillblank-question') || document.getElementById('blank_0')) {
+                } else if ('${q.type}' === 'fillblank' || document.getElementById('blank_0')) {
                   answers = [];
                   for (let i = 0; i < ${q.blankCount || 1}; i++) {
                     const input = document.getElementById('blank_' + i);
                     answers.push(input ? input.value.trim() : '');
                   }
-                  console.log('[SAVE FILLBLANK]', answers);
                 } else if (document.getElementById('q' + index + '_input')) {
                   answers = [document.getElementById('q' + index + '_input').value.trim()];
                 } else if (document.getElementById('sortable-options')) {
@@ -3135,8 +3120,6 @@ app.get('/test/question', checkAuth, async (req, res) => {
                   headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
                   body: formData
                 });
-
-                console.log('[SAVE SUCCESS] Питання', index);
               } catch (err) {
                 console.error('Помилка збереження', index, err);
               } finally {
@@ -3242,7 +3225,6 @@ app.get('/test/question', checkAuth, async (req, res) => {
                 if (result.success) {
                   setTimeout(() => window.location.href = '/result', 300);
                 } else {
-                  console.error('Помилка завершення:', result.error);
                   alert('Помилка завершення тесту');
                 }
               } catch (error) {
@@ -3300,9 +3282,7 @@ app.get('/test/question', checkAuth, async (req, res) => {
               const questionTimerInterval = setInterval(updateQuestionTimer, 50);
             }
 
-            document.addEventListener('mousemove', debounceMouseMove);
-            document.addEventListener('keydown', debounceKeydown);
-
+            // Кліки по варіантах відповідей
             document.querySelectorAll('.option-box:not(.draggable)').forEach(box => {
               box.style.pointerEvents = 'auto';
               box.style.cursor = 'pointer';
@@ -3325,39 +3305,23 @@ app.get('/test/question', checkAuth, async (req, res) => {
                       box.classList.remove('selected');
                     }
                   } else {
-                    if (selectedOptions[0] === option) {
-                      // повторний клік — залишаємо
-                    } else {
-                      document.querySelectorAll('.option-box:not(.draggable)').forEach(b => {
-                        b.classList.remove('selected');
-                      });
-                      selectedOptions = [option];
-                      box.classList.add('selected');
-                    }
+                    document.querySelectorAll('.option-box:not(.draggable)').forEach(b => b.classList.remove('selected'));
+                    selectedOptions = [option];
+                    box.classList.add('selected');
                   }
                 }
               });
             });
 
             const sortable = document.getElementById('sortable-options');
-            if (sortable) {
-              new Sortable(sortable, { animation: 150 });
-            }
+            if (sortable) new Sortable(sortable, { animation: 150 });
 
             window.addEventListener('load', () => {
               const leftColumn = document.getElementById('left-column-' + currentQuestionIndex);
               const rightColumn = document.getElementById('right-column-' + currentQuestionIndex);
               if (leftColumn && rightColumn && '${q.type}' === 'matching') {
-                new Sortable(leftColumn, {
-                  animation: 150,
-                  group: 'matching',
-                  onEnd: updateMatchingPairs
-                });
-                new Sortable(rightColumn, {
-                  animation: 150,
-                  group: 'matching',
-                  onEnd: updateMatchingPairs
-                });
+                new Sortable(leftColumn, { animation: 150, group: 'matching', onEnd: updateMatchingPairs });
+                new Sortable(rightColumn, { animation: 150, group: 'matching', onEnd: updateMatchingPairs });
 
                 if (matchingPairs && matchingPairs.length > 0) {
                   setTimeout(() => {
@@ -3379,9 +3343,7 @@ app.get('/test/question', checkAuth, async (req, res) => {
                 const height = item.getBoundingClientRect().height;
                 if (height > maxHeight) maxHeight = height;
               });
-              allItems.forEach(item => {
-                item.style.height = maxHeight + 'px';
-              });
+              allItems.forEach(item => item.style.height = maxHeight + 'px');
             }
 
             updateGlobalTimer();
@@ -3403,21 +3365,12 @@ app.get('/test/question', checkAuth, async (req, res) => {
 
                 if (questionTimeRemaining <= 0) {
                   clearInterval(questionTimerInterval);
-                  
                   if (currentQuestionIndex === totalQuestions - 1) {
                     hasMovedToNext = true;
-                    saveCurrentAnswer(currentQuestionIndex).then(() => {
-                      window.location.href = '/result';
-                    }).catch(() => {
-                      window.location.href = '/result';
-                    });
-                  } else if (currentQuestionIndex < totalQuestions - 1 && !hasMovedToNext) {
+                    saveCurrentAnswer(currentQuestionIndex).then(() => window.location.href = '/result');
+                  } else if (!hasMovedToNext) {
                     hasMovedToNext = true;
-                    saveCurrentAnswer(currentQuestionIndex).then(() => {
-                      saveAndNext(currentQuestionIndex);
-                    }).catch(() => {
-                      saveAndNext(currentQuestionIndex);
-                    });
+                    saveCurrentAnswer(currentQuestionIndex).then(() => saveAndNext(currentQuestionIndex));
                   }
                 }
               }, 50);
