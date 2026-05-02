@@ -2954,6 +2954,10 @@ app.get('/test/question', checkAuth, async (req, res) => {
             let timeAway = ${userTest.suspiciousActivity?.timeAway || 0};
 
             // ==================== АНТИ-ЧИТ З ФІКСАЦІЄЮ СКРІНШОТІВ ====================
+            screenshotCount = screenshotCount || 0;
+            // switchCount вже оголошений вище, просто використовуємо його
+            timeAway = timeAway || 0;
+
             let notificationTimeout = null;
             let lastScreenshotTime = 0;
             let lastVolumePress = 0;
