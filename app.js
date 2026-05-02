@@ -857,6 +857,32 @@ setInterval(cleanupActiveTests, 24 * 60 * 60 * 1000);
   }
 })();
 
+// Middleware для перевірки авторизації через JWT
+const checkAuth = (req, res, next) => {
+  const token = req.headers['authorization']?.split(' ')[1] || req.cookies.token;
+  if (!token) {
+    return res.redirect('/');
+  }
+
+  try {
+    const decoded = jwt.verify(token, process.env.JWT_SECRET);
+    req.user = decoded.username;
+    req.userRole = decoded.role;
+    next();
+  } catch (error) {
+    logger.error('Помилка перевірки JWT', { message: error.message, stack: error.stack });
+    res.redirect('/');
+  }
+};
+
+// Middleware для перевірки ролі адміністратора
+const checkAdmin = (req, res, next) => {
+  if (req.userRole !== 'admin') {
+    return res.status(403).send('Доступно тільки для адміністратора (403 Forbidden)');
+  }
+  next();
+};
+
 // Обмеження спроб входу
 const MAX_LOGIN_ATTEMPTS = 30;
 const ONE_DAY_MS = 24 * 60 * 60 * 1000;
@@ -1130,32 +1156,6 @@ app.post('/login', [
     logger.info('Маршрут /login виконано', { duration: `${Date.now() - startTime} мс` });
   }
 });
-
-// Middleware для перевірки авторизації через JWT
-const checkAuth = (req, res, next) => {
-  const token = req.headers['authorization']?.split(' ')[1] || req.cookies.token;
-  if (!token) {
-    return res.redirect('/');
-  }
-
-  try {
-    const decoded = jwt.verify(token, process.env.JWT_SECRET);
-    req.user = decoded.username;
-    req.userRole = decoded.role;
-    next();
-  } catch (error) {
-    logger.error('Помилка перевірки JWT', { message: error.message, stack: error.stack });
-    res.redirect('/');
-  }
-};
-
-// Middleware для перевірки ролі адміністратора
-const checkAdmin = (req, res, next) => {
-  if (req.userRole !== 'admin') {
-    return res.status(403).send('Доступно тільки для адміністратора (403 Forbidden)');
-  }
-  next();
-};
 
 // Сторінка вибору тесту
 app.get('/select-test', checkAuth, async (req, res) => {
