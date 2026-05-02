@@ -2949,8 +2949,8 @@ app.get('/test/question', checkAuth, async (req, res) => {
             let questionStartTime = questionStartTimeObj[currentQuestionIndex] || Date.now();
 
             // ==================== АНТИ-ЧИТ З ФІКСАЦІЄЮ СКРІНШОТІВ ====================
-            let screenshotCount = 0;
-            let switchCount = 0;
+            screenshotCount = screenshotCount || 0;   // використовуємо вже існуючу змінну
+
             let lastBlurTime = 0;
             let notificationTimeout = null;
 
@@ -2969,7 +2969,7 @@ app.get('/test/question', checkAuth, async (req, res) => {
                 }, 2200);
             }
 
-            // Скріншоти (ПК + Мобільні)
+            // Скріншоти
             document.addEventListener('keyup', e => {
                 if (e.key === 'PrintScreen' || e.keyCode === 44) {
                     screenshotCount++;
@@ -3003,7 +3003,7 @@ app.get('/test/question', checkAuth, async (req, res) => {
                 saveSuspiciousActivity();
             });
 
-            // Visibility Change (додатковий захист для мобільних)
+            // Visibility Change (мобільні)
             document.addEventListener('visibilitychange', () => {
                 if (document.hidden && /Mobi|Android|iPhone|iPad/i.test(navigator.userAgent)) {
                     screenshotCount++;
@@ -3012,7 +3012,6 @@ app.get('/test/question', checkAuth, async (req, res) => {
                 }
             });
 
-            // Функція збереження
             async function saveSuspiciousActivity() {
                 const formData = new URLSearchParams();
                 formData.append('screenshotCount', screenshotCount);
@@ -3029,10 +3028,9 @@ app.get('/test/question', checkAuth, async (req, res) => {
                 } catch (err) {}
             }
 
-            // Періодична відправка
             setInterval(saveSuspiciousActivity, 4000);
 
-            // ==================== ТВІЙ ОСНОВНИЙ КОД ====================
+            // ==================== ОСНОВНИЙ КОД ====================
             function goToQuestion(targetIndex) {
               if (targetIndex < 0 || targetIndex >= totalQuestions) return;
               if (targetIndex === currentQuestionIndex) return;
