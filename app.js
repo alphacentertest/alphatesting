@@ -1330,21 +1330,26 @@ app.post('/logout', checkAuth, async (req, res) => {
   }
 });
 
+// Збереження результатів тесту (оновлено з детальними логами та підтримкою screenshotCount)
 const saveResult = async (user, testNumber, score, totalPoints, startTime, endTime, totalClicks, correctClicks, totalQuestions, percentage, suspiciousActivity, answers, scoresPerQuestion, variant, ipAddress, testSessionId, savedQuestions = null) => {
   const startTimeLog = Date.now();
 
-  logger.info('[SAVE-RESULT] Початок збереження', {
+  logger.info('[SAVE-RESULT] === ПОЧАТОК ЗБЕРЕЖЕННЯ ===', {
     user,
     testNumber,
     testSessionId,
     score,
     percentage: percentage.toFixed(1) + '%',
-    hasSuspiciousData: !!suspiciousActivity
+    receivedSuspiciousActivity: !!suspiciousActivity,
+    screenshotCountReceived: suspiciousActivity?.screenshotCount,
+    switchCountReceived: suspiciousActivity?.switchCount,
+    timeAwayReceived: suspiciousActivity?.timeAway
   });
 
   try {
     let questionsToSave = savedQuestions;
 
+    // Якщо питань не передали — завантажуємо з бази (fallback)
     if (!questionsToSave || !Array.isArray(questionsToSave) || questionsToSave.length === 0) {
       logger.info('[SAVE-RESULT] Питання не передані — завантажуємо з бази');
       let allQuestions = await db.collection('questions')
@@ -1355,9 +1360,11 @@ const saveResult = async (user, testNumber, score, totalPoints, startTime, endTi
       questionsToSave = allQuestions.filter(q =>
         !q.variant || q.variant === '' || q.variant === variant
       );
+    } else {
+      logger.info('[SAVE-RESULT] Використано збережені питання з тесту', { count: questionsToSave.length });
     }
 
-    // Перерахунок балів
+    // Перерахунок балів за реальними питаннями
     const actualScoresPerQuestion = questionsToSave.map((q, index) => {
       const userAnswer = answers[index];
       return calculateQuestionScore(q, userAnswer);
@@ -1371,12 +1378,12 @@ const saveResult = async (user, testNumber, score, totalPoints, startTime, endTi
 
     const duration = Math.round((endTime - startTime) / 1000);
 
-    // === ВИПРАВЛЕНО: ПОВНИЙ ОБ'ЄКТ З screenshotCount ===
+    // === ФІНАЛЬНИЙ ОБ'ЄКТ ПІДОЗРІЛОЇ АКТИВНОСТІ ===
     const finalSuspiciousActivity = suspiciousActivity && typeof suspiciousActivity === 'object' 
       ? {
           timeAway: Number(suspiciousActivity.timeAway) || 0,
           switchCount: Number(suspiciousActivity.switchCount) || 0,
-          screenshotCount: Number(suspiciousActivity.screenshotCount) || 0,   // ← Додано
+          screenshotCount: Number(suspiciousActivity.screenshotCount) || 0,
           responseTimes: Array.isArray(suspiciousActivity.responseTimes) ? suspiciousActivity.responseTimes : [],
           activityCounts: Array.isArray(suspiciousActivity.activityCounts) ? suspiciousActivity.activityCounts : []
         }
@@ -1387,6 +1394,14 @@ const saveResult = async (user, testNumber, score, totalPoints, startTime, endTi
           responseTimes: [], 
           activityCounts: [] 
         };
+
+    logger.info('[SAVE-RESULT] Фінальний suspiciousActivity перед збереженням', {
+      timeAway: finalSuspiciousActivity.timeAway,
+      switchCount: finalSuspiciousActivity.switchCount,
+      screenshotCount: finalSuspiciousActivity.screenshotCount,
+      responseTimesCount: finalSuspiciousActivity.responseTimes.length,
+      activityCountsCount: finalSuspiciousActivity.activityCounts.length
+    });
 
     const result = {
       user,
@@ -1409,14 +1424,18 @@ const saveResult = async (user, testNumber, score, totalPoints, startTime, endTi
       questions: questionsToSave
     };
 
+    logger.info('[SAVE-RESULT] Готовий документ для вставки', { 
+      testSessionId, 
+      questionsSaved: questionsToSave.length,
+      screenshotCountFinal: finalSuspiciousActivity.screenshotCount
+    });
+
     const insertResult = await db.collection('test_results').insertOne(result);
 
-    logger.info('[SAVE-RESULT] Успішно збережено', {
+    logger.info('[SAVE-RESULT] Успішно вставлено документ', {
       insertedId: insertResult.insertedId.toString(),
       testSessionId,
-      timeAway: finalSuspiciousActivity.timeAway,
-      switchCount: finalSuspiciousActivity.switchCount,
-      screenshotCount: finalSuspiciousActivity.screenshotCount   // ← для логів
+      screenshotCountSaved: finalSuspiciousActivity.screenshotCount
     });
 
     await logActivity(
@@ -1431,14 +1450,15 @@ const saveResult = async (user, testNumber, score, totalPoints, startTime, endTi
     );
 
   } catch (error) {
-    logger.error('[SAVE-RESULT] Критична помилка', {
+    logger.error('[SAVE-RESULT] Критична помилка при збереженні', {
       message: error.message,
       stack: error.stack,
       testSessionId
     });
     throw error;
   } finally {
-    logger.info('[SAVE-RESULT] Завершено', { duration: `${Date.now() - startTimeLog} мс` });
+    const duration = Date.now() - startTimeLog;
+    logger.info('[SAVE-RESULT] Завершено', { duration: `${duration} мс` });
   }
 };
 
@@ -3576,32 +3596,48 @@ app.post('/answer', checkAuth, express.urlencoded({ extended: true }), async (re
 // === ОНОВЛЕННЯ ПІДОЗРІЛОЇ АКТИВНОСТІ ===
 app.post('/update-suspicious-activity', checkAuth, async (req, res) => {
   try {
-    const { screenshotCount, switchCount, timeAway } = req.body;
+    const { screenshotCount, switchCount, timeAway, activityCount } = req.body;
+
+    logger.info('[UPDATE-SUSPICIOUS] Отримані дані', {
+      user: req.user,
+      screenshotCount,
+      switchCount,
+      timeAway,
+      activityCount,
+      rawBody: req.body
+    });
 
     const update = { $set: {} };
+    const inc = {};
 
     if (screenshotCount !== undefined) {
       update.$set['suspiciousActivity.screenshotCount'] = Number(screenshotCount);
+      inc['suspiciousActivity.screenshotCount'] = Number(screenshotCount);
     }
     if (switchCount !== undefined) {
       update.$set['suspiciousActivity.switchCount'] = Number(switchCount);
+      inc['suspiciousActivity.switchCount'] = Number(switchCount);
     }
     if (timeAway !== undefined) {
       update.$set['suspiciousActivity.timeAway'] = Number(timeAway);
     }
+    if (activityCount !== undefined) {
+      inc['suspiciousActivity.activityCounts'] = Number(activityCount); // якщо потрібно
+    }
 
-    // Додаємо $inc для надійності (якщо кілька оновлень одночасно)
-    const inc = {};
-    if (screenshotCount !== undefined) inc['suspiciousActivity.screenshotCount'] = Number(screenshotCount);
-    if (switchCount !== undefined) inc['suspiciousActivity.switchCount'] = Number(switchCount);
-
-    await db.collection('active_tests').updateOne(
+    const result = await db.collection('active_tests').updateOne(
       { user: req.user },
       { 
         $set: update.$set,
         $inc: Object.keys(inc).length > 0 ? inc : undefined
       }
     );
+
+    logger.info('[UPDATE-SUSPICIOUS] Оновлення виконано', {
+      user: req.user,
+      matchedCount: result.matchedCount,
+      modifiedCount: result.modifiedCount
+    });
 
     res.json({ success: true });
   } catch (error) {
