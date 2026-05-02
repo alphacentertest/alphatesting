@@ -453,29 +453,6 @@ app.use((req, res, next) => {
   next();
 });
 
-// Збереження підозрілої активності
-app.post('/save-suspicious-activity', checkAuth, async (req, res) => {
-  try {
-    const { screenshotCount = 0, switchCount = 0, timeAway = 0 } = req.body;
-    const user = req.user;
-
-    await db.collection('active_tests').updateOne(
-      { user },
-      { $set: { 
-          'suspiciousActivity.screenshotCount': parseInt(screenshotCount),
-          'suspiciousActivity.switchCount': parseInt(switchCount),
-          'suspiciousActivity.timeAway': parseFloat(timeAway)
-        }
-      }
-    );
-
-    res.json({ success: true });
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ success: false });
-  }
-});
-
 // Допоміжна функція для форматування часу в київському часовому поясі
 function formatKievTime(date) {
   if (!date) return '—';
@@ -1196,6 +1173,29 @@ const checkAdmin = (req, res, next) => {
   }
   next();
 };
+
+// Збереження підозрілої активності
+app.post('/save-suspicious-activity', checkAuth, async (req, res) => {
+  try {
+    const { screenshotCount = 0, switchCount = 0, timeAway = 0 } = req.body;
+    const user = req.user;
+
+    await db.collection('active_tests').updateOne(
+      { user },
+      { $set: { 
+          'suspiciousActivity.screenshotCount': parseInt(screenshotCount),
+          'suspiciousActivity.switchCount': parseInt(switchCount),
+          'suspiciousActivity.timeAway': parseFloat(timeAway)
+        }
+      }
+    );
+
+    res.json({ success: true });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ success: false });
+  }
+});
 
 // Сторінка вибору тесту
 app.get('/select-test', checkAuth, async (req, res) => {
