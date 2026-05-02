@@ -1379,21 +1379,15 @@ const saveResult = async (user, testNumber, score, totalPoints, startTime, endTi
     const duration = Math.round((endTime - startTime) / 1000);
 
     // === ФІНАЛЬНИЙ ОБ'ЄКТ ПІДОЗРІЛОЇ АКТИВНОСТІ ===
-    const finalSuspiciousActivity = suspiciousActivity && typeof suspiciousActivity === 'object' 
+        const finalSuspiciousActivity = suspiciousActivity && typeof suspiciousActivity === 'object' 
       ? {
           timeAway: Number(suspiciousActivity.timeAway) || 0,
           switchCount: Number(suspiciousActivity.switchCount) || 0,
-          screenshotCount: Number(suspiciousActivity.screenshotCount) || 0,
+          screenshotCount: Number(suspiciousActivity.screenshotCount) || 0,   
           responseTimes: Array.isArray(suspiciousActivity.responseTimes) ? suspiciousActivity.responseTimes : [],
           activityCounts: Array.isArray(suspiciousActivity.activityCounts) ? suspiciousActivity.activityCounts : []
         }
-      : { 
-          timeAway: 0, 
-          switchCount: 0, 
-          screenshotCount: 0, 
-          responseTimes: [], 
-          activityCounts: [] 
-        };
+      : { timeAway: 0, switchCount: 0, screenshotCount: 0, responseTimes: [], activityCounts: [] };
 
     logger.info('[SAVE-RESULT] Фінальний suspiciousActivity перед збереженням', {
       timeAway: finalSuspiciousActivity.timeAway,
@@ -3595,29 +3589,26 @@ app.post('/answer', checkAuth, express.urlencoded({ extended: true }), async (re
 
 // === ОНОВЛЕННЯ ПІДОЗРІЛОЇ АКТИВНОСТІ ===
 app.post('/update-suspicious-activity', checkAuth, async (req, res) => {
-  const startTime = Date.now();
   try {
-    const { screenshotCount, switchCount, timeAway } = req.body;
+    const { screenshotCount = 0, switchCount = 0, timeAway = 0 } = req.body;
 
     logger.info('[UPDATE-SUSPICIOUS] Отримані дані', {
       user: req.user,
       screenshotCount,
       switchCount,
-      timeAway,
-      fullBody: req.body
+      timeAway
     });
 
-    const update = { $set: {} };
-
-    if (screenshotCount !== undefined) {
-      update.$set['suspiciousActivity.screenshotCount'] = Number(screenshotCount) || 0;
-    }
-    if (switchCount !== undefined) {
-      update.$set['suspiciousActivity.switchCount'] = Number(switchCount) || 0;
-    }
-    if (timeAway !== undefined) {
-      update.$set['suspiciousActivity.timeAway'] = Number(timeAway) || 0;
-    }
+    // Використовуємо $inc для надійного додавання
+    const update = {
+      $inc: {
+        'suspiciousActivity.screenshotCount': Number(screenshotCount) || 0,
+        'suspiciousActivity.switchCount': Number(switchCount) || 0
+      },
+      $set: {
+        'suspiciousActivity.timeAway': Number(timeAway) || 0
+      }
+    };
 
     const result = await db.collection('active_tests').updateOne(
       { user: req.user },
@@ -3625,22 +3616,16 @@ app.post('/update-suspicious-activity', checkAuth, async (req, res) => {
     );
 
     logger.info('[UPDATE-SUSPICIOUS] Успішно оновлено', {
-      user: req.user,
       matched: result.matchedCount,
       modified: result.modifiedCount,
-      duration: Date.now() - startTime
+      screenshotAdded: Number(screenshotCount)
     });
 
     res.json({ success: true });
 
   } catch (error) {
-    logger.error('[UPDATE-SUSPICIOUS] Критична помилка', {
-      message: error.message,
-      stack: error.stack,
-      user: req.user,
-      body: req.body
-    });
-    res.status(500).json({ success: false, error: error.message });
+    logger.error('[UPDATE-SUSPICIOUS] Помилка', error);
+    res.status(500).json({ success: false });
   }
 });
 
