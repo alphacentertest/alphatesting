@@ -1340,15 +1340,12 @@ const saveResult = async (user, testNumber, score, totalPoints, startTime, endTi
     testSessionId,
     score,
     percentage: percentage.toFixed(1) + '%',
-    totalQuestions,
-    answersCount: Object.keys(answers).length,
-    hasSavedQuestions: !!savedQuestions
+    hasSuspiciousData: !!suspiciousActivity
   });
 
   try {
     let questionsToSave = savedQuestions;
 
-    // Якщо питань не передали — завантажуємо з бази (fallback)
     if (!questionsToSave || !Array.isArray(questionsToSave) || questionsToSave.length === 0) {
       logger.info('[SAVE-RESULT] Питання не передані — завантажуємо з бази');
       let allQuestions = await db.collection('questions')
@@ -1359,11 +1356,9 @@ const saveResult = async (user, testNumber, score, totalPoints, startTime, endTi
       questionsToSave = allQuestions.filter(q =>
         !q.variant || q.variant === '' || q.variant === variant
       );
-    } else {
-      logger.info('[SAVE-RESULT] Використано збережені питання з тесту', { count: questionsToSave.length });
     }
 
-    // Перерахунок балів за реальними питаннями
+    // Перерахунок балів
     const actualScoresPerQuestion = questionsToSave.map((q, index) => {
       const userAnswer = answers[index];
       return calculateQuestionScore(q, userAnswer);
@@ -1376,6 +1371,16 @@ const saveResult = async (user, testNumber, score, totalPoints, startTime, endTi
     const actualCorrectClicks = actualScoresPerQuestion.filter(s => s > 0).length;
 
     const duration = Math.round((endTime - startTime) / 1000);
+
+    // === ЗАХИСТ ВІД ПОРОЖНЬОГО suspiciousActivity ===
+    const finalSuspiciousActivity = suspiciousActivity && typeof suspiciousActivity === 'object' 
+      ? {
+          timeAway: Number(suspiciousActivity.timeAway) || 0,
+          switchCount: Number(suspiciousActivity.switchCount) || 0,
+          responseTimes: Array.isArray(suspiciousActivity.responseTimes) ? suspiciousActivity.responseTimes : [],
+          activityCounts: Array.isArray(suspiciousActivity.activityCounts) ? suspiciousActivity.activityCounts : []
+        }
+      : { timeAway: 0, switchCount: 0, responseTimes: [], activityCounts: [] };
 
     const result = {
       user,
@@ -1390,43 +1395,43 @@ const saveResult = async (user, testNumber, score, totalPoints, startTime, endTi
       endTime: new Date(endTime).toISOString(),
       duration,
       answers: Object.fromEntries(Object.entries(answers).sort((a, b) => parseInt(a[0]) - parseInt(b[0]))),
-      suspiciousActivity,
+      suspiciousActivity: finalSuspiciousActivity,     // ← гарантовано не порожній
       variant: variant ? `Variant ${variant}` : 'Немає',
       testSessionId,
       createdAt: new Date(),
       ipAddress,
-      questions: questionsToSave   // ← НАЙВАЖЛИВІШЕ
+      questions: questionsToSave
     };
-
-    logger.info('[SAVE-RESULT] Готовий документ для вставки', { 
-      testSessionId, 
-      questionsSaved: questionsToSave.length 
-    });
 
     const insertResult = await db.collection('test_results').insertOne(result);
 
-    logger.info('[SAVE-RESULT] Успішно вставлено документ', {
+    logger.info('[SAVE-RESULT] Успішно збережено', {
       insertedId: insertResult.insertedId.toString(),
-      testSessionId
+      testSessionId,
+      timeAway: finalSuspiciousActivity.timeAway,
+      switchCount: finalSuspiciousActivity.switchCount
     });
 
     await logActivity(
       user,
       `завершив тест ${testNames[testNumber]?.name || 'Тест'} з результатом ${Math.round(actualPercentage)}%`,
       ipAddress,
-      { percentage: Math.round(actualPercentage), testSessionId }
+      { 
+        percentage: Math.round(actualPercentage), 
+        testSessionId,
+        suspicious: finalSuspiciousActivity 
+      }
     );
 
   } catch (error) {
-    logger.error('[SAVE-RESULT] Критична помилка при збереженні', {
+    logger.error('[SAVE-RESULT] Критична помилка', {
       message: error.message,
       stack: error.stack,
       testSessionId
     });
     throw error;
   } finally {
-    const duration = Date.now() - startTimeLog;
-    logger.info('[SAVE-RESULT] Завершено', { duration: `${duration} мс` });
+    logger.info('[SAVE-RESULT] Завершено', { duration: `${Date.now() - startTimeLog} мс` });
   }
 };
 
@@ -3423,17 +3428,28 @@ app.post('/set-question-start-time', checkAuth, async (req, res) => {
 app.post('/answer', checkAuth, express.urlencoded({ extended: true }), async (req, res) => {
   const startTime = Date.now();
   try {
-    const { index, answer } = req.body;
+    const { 
+      index, 
+      answer,
+      timeAway,
+      switchCount,
+      responseTime,
+      activityCount 
+    } = req.body;
 
     logger.info('[ANSWER DEBUG]', { 
       index, 
       answerType: typeof answer, 
       rawAnswer: answer,
-      isArray: Array.isArray(answer)
+      timeAway,
+      switchCount,
+      responseTime,
+      activityCount
     });
 
     let parsedAnswer = [];
 
+    // Парсинг відповіді
     try {
       if (typeof answer === 'string') {
         if (answer.trim() === '' || answer.trim() === '[]') {
@@ -3449,7 +3465,7 @@ app.post('/answer', checkAuth, express.urlencoded({ extended: true }), async (re
       parsedAnswer = [];
     }
 
-    // === РОЗШИРЕНА ОБРОБКА ДЛЯ MATCHING ===
+    // === СПЕЦІАЛЬНА ОБРОБКА ДЛЯ MATCHING ===
     const userTestCheck = await db.collection('active_tests').findOne({ user: req.user });
     const question = userTestCheck?.questions?.[parseInt(index)];
 
@@ -3457,15 +3473,14 @@ app.post('/answer', checkAuth, express.urlencoded({ extended: true }), async (re
       logger.info('[ANSWER MATCHING RAW]', { 
         index, 
         raw: parsedAnswer, 
-        length: Array.isArray(parsedAnswer) ? parsedAnswer.length : 0,
-        firstElementType: typeof parsedAnswer[0]
+        length: Array.isArray(parsedAnswer) ? parsedAnswer.length : 0 
       });
 
       if (!Array.isArray(parsedAnswer)) {
         parsedAnswer = [];
       }
 
-      // Якщо прийшов плоский масив [left1, right1, left2, right2...]
+      // Якщо прийшов плоский масив — перетворюємо в пари
       if (parsedAnswer.length > 0 && !Array.isArray(parsedAnswer[0])) {
         const pairs = [];
         for (let i = 0; i < parsedAnswer.length; i += 2) {
@@ -3479,7 +3494,7 @@ app.post('/answer', checkAuth, express.urlencoded({ extended: true }), async (re
       }
     }
 
-    // === FILLBLANK — спеціальна обробка ===
+    // === СПЕЦІАЛЬНА ОБРОБКА ДЛЯ FILLBLANK ===
     if (question?.type === 'fillblank') {
       if (!Array.isArray(parsedAnswer)) {
         parsedAnswer = typeof parsedAnswer === 'string' 
@@ -3493,30 +3508,45 @@ app.post('/answer', checkAuth, express.urlencoded({ extended: true }), async (re
       });
     }
 
-    // Збереження
+    // === ПІДГОТОВКА ОНОВЛЕННЯ ===
+    const updateObj = {
+      [`answers.${index}`]: parsedAnswer,
+      [`answerTimestamps.${index}`]: Date.now(),
+      currentQuestion: parseInt(index) + 1
+    };
+
+    // === ОНОВЛЕННЯ ПІДОЗРІЛОЇ АКТИВНОСТІ ===
+    if (timeAway !== undefined || switchCount !== undefined) {
+      updateObj['suspiciousActivity.timeAway'] = Number(timeAway) || 0;
+      updateObj['suspiciousActivity.switchCount'] = Number(switchCount) || 0;
+    }
+
+    const pushObj = {};
+    if (responseTime !== undefined) {
+      pushObj['suspiciousActivity.responseTimes'] = Number(responseTime);
+    }
+    if (activityCount !== undefined) {
+      pushObj['suspiciousActivity.activityCounts'] = Number(activityCount);
+    }
+
+    const updateOperation = { $set: updateObj };
+    if (Object.keys(pushObj).length > 0) {
+      updateOperation.$push = pushObj;
+    }
+
+    // Збереження в БД
     await db.collection('active_tests').updateOne(
       { user: req.user },
-      { 
-        $set: { 
-          [`answers.${index}`]: parsedAnswer,
-          [`answerTimestamps.${index}`]: Date.now(),   // ← цей рядок має бути!
-          currentQuestion: parseInt(index) + 1
-        } 
-      }
+      updateOperation
     );
 
     logger.info('[ANSWER SUCCESS]', { 
       index, 
       type: question?.type || 'unknown',
       savedLength: Array.isArray(parsedAnswer) ? parsedAnswer.length : 0,
-      timestampSaved: true
-    });
-
-    logger.info('[ANSWER SUCCESS]', { 
-      index, 
-      type: question?.type || 'unknown',
-      savedLength: Array.isArray(parsedAnswer) ? parsedAnswer.length : 0,
-      firstSaved: Array.isArray(parsedAnswer) && parsedAnswer.length > 0 ? parsedAnswer[0] : null
+      timeAway: Number(timeAway) || 0,
+      switchCount: Number(switchCount) || 0,
+      responseTime: Number(responseTime) || 0
     });
 
     res.json({ success: true });
@@ -3706,7 +3736,7 @@ function calculateQuestionScore(question, userAnswer) {
 app.get('/result', checkAuth, async (req, res) => {
   const startTime = Date.now();
   try {
-    if (req.user === 'admin') return res.redirect('/admin');
+    if (req.userRole === 'admin') return res.redirect('/admin');
 
     logger.info('[RESULT] Початок обробки результату', { user: req.user });
 
@@ -3732,7 +3762,7 @@ app.get('/result', checkAuth, async (req, res) => {
       dataSource = 'test_results (останній)';
     }
 
-    // 2. Витягуємо поля
+    // 2. Витягуємо основні дані
     const testNumber     = testData.testNumber;
     const answers        = testData.answers || {};
     const startTimeMs    = testData.startTime || Date.now();
@@ -3761,7 +3791,7 @@ app.get('/result', checkAuth, async (req, res) => {
       testSessionId
     });
 
-    // 3. === ВИПРАВЛЕННЯ: ПІДТРИМКА ВИПАДКОВИХ ПИТАНЬ ===
+    // 3. Завантаження питань (підтримка збережених питань)
     let questions = [];
 
     if (testData.questions && Array.isArray(testData.questions) && testData.questions.length > 0) {
@@ -3803,47 +3833,30 @@ app.get('/result', checkAuth, async (req, res) => {
     const totalQuestions = questions.length;
     const correctClicks = scoresPerQuestion.filter(s => s > 0).length;
 
-    // === РОЗРАХУНОК ПОВНІСТЮ ТА ЧАСТКОВО ПРАВИЛЬНИХ ===
+    // Повністю та частково правильні
     let fullyCorrect = 0;
     let partiallyCorrect = 0;
 
     scoresPerQuestion.forEach((s, idx) => {
       const maxPoints = questions[idx]?.points || 1;
-      if (s >= maxPoints) {
-        fullyCorrect++;
-      } else if (s > 0) {
-        partiallyCorrect++;
-      }
+      if (s >= maxPoints) fullyCorrect++;
+      else if (s > 0) partiallyCorrect++;
     });
 
-    // 5. Час та підозріла активність — ВИПРАВЛЕНО (без дублювання)
+    // 5. Час та підозріла активність
     let endTime = testData.endTime ? new Date(testData.endTime).getTime() : Date.now();
     const maxEndTime = startTimeMs + timeLimit;
     if (endTime > maxEndTime) endTime = maxEndTime;
 
     const duration = Math.round((endTime - startTimeMs) / 1000);
-    const timeAway = suspiciousActivity.timeAway || 0;
+    const timeAway = Number(suspiciousActivity.timeAway) || 0;
     const correctedTimeAway = Math.min(timeAway, duration);
     const timeAwayPercent = duration > 0 ? Math.round((correctedTimeAway / duration) * 100) : 0;
-    const switchCount = suspiciousActivity.switchCount || 0;
+    const switchCount = Number(suspiciousActivity.switchCount) || 0;
 
     const ipAddress = req.headers['x-forwarded-for'] || req.socket.remoteAddress;
-    const endDate = new Date(testData.endTime || Date.now());
-    
-    const timeVal = endDate.toLocaleTimeString('uk-UA', { 
-      timeZone: 'Europe/Kiev',
-      hour: '2-digit', 
-      minute: '2-digit' 
-    });
 
-    const dateVal = endDate.toLocaleDateString('uk-UA', { 
-      timeZone: 'Europe/Kiev',
-      day: '2-digit',
-      month: '2-digit',
-      year: 'numeric'
-    });
-
-    // 6. Збереження результату (якщо потрібно)
+    // 6. Збереження результату (якщо ще не збережено)
     const existingResult = await db.collection('test_results').findOne({ testSessionId });
 
     if (!existingResult) {
@@ -3864,17 +3877,16 @@ app.get('/result', checkAuth, async (req, res) => {
         startTimeMs,
         endTime,
         Object.keys(answers).length,
-        fullyCorrect,
+        correctClicks,
         totalQuestions,
         percentage,
-        { timeAway: correctedTimeAway, switchCount, responseTimes: suspiciousActivity.responseTimes || [], activityCounts: suspiciousActivity.activityCounts || [] },
+        suspiciousActivity,                    // ← передаємо весь об'єкт
         answers,
         scoresPerQuestion,
         variant,
         ipAddress,
         testSessionId,
-        questions,
-        userTest?.answerTimestamps 
+        questions
       );
 
       logger.info('[RESULT] Результат збережено успішно');
@@ -3888,7 +3900,7 @@ app.get('/result', checkAuth, async (req, res) => {
     // 8. Форматування дати/часу
     const formattedDateTime = formatKievTime(endTime);
 
-    // 9. Зображення
+    // 9. Зображення (A.png)
     const imagePath = path.join(__dirname, 'public', 'images', 'A.png');
     let imageBase64 = '';
     try {
@@ -3898,7 +3910,7 @@ app.get('/result', checkAuth, async (req, res) => {
       logger.error('[RESULT] Помилка читання A.png', { message: error.message });
     }
 
-    // 10. Повний HTML
+    // 10. Повний HTML результату
     const resultHtml = `
       <!DOCTYPE html>
       <html lang="uk">
@@ -4043,14 +4055,12 @@ app.get('/result', checkAuth, async (req, res) => {
 
           <script>
             document.addEventListener('DOMContentLoaded', () => {
-              // Експорт в PDF
               const exportBtn = document.getElementById('exportPDF');
               if (exportBtn) {
                 exportBtn.addEventListener('click', () => {
                   try {
                     const docDefinition = {
                       content: [
-                        // Логотип (якщо є)
                         ${imageBase64 ? `{
                           image: 'data:image/png;base64,${imageBase64}',
                           width: 75,
@@ -4067,17 +4077,15 @@ app.get('/result', checkAuth, async (req, res) => {
                         { text: 'Повністю правильних: ${fullyCorrect}', margin: [0, 8, 0, 8] },
                         { text: 'Частково правильних: ${partiallyCorrect}', margin: [0, 8, 0, 8] },
                         { text: 'Набрано балів: ${Math.round(score)} / ${Math.round(totalPoints)}', margin: [0, 12, 0, 8] },
-                        // Відсоток — як звичайний текст (ліворуч, чорний)
                         { 
                           text: 'Відсоток: ${Math.round(percentage)}%',
                           margin: [0, 12, 0, 15] 
                         },
 
-                        // Час і дата в одній строкі
                         {
                           columns: [
-                            { text: 'Час: ${timeVal}', width: '50%', alignment: 'left' },
-                            { text: 'Дата: ${dateVal}', width: '50%', alignment: 'right' }
+                            { text: 'Час: ${new Date(endTime).toLocaleTimeString('uk-UA', { hour12: false })}', width: '50%', alignment: 'left' },
+                            { text: 'Дата: ${new Date(endTime).toLocaleDateString('uk-UA')}', width: '50%', alignment: 'right' }
                           ],
                           margin: [0, 15, 0, 0]
                         }
@@ -4105,7 +4113,6 @@ app.get('/result', checkAuth, async (req, res) => {
                 });
               }
 
-              // Кнопка "Вихід"
               const restartBtn = document.getElementById('restart');
               if (restartBtn) {
                 restartBtn.addEventListener('click', () => {
@@ -4129,44 +4136,58 @@ app.get('/result', checkAuth, async (req, res) => {
 });
 
 // Маршрут для перегляду результатів користувача (з таблицею питань)
+// Маршрут для перегляду результатів користувача (з таблицею питань)
 app.get('/results', checkAuth, async (req, res) => {
   const startTime = Date.now();
   try {
-    if (req.user === 'admin') return res.redirect('/admin');
+    if (req.userRole === 'admin') return res.redirect('/admin');
 
+    logger.info('[RESULTS] Початок обробки для користувача', { user: req.user });
+
+    // Знаходимо дані
     let userTest = await db.collection('active_tests').findOne({ user: req.user });
     let testData;
 
-    if (!userTest) {
+    if (userTest) {
+      testData = userTest;
+      logger.info('[RESULTS] Знайдено активний тест');
+    } else {
       const recentResult = await db.collection('test_results').findOne(
         { user: req.user },
         { sort: { endTime: -1 } }
       );
       if (!recentResult) {
-        return res.send('<h1>Немає завершених тестів</h1><a href="/select-test">Повернутися</a>');
+        return res.send(`
+          <!DOCTYPE html>
+          <html lang="uk">
+            <head><meta charset="UTF-8"><title>Результати</title></head>
+            <body style="font-family:Arial;text-align:center;padding:50px;">
+              <h1>Немає завершених тестів</h1>
+              <a href="/select-test">Повернутися до вибору тестів</a>
+            </body>
+          </html>
+        `);
       }
       testData = recentResult;
-    } else {
-      testData = userTest;
     }
 
-    const { questions: rawQuestions, testNumber, answers, startTime: testStartTime, suspiciousActivity, variant, testSessionId, timeLimit } = testData;
+    const { 
+      testNumber, 
+      answers = {}, 
+      startTime: testStartTime, 
+      suspiciousActivity = {}, 
+      variant = '', 
+      testSessionId,
+      timeLimit = 3600000,
+      questions: savedQuestions 
+    } = testData;
 
-    // === ВИПРАВЛЕННЯ: ПІДТРИМКА ВИПАДКОВИХ ПИТАНЬ ===
+    // Завантаження питань
     let questions = [];
-
-    if (testData.questions && Array.isArray(testData.questions) && testData.questions.length > 0) {
-      // Використовуємо збережені питання (найправильніший варіант)
-      questions = testData.questions;
-      logger.info('[RESULTS] Використано збережені питання з тесту', { count: questions.length });
-    } else if (rawQuestions && Array.isArray(rawQuestions)) {
-      // Fallback для старих результатів
-      questions = rawQuestions.filter(q => 
-        !q.variant || q.variant === '' || q.variant === variant
-      );
-      logger.info('[RESULTS] Використано фільтрацію з rawQuestions', { count: questions.length });
+    if (savedQuestions && Array.isArray(savedQuestions) && savedQuestions.length > 0) {
+      questions = savedQuestions;
+      logger.info('[RESULTS] Використано збережені питання', { count: questions.length });
     } else {
-      // Якщо нічого немає — завантажуємо з бази
       let allQuestions = await db.collection('questions')
         .find({ testNumber })
         .sort({ order: 1 })
@@ -4175,10 +4196,15 @@ app.get('/results', checkAuth, async (req, res) => {
       questions = allQuestions.filter(q => 
         !q.variant || q.variant === '' || q.variant === variant
       );
+
+      if (questions.length === 0 && allQuestions.length > 0) {
+        questions = allQuestions;
+      }
     }
 
-    const scoresPerQuestion = questions.map((q, displayIndex) => {
-      const userAnswer = answers[displayIndex];
+    // Розрахунок балів
+    const scoresPerQuestion = questions.map((q, index) => {
+      const userAnswer = answers[index];
       return calculateQuestionScore(q, userAnswer);
     });
 
@@ -4191,13 +4217,26 @@ app.get('/results', checkAuth, async (req, res) => {
     const totalQuestions = questions.length;
     const correctClicks = scoresPerQuestion.filter(s => s > 0).length;
 
+    // Повністю та частково правильні
+    let fullyCorrect = 0;
+    let partiallyCorrect = 0;
+    scoresPerQuestion.forEach((s, idx) => {
+      const maxPoints = questions[idx]?.points || 1;
+      if (s >= maxPoints) fullyCorrect++;
+      else if (s > 0) partiallyCorrect++;
+    });
+
+    // Час та підозріла активність
     let endTime = testData.endTime ? new Date(testData.endTime).getTime() : Date.now();
-    const maxEndTime = testStartTime + timeLimit;
-    if (endTime > maxEndTime) endTime = maxEndTime;
+    const duration = Math.round((endTime - testStartTime) / 1000);
+    const timeAway = Number(suspiciousActivity.timeAway) || 0;
+    const correctedTimeAway = Math.min(timeAway, duration);
+    const timeAwayPercent = duration > 0 ? Math.round((correctedTimeAway / duration) * 100) : 0;
+    const switchCount = Number(suspiciousActivity.switchCount) || 0;
 
-    const formattedTime = new Date(endTime).toLocaleTimeString('uk-UA', { hour12: false });
-    const formattedDate = new Date(endTime).toLocaleDateString('uk-UA');
+    const ipAddress = req.headers['x-forwarded-for'] || req.socket.remoteAddress;
 
+    // HTML-сторінка
     let resultsHtml = `
       <!DOCTYPE html>
       <html lang="uk">
@@ -4206,20 +4245,57 @@ app.get('/results', checkAuth, async (req, res) => {
           <meta name="viewport" content="width=device-width, initial-scale=1.0">
           <title>Ваші результати</title>
           <style>
-            body { font-family: Arial, sans-serif; padding: 30px 20px; background: #f5f5f5; }
-            .container { max-width: 1000px; margin: 0 auto; background: white; padding: 30px; border-radius: 12px; box-shadow: 0 4px 20px rgba(0,0,0,0.1); }
-            h1 { text-align: center; color: #333; }
-            table { border-collapse: collapse; width: 100%; margin: 20px 0; }
-            th, td { border: 1px solid #ddd; padding: 12px; text-align: left; }
-            th { background: #f2f2f2; }
-            .summary { font-size: 20px; margin: 20px 0 40px; padding: 20px; background: #f8f9fa; border-radius: 8px; }
-            .buttons { text-align: center; margin-top: 30px; }
-            button { padding: 14px 28px; margin: 10px; border: none; border-radius: 8px; font-size: 18px; cursor: pointer; }
+            body { 
+              font-family: Arial, sans-serif; 
+              padding: 30px 20px; 
+              background: #f5f5f5; 
+              margin: 0; 
+            }
+            .container { 
+              max-width: 1100px; 
+              margin: 0 auto; 
+              background: white; 
+              padding: 30px; 
+              border-radius: 12px; 
+              box-shadow: 0 4px 20px rgba(0,0,0,0.1); 
+            }
+            h1 { text-align: center; color: #333; margin-bottom: 30px; }
+            .summary { 
+              font-size: 20px; 
+              margin: 20px 0 40px; 
+              padding: 25px; 
+              background: #f8f9fa; 
+              border-radius: 10px; 
+              line-height: 1.7;
+            }
+            table { 
+              border-collapse: collapse; 
+              width: 100%; 
+              margin: 30px 0; 
+            }
+            th, td { 
+              border: 1px solid #ddd; 
+              padding: 12px; 
+              text-align: left; 
+            }
+            th { 
+              background: #f2f2f2; 
+              font-weight: bold; 
+            }
+            .correct { background: #d4edda; }
+            .partial { background: #fff3cd; }
+            .wrong   { background: #f8d7da; }
+            .buttons { text-align: center; margin-top: 40px; }
+            button { 
+              padding: 14px 32px; 
+              margin: 10px; 
+              font-size: 18px; 
+              cursor: pointer; 
+              border: none; 
+              border-radius: 8px; 
+            }
             #exportPDF { background: #ffeb3b; color: #333; }
-            #exportPDF:hover { background: #ffe082; }
-            #restart { background: #ef5350; color: white; }
-            #restart:hover { background: #e53935; }
-            .details { white-space: pre-line; }
+            #restart   { background: #ef5350; color: white; }
           </style>
           <script src="/pdfmake/pdfmake.min.js"></script>
           <script src="/pdfmake/vfs_fonts.js"></script>
@@ -4234,7 +4310,10 @@ app.get('/results', checkAuth, async (req, res) => {
               <strong>Бали:</strong> ${roundedScore.toFixed(1)} з ${totalPoints}<br>
               <strong>Відсоток:</strong> ${roundedPercentage.toFixed(1)}%<br>
               <strong>Питань:</strong> ${totalQuestions}<br>
-              <strong>Правильних:</strong> ${correctClicks}
+              <strong>Повністю правильних:</strong> ${fullyCorrect}<br>
+              <strong>Частково правильних:</strong> ${partiallyCorrect}<br>
+              <strong>Час поза вкладкою:</strong> ${timeAwayPercent}%<br>
+              <strong>Переключень вкладок:</strong> ${switchCount}
             </div>
 
             <table>
@@ -4247,31 +4326,29 @@ app.get('/results', checkAuth, async (req, res) => {
     `;
 
     questions.forEach((q, index) => {
-      const userAnswer = answers[index] || 'Не відповіли';
+      const userAnswerRaw = answers[index];
       const questionScore = scoresPerQuestion[index];
 
       let userAnswerDisplay = '—';
       let correctAnswerDisplay = '—';
 
-      // Ваша відповідь
-      if (Array.isArray(userAnswer)) {
+      if (Array.isArray(userAnswerRaw)) {
         if (q.type === 'matching') {
-          userAnswerDisplay = userAnswer.map(pair => 
-            Array.isArray(pair) && pair.length === 2 ? `${pair[0]} → ${pair[1]}` : String(pair)
+          userAnswerDisplay = userAnswerRaw.map(pair => 
+            Array.isArray(pair) && pair.length === 2 ? `${pair[0] || '—'} → ${pair[1] || '—'}` : String(pair)
           ).join('<br>');
         } else if (q.type === 'fillblank') {
-          userAnswerDisplay = userAnswer.join('<br>');
+          userAnswerDisplay = userAnswerRaw.join('<br>');
         } else {
-          userAnswerDisplay = userAnswer.join(', ');
+          userAnswerDisplay = userAnswerRaw.join(', ');
         }
-      } else {
-        userAnswerDisplay = String(userAnswer);
+      } else if (userAnswerRaw !== undefined) {
+        userAnswerDisplay = String(userAnswerRaw);
       }
 
-      // Правильна відповідь
       if (q.type === 'matching' && q.correctPairs) {
-        correctAnswerDisplay = q.correctPairs.map(pair => `${pair[0]} → ${pair[1]}`).join('<br>');
-      } else if (q.correctAnswers && Array.isArray(q.correctAnswers)) {
+        correctAnswerDisplay = q.correctPairs.map(pair => `${pair[0] || '—'} → ${pair[1] || '—'}`).join('<br>');
+      } else if (Array.isArray(q.correctAnswers)) {
         correctAnswerDisplay = q.correctAnswers.join('<br>');
       } else if (q.correctAnswer) {
         correctAnswerDisplay = q.correctAnswer;
@@ -4279,10 +4356,10 @@ app.get('/results', checkAuth, async (req, res) => {
 
       resultsHtml += `
         <tr>
-          <td>${q.text}</td>
+          <td>${(q.text || '').replace(/</g, '&lt;').replace(/>/g, '&gt;')}</td>
           <td class="details">${userAnswerDisplay}</td>
           <td class="details">${correctAnswerDisplay}</td>
-          <td>${questionScore.toFixed(3)} / ${q.points}</td>
+          <td>${questionScore.toFixed(2)} / ${q.points || 1}</td>
         </tr>
       `;
     });
@@ -4300,17 +4377,17 @@ app.get('/results', checkAuth, async (req, res) => {
             document.getElementById('exportPDF').addEventListener('click', () => {
               const docDefinition = {
                 content: [
-                  { text: 'Результат тесту користувача ' + "${req.user}" + ' з тесту ' + "${testNames[testNumber]?.name || 'Тест'}", style: 'header' },
-                  { text: 'Кількість питань: ${totalQuestions}', margin: [0, 10, 0, 0] },
-                  { text: 'Правильних відповідей: ${correctClicks}', margin: [0, 5, 0, 0] },
-                  { text: 'Набрано балів: ${Math.round(exactScore)}', margin: [0, 5, 0, 0] },
-                  { text: 'Максимально можлива кількість балів: ${Math.round(totalPoints)}', margin: [0, 5, 0, 0] }
+                  { text: 'Результат тесту ${req.user}', style: 'header' },
+                  { text: 'Тест: ${testNames[testNumber]?.name || "Тест"}', margin: [0, 10, 0, 5] },
+                  { text: 'Відсоток: ${roundedPercentage.toFixed(1)}%', margin: [0, 5, 0, 10] },
+                  { text: 'Повністю правильних: ${fullyCorrect}', margin: [0, 5, 0, 5] },
+                  { text: 'Частково правильних: ${partiallyCorrect}', margin: [0, 5, 0, 15] }
                 ],
                 styles: {
-                  header: { fontSize: 18, bold: true, margin: [0, 0, 0, 10] }
+                  header: { fontSize: 18, bold: true, alignment: 'center', margin: [0, 0, 0, 15] }
                 }
               };
-              pdfMake.createPdf(docDefinition).download('результат.pdf');
+              pdfMake.createPdf(docDefinition).download('Мій_результат.pdf');
             });
 
             document.getElementById('restart').addEventListener('click', () => {
@@ -4322,11 +4399,12 @@ app.get('/results', checkAuth, async (req, res) => {
     `;
 
     res.send(resultsHtml);
+
   } catch (error) {
-    logger.error('Помилка в /results', error);
+    logger.error('Помилка в /results', { message: error.message, stack: error.stack });
     res.status(500).send('Помилка завантаження результатів');
   } finally {
-    logger.info('Маршрут /results виконано');
+    logger.info('Маршрут /results виконано', { duration: Date.now() - startTime });
   }
 });
 
@@ -6325,21 +6403,62 @@ app.get('/admin/results', checkAuth, async (req, res) => {
           <meta name="viewport" content="width=device-width, initial-scale=1.0">
           <title>Результати тестів</title>
           <style>
-            body { font-family: Arial, sans-serif; padding: 30px 20px; background: #f5f5f5; margin: 0; }
-            .container { max-width: 1400px; margin: 0 auto; background: white; padding: 30px; border-radius: 12px; box-shadow: 0 4px 20px rgba(0,0,0,0.1); }
-            h1 { text-align: center; color: #333; margin-bottom: 25px; }
-            table { border-collapse: collapse; width: 100%; margin-top: 20px; }
-            th, td { border: 1px solid #ddd; padding: 12px; text-align: left; }
-            th { background: #f2f2f2; font-weight: bold; }
-            .nav-btn, .action-btn, .search-btn { padding: 12px 24px; margin: 10px 5px; cursor: pointer; border: none; border-radius: 8px; font-size: 16px; }
+            body { 
+              font-family: Arial, sans-serif; 
+              padding: 30px 20px; 
+              background: #f5f5f5; 
+              margin: 0; 
+            }
+            .container { 
+              max-width: 1400px; 
+              margin: 0 auto; 
+              background: white; 
+              padding: 30px; 
+              border-radius: 12px; 
+              box-shadow: 0 4px 20px rgba(0,0,0,0.1); 
+            }
+            h1 { 
+              text-align: center; 
+              color: #333; 
+              margin-bottom: 25px; 
+            }
+            table { 
+              border-collapse: collapse; 
+              width: 100%; 
+              margin-top: 20px; 
+            }
+            th, td { 
+              border: 1px solid #ddd; 
+              padding: 12px; 
+              text-align: left; 
+            }
+            th { 
+              background: #f2f2f2; 
+              font-weight: bold; 
+            }
+            .nav-btn, .action-btn, .search-btn { 
+              padding: 12px 24px; 
+              margin: 10px 5px; 
+              cursor: pointer; 
+              border: none; 
+              border-radius: 8px; 
+              font-size: 16px; 
+            }
             .nav-btn { background: #007bff; color: white; }
             .nav-btn:hover { background: #0056b3; }
             .search-btn { background: #28a745; color: white; }
             .action-btn.view { background: #4CAF50; color: white; }
             .action-btn.delete { background: #ef5350; color: white; }
-            .suspicious { color: #d32f2f; font-weight: bold; background: #ffebee; }
-            input[type="text"] { padding: 10px; width: 250px; font-size: 16px; }
-            form { display: inline-block; margin: 10px 0; }
+            .suspicious { 
+              color: #d32f2f; 
+              font-weight: bold; 
+              background: #ffebee; 
+            }
+            input[type="text"] { 
+              padding: 10px; 
+              width: 250px; 
+              font-size: 16px; 
+            }
           </style>
         </head>
         <body>
@@ -6399,11 +6518,16 @@ app.get('/admin/results', checkAuth, async (req, res) => {
         const percentage = totalPoints > 0 ? (exactScore / totalPoints) * 100 : 0;
         const roundedPercentage = Math.round(percentage * 10) / 10;
 
-        // Підозріла активність
-        const timeAway = result.suspiciousActivity?.timeAway || 0;
-        const duration = result.duration || 0;
-        const timeAwayPercent = duration > 0 ? Math.round((timeAway / duration) * 100) : 0;
-        const switchCount = result.suspiciousActivity?.switchCount || 0;
+        // ==================== ПІДОЗРІЛА АКТИВНІСТЬ ====================
+        const suspicious = result.suspiciousActivity || {};
+        const timeAway = Number(suspicious.timeAway) || 0;
+        const switchCount = Number(suspicious.switchCount) || 0;
+        const duration = Number(result.duration) || 0;
+        
+        const timeAwayPercent = duration > 0 
+          ? Math.round((timeAway / duration) * 100) 
+          : 0;
+
         const isSuspicious = timeAwayPercent > 50 || switchCount > 10;
 
         const startTimeStr = formatKievTime(result.startTime);
@@ -6496,7 +6620,6 @@ app.get('/admin/view-result', checkAuth, async (req, res) => {
     let questions = [];
     if (result.questions && Array.isArray(result.questions) && result.questions.length > 0) {
       questions = result.questions;
-      logger.info('[VIEW-RESULT] Використано збережені питання', { count: questions.length });
     } else {
       let allQuestions = await db.collection('questions')
         .find({ testNumber: result.testNumber })
@@ -6506,7 +6629,6 @@ app.get('/admin/view-result', checkAuth, async (req, res) => {
       questions = allQuestions.filter(q => 
         !q.variant || q.variant === '' || q.variant === result.variant
       );
-      logger.info('[VIEW-RESULT] Використано питання з бази', { count: questions.length });
     }
 
     // Розрахунок балів
@@ -6524,36 +6646,32 @@ app.get('/admin/view-result', checkAuth, async (req, res) => {
     const totalQuestions = questions.length;
     const correctClicks = scoresPerQuestion.filter(s => s > 0).length;
 
-    // === РОЗРАХУНОК ПОВНІСТЮ ТА ЧАСТКОВО ПРАВИЛЬНИХ ===
+    // Повністю та частково правильні
     let fullyCorrect = 0;
     let partiallyCorrect = 0;
-
     scoresPerQuestion.forEach((s, idx) => {
       const maxPoints = questions[idx]?.points || 1;
-      if (s >= maxPoints) {
-        fullyCorrect++;
-      } else if (s > 0) {
-        partiallyCorrect++;
-      }
+      if (s >= maxPoints) fullyCorrect++;
+      else if (s > 0) partiallyCorrect++;
     });
 
-    // === РОЗРАХУНОК ЧАСУ ТА АКТИВНОСТІ ===
-    const timeAwayPercent = result.suspiciousActivity?.timeAway && result.duration
-      ? Math.round((result.suspiciousActivity.timeAway / result.duration) * 100)
+    // ==================== ПІДОЗРІЛА АКТИВНІСТЬ ====================
+    const suspicious = result.suspiciousActivity || {};
+    const timeAway = Number(suspicious.timeAway) || 0;
+    const switchCount = Number(suspicious.switchCount) || 0;
+    const duration = Number(result.duration) || 0;
+    
+    const timeAwayPercent = duration > 0 
+      ? Math.round((timeAway / duration) * 100) 
       : 0;
 
-    const switchCount = result.suspiciousActivity?.switchCount || 0;
-
-    // === СЕРЕДНІЙ ЧАС ВІДПОВІДІ — ВИПРАВЛЕНО З ЛОГУВАННЯМ ===
+    // Середній час відповіді
     let totalResponseTime = 0;
     let answeredQuestions = 0;
 
-    console.log('[VIEW-RESULT] answerTimestamps:', result.answerTimestamps);
-    console.log('[VIEW-RESULT] suspiciousActivity.responseTimes:', result.suspiciousActivity?.responseTimes);
-
     const responseTimes = {
       ...(result.answerTimestamps || {}),
-      ...(result.suspiciousActivity?.responseTimes || {})
+      ...(Array.isArray(suspicious.responseTimes) ? suspicious.responseTimes : {})
     };
 
     questions.forEach((_, idx) => {
@@ -6568,23 +6686,9 @@ app.get('/admin/view-result', checkAuth, async (req, res) => {
       ? (totalResponseTime / answeredQuestions).toFixed(1) 
       : 0;
 
-    logger.info('[VIEW-RESULT] Середній час', { 
-      answeredQuestions, 
-      totalResponseTime, 
-      avgResponseTime,
-      hasAnswerTimestamps: !!result.answerTimestamps 
-    });
-
-    const totalActivityCount = result.suspiciousActivity?.activityCounts
-      ? result.suspiciousActivity.activityCounts.reduce((sum, c) => sum + (c || 0), 0)
+    const totalActivityCount = Array.isArray(suspicious.activityCounts) 
+      ? suspicious.activityCounts.reduce((sum, c) => sum + (Number(c) || 0), 0) 
       : 0;
-
-    logger.info('[VIEW-RESULT] Статистика', { 
-      fullyCorrect, 
-      partiallyCorrect, 
-      avgResponseTime,
-      timeAwayPercent 
-    });
 
     let html = `
       <!DOCTYPE html>
@@ -6604,6 +6708,7 @@ app.get('/admin/view-result', checkAuth, async (req, res) => {
             .nav-btn { padding: 12px 24px; margin: 10px 5px; cursor: pointer; border: none; border-radius: 8px; background: #007bff; color: white; }
             .nav-btn:hover { background: #0056b3; }
             .details { white-space: pre-line; word-break: break-word; }
+            .suspicious { color: #d32f2f; font-weight: bold; }
           </style>
           <script src="/pdfmake/pdfmake.min.js"></script>
           <script src="/pdfmake/vfs_fonts.js"></script>
@@ -6766,7 +6871,7 @@ app.get('/admin/view-result', checkAuth, async (req, res) => {
               });
             </script>
 
-            <!-- HTML-таблиця -->
+            <!-- HTML summary -->
             <div class="summary">
               <strong>Тест:</strong> ${testNames[result.testNumber]?.name?.replace(/"/g, '\\"') || 'Невідомий тест'}<br>
               <strong>Варіант:</strong> ${result.variant || 'Немає'}<br>
@@ -6809,7 +6914,7 @@ app.get('/admin/view-result', checkAuth, async (req, res) => {
         } else {
           userAnswerDisplay = userAnswerRaw.join(', ');
         }
-      } else if (userAnswerRaw) {
+      } else if (userAnswerRaw !== undefined) {
         userAnswerDisplay = String(userAnswerRaw);
       }
 
