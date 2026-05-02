@@ -325,11 +325,16 @@ app.use((err, req, res, next) => {
   }
 });
 
-// Водяний знак + сучасний моніторинг скріншотів і перемикання вкладок
+// Водяний знак + моніторинг скріншотів (тільки для HTML-сторінок)
 app.use((req, res, next) => {
   const originalSend = res.send;
   res.send = function (body) {
-    if (typeof body === 'string' && body.includes('</body>') && req.user) {
+    // Виконуємо тільки для HTML-відповідей і тільки якщо є req.user
+    if (typeof body === 'string' && 
+        body.includes('</body>') && 
+        req.user && 
+        !req.url.startsWith('/save-suspicious-activity')) {   // ←←←←←←←←←←←←←←←←
+
       const watermarkScript = `
         <style>
           .watermark { position:fixed; top:10px; right:10px; color:rgba(255,0,0,0.3); font-size:24px; pointer-events:none; z-index:10000; }
@@ -416,7 +421,7 @@ app.use((req, res, next) => {
             formData.append('screenshotCount', window.screenshotCount);
             formData.append('switchCount', window.switchCount);
             formData.append('timeAway', window.timeAway);
-            formData.append('_csrf', '${res.locals._csrf || ''}');
+            formData.append('_csrf', '${res.locals?._csrf || ''}');   // ← Захищено
             try {
               await fetch('/save-suspicious-activity', { method: 'POST', body: formData });
             } catch(e){}
