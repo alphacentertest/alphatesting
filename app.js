@@ -2955,6 +2955,7 @@ app.get('/test/question', checkAuth, async (req, res) => {
 
             let lastActionTime = 0;
             let notificationTimeout = null;
+            let lastBlurTime = 0;   // ← додав, бо використовується нижче
 
             function showScreenshotWarning() {
                 if (notificationTimeout) return;
@@ -3031,6 +3032,8 @@ app.get('/test/question', checkAuth, async (req, res) => {
                     });
                 } catch (err) {}
             }
+
+            setInterval(saveSuspiciousActivity, 4000);
 
             // ==================== ОСНОВНИЙ КОД ====================
             function goToQuestion(targetIndex) {
