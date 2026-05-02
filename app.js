@@ -2975,7 +2975,7 @@ app.get('/test/question', checkAuth, async (req, res) => {
 
             function registerScreenshot(source) {
                 const now = Date.now();
-                if (now - lastScreenshotTime < 1200) return;   // 1.2 секунди
+                if (now - lastScreenshotTime < 1500) return;
 
                 screenshotCount++;
                 lastScreenshotTime = now;
@@ -2986,7 +2986,7 @@ app.get('/test/question', checkAuth, async (req, res) => {
 
             function registerSwitch(source = 'blur') {
                 const now = Date.now();
-                if (now - lastSwitchTime < 2500) return;   // 2.5 секунди — важливо для мобільних
+                if (now - lastSwitchTime < 3000) return;   // 3 секунди — для мобільних
 
                 switchCount++;
                 lastSwitchTime = now;
@@ -3020,10 +3020,15 @@ app.get('/test/question', checkAuth, async (req, res) => {
                 lastBlurTime = Date.now() / 1000;
             });
 
-            // Visibility Change — тільки для мобільних і з сильним анти-флуд
+            // Visibility Change — дуже обмежено для мобільних
             document.addEventListener('visibilitychange', () => {
-                if (document.hidden && /Mobi|Android|iPhone|iPad/i.test(navigator.userAgent)) {
-                    registerSwitch('visibilitychange (mobile)');   // не screenshot, а switch
+                if (document.hidden) {
+                    if (/Mobi|Android|iPhone|iPad/i.test(navigator.userAgent)) {
+                        // На мобільних вважаємо тільки сильні зміни
+                        if (Date.now() - lastSwitchTime > 5000) {   // тільки раз на 5 секунд
+                            registerSwitch('visibilitychange (mobile)');
+                        }
+                    }
                 }
             });
 
