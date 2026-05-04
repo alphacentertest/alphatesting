@@ -2948,7 +2948,105 @@ app.get('/test/question', checkAuth, async (req, res) => {
             let questionStartTimeObj = ${JSON.stringify(questionStartTimeObj || {})};
             let questionStartTime = questionStartTimeObj[currentQuestionIndex] || Date.now();
 
-            
+            // ==================== АНТИ-ЧИТ З ФІКСАЦІЄЮ СКРІНШОТІВ ====================
+            // Зберігаємо скріншоти між питаннями через localStorage
+            let screenshotCount = parseInt(localStorage.getItem('screenshotCount') || '0');
+            // switchCount і timeAway вже є вище
+            timeAway = timeAway || 0;
+
+            let notificationTimeout = null;
+            let lastScreenshotTime = 0;
+            let lastVolumePress = 0;
+            let lastSwitchTime = 0;
+
+            function showScreenshotWarning() {
+                if (notificationTimeout) return;
+
+                const notif = document.createElement('div');
+                notif.style.cssText = 'position:fixed;top:20px;left:50%;transform:translateX(-50%);background:#ef4444;color:white;padding:16px 32px;border-radius:12px;font-weight:700;z-index:99999;box-shadow:0 10px 25px rgba(0,0,0,0.6);white-space:nowrap;font-size:16px;';
+                notif.textContent = '⚠️ Зафіксована спроба скріншоту!';
+                document.body.appendChild(notif);
+
+                notificationTimeout = setTimeout(function() {
+                    notif.style.transition = 'opacity 0.5s';
+                    notif.style.opacity = '0';
+                    setTimeout(function() { notif.remove(); notificationTimeout = null; }, 600);
+                }, 2200);
+            }
+
+            function registerScreenshot(source) {
+                const now = Date.now();
+                if (now - lastScreenshotTime < 900) return;
+
+                screenshotCount++;
+                lastScreenshotTime = now;
+                localStorage.setItem('screenshotCount', screenshotCount);   // зберігаємо між питаннями
+                showScreenshotWarning();
+                console.log('[ANTI-CHEAT] Скріншот #' + screenshotCount + ' (' + source + ')');
+                saveSuspiciousActivity();
+            }
+
+            function registerSwitch(source = 'blur') {
+                const now = Date.now();
+                if (now - lastSwitchTime < 1000) return;
+
+                switchCount++;
+                lastSwitchTime = now;
+                console.log('[ANTI-CHEAT] Перемикання #' + switchCount + ' (' + source + ')');
+                saveSuspiciousActivity();
+            }
+
+            // ПК — PrintScreen
+            document.addEventListener('keyup', function(e) {
+                if (e.key === 'PrintScreen' || e.keyCode === 44) registerScreenshot('PrintScreen');
+            });
+
+            // Мобільні — Volume Up
+            document.addEventListener('keydown', function(e) {
+                if (e.key === 'AudioVolumeUp' || e.keyCode === 175) {
+                    lastVolumePress = Date.now();
+                    registerScreenshot('VolumeUp');
+                }
+            });
+
+            // Blur
+            window.addEventListener('blur', function() {
+                const now = Date.now();
+                if (now - lastVolumePress < 2000) {
+                    registerScreenshot('Blur+Volume');
+                } else {
+                    registerSwitch('blur');
+                }
+                lastBlurTime = Date.now() / 1000;
+            });
+
+            // Час відсутності
+            window.addEventListener('focus', function() {
+                if (lastBlurTime > 0) {
+                    const awayTime = (Date.now() / 1000) - lastBlurTime;
+                    timeAway = (timeAway || 0) + awayTime;
+                    lastBlurTime = 0;
+                }
+                saveSuspiciousActivity();
+            });
+
+            async function saveSuspiciousActivity() {
+                const formData = new URLSearchParams();
+                formData.append('screenshotCount', screenshotCount);
+                formData.append('switchCount', switchCount);
+                formData.append('timeAway', timeAway);
+                formData.append('_csrf', '${res.locals._csrf}');
+
+                try {
+                    await fetch('/answer', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                        body: formData
+                    });
+                } catch (err) {}
+            }
+
+            setInterval(saveSuspiciousActivity, 4000);
 
             // ==================== ОСНОВНИЙ КОД ====================
             function goToQuestion(targetIndex) {
@@ -3159,9 +3257,6 @@ app.get('/test/question', checkAuth, async (req, res) => {
                 const result = await response.json();
 
                 if (result.success) {
-                  // === СКИДАННЯ ЛІЧИЛЬНИКІВ ПРИ УСПІШНОМУ ЗАВЕРШЕННІ ТЕСТУ ===
-                  localStorage.removeItem('screenshotCount');
-                  
                   setTimeout(() => window.location.href = '/result', 300);
                 } else {
                   alert('Помилка завершення тесту');
