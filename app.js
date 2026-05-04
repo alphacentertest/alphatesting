@@ -2948,17 +2948,22 @@ app.get('/test/question', checkAuth, async (req, res) => {
             let questionStartTimeObj = ${JSON.stringify(questionStartTimeObj || {})};
             let questionStartTime = questionStartTimeObj[currentQuestionIndex] || Date.now();
 
-// ==================== АНТИ-ЧИТ З ФІКСАЦІЄЮ СКРІНШОТІВ ====================
-            // Зберігаємо скріншоти між питаннями через localStorage
+            // ==================== АНТИ-ЧИТ З ФІКСАЦІЄЮ СКРІНШОТІВ ====================
+            // === СКИДАННЯ ЛІЧИЛЬНИКІВ ПРИ СТАРТІ НОВОГО ТЕСТУ ===
+            // Якщо це новий тест (або перше питання) — скидаємо все
+            if (currentQuestionIndex === 0 || !localStorage.getItem('currentTestId')) {
+                localStorage.setItem('screenshotCount', '0');
+                // Можна також скинути на сервері, але для швидкості робимо тут
+            }
+
             let screenshotCount = parseInt(localStorage.getItem('screenshotCount') || '0');
-            // switchCount і timeAway вже є вище
-            timeAway = timeAway || 0;
+            // switchCount і timeAway вже ініціалізовані з PHP вище
 
             let notificationTimeout = null;
             let lastScreenshotTime = 0;
             let lastVolumePress = 0;
             let lastSwitchTime = 0;
-            // lastBlurTime вже оголошений вище — НЕ оголошуємо ще раз!
+            // lastBlurTime вже є вище
 
             function showScreenshotWarning() {
                 if (notificationTimeout) return;
@@ -3021,7 +3026,7 @@ app.get('/test/question', checkAuth, async (req, res) => {
                 lastBlurTime = Date.now() / 1000;
             });
 
-            // Visibilitychange (дуже допомагає на мобільних)
+            // Visibilitychange (корисно для мобільних)
             document.addEventListener('visibilitychange', function() {
                 if (document.hidden) {
                     const isMobile = /Mobi|Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
