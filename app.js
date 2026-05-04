@@ -2952,14 +2952,14 @@ app.get('/test/question', checkAuth, async (req, res) => {
             // Зберігаємо скріншоти між питаннями через localStorage
             let screenshotCount = parseInt(localStorage.getItem('screenshotCount') || '0');
             
-            // switchCount і timeAway вже є вище (з PHP)
+            // switchCount і timeAway вже є вище
             timeAway = timeAway || 0;
 
             let notificationTimeout = null;
             let lastScreenshotTime = 0;
             let lastVolumePress = 0;
             let lastSwitchTime = 0;
-            // lastBlurTime вже оголошений вище
+            let lastAntiCheatTrigger = 0;   // ← Новий захист від дублювання
 
             function showScreenshotWarning() {
                 if (notificationTimeout) return;
@@ -2978,11 +2978,13 @@ app.get('/test/question', checkAuth, async (req, res) => {
 
             function registerScreenshot(source) {
                 const now = Date.now();
-                if (now - lastScreenshotTime < 900) return;
+                if (now - lastScreenshotTime < 800) return;           // трохи зменшив
+                if (now - lastAntiCheatTrigger < 600) return;         // захист від дублювання
 
+                lastAntiCheatTrigger = now;
                 screenshotCount++;
                 lastScreenshotTime = now;
-                localStorage.setItem('screenshotCount', screenshotCount);   // зберігаємо між питаннями
+                localStorage.setItem('screenshotCount', screenshotCount);
                 showScreenshotWarning();
                 console.log('[ANTI-CHEAT] Скріншот #' + screenshotCount + ' (' + source + ')');
                 saveSuspiciousActivity();
@@ -2990,8 +2992,10 @@ app.get('/test/question', checkAuth, async (req, res) => {
 
             function registerSwitch(source = 'blur') {
                 const now = Date.now();
-                if (now - lastSwitchTime < 1000) return;
+                if (now - lastSwitchTime < 800) return;
+                if (now - lastAntiCheatTrigger < 600) return;
 
+                lastAntiCheatTrigger = now;
                 switchCount++;
                 lastSwitchTime = now;
                 console.log('[ANTI-CHEAT] Перемикання #' + switchCount + ' (' + source + ')');
@@ -3022,7 +3026,7 @@ app.get('/test/question', checkAuth, async (req, res) => {
                 lastBlurTime = Date.now() / 1000;
             });
 
-            // Visibilitychange (корисно для мобільних)
+            // Visibilitychange — головне для мобільних
             document.addEventListener('visibilitychange', function() {
                 if (document.hidden) {
                     const isMobile = /Mobi|Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
