@@ -2949,17 +2949,16 @@ app.get('/test/question', checkAuth, async (req, res) => {
             let questionStartTime = questionStartTimeObj[currentQuestionIndex] || Date.now();
 
             // ==================== АНТИ-ЧИТ З ФІКСАЦІЄЮ СКРІНШОТІВ ====================
-            // Зберігаємо скріншоти між питаннями через localStorage
-            let screenshotCount = parseInt(localStorage.getItem('screenshotCount') || '0');
-            
-            // switchCount і timeAway вже є вище
-            timeAway = timeAway || 0;
+            console.log('[ANTI-CHEAT] Ініціалізація анти-читу. Поточні значення:', {
+                screenshotCount: screenshotCount,
+                switchCount: switchCount,
+                timeAway: timeAway
+            });
 
-            let notificationTimeout = null;
             let lastScreenshotTime = 0;
             let lastVolumePress = 0;
             let lastSwitchTime = 0;
-            let lastAntiCheatTrigger = 0;   // ← Новий захист від дублювання
+            let lastAntiCheatTrigger = 0;   // захист від дублювання подій
 
             function showScreenshotWarning() {
                 if (notificationTimeout) return;
@@ -2978,38 +2977,58 @@ app.get('/test/question', checkAuth, async (req, res) => {
 
             function registerScreenshot(source) {
                 const now = Date.now();
-                if (now - lastScreenshotTime < 800) return;           // трохи зменшив
-                if (now - lastAntiCheatTrigger < 600) return;         // захист від дублювання
+                
+                console.log(`[ANTI-CHEAT] Спроба registerScreenshot(${source}) | lastScreenshot: ${now - lastScreenshotTime}ms | lastTrigger: ${now - lastAntiCheatTrigger}ms`);
+
+                if (now - lastScreenshotTime < 700) {
+                    console.log('[ANTI-CHEAT] Відхилено: занадто швидко після попереднього скріна');
+                    return;
+                }
+                if (now - lastAntiCheatTrigger < 500) {
+                    console.log('[ANTI-CHEAT] Відхилено: дублювання події');
+                    return;
+                }
 
                 lastAntiCheatTrigger = now;
-                screenshotCount++;
                 lastScreenshotTime = now;
-                localStorage.setItem('screenshotCount', screenshotCount);
+                screenshotCount++;
+                
+                console.log(`[ANTI-CHEAT] ✅ Скріншот ЗАРАХОВАНО #${screenshotCount} (${source})`);
                 showScreenshotWarning();
-                console.log('[ANTI-CHEAT] Скріншот #' + screenshotCount + ' (' + source + ')');
                 saveSuspiciousActivity();
             }
 
             function registerSwitch(source = 'blur') {
                 const now = Date.now();
-                if (now - lastSwitchTime < 800) return;
-                if (now - lastAntiCheatTrigger < 600) return;
+                
+                console.log(`[ANTI-CHEAT] Спроба registerSwitch(${source}) | lastSwitch: ${now - lastSwitchTime}ms | lastTrigger: ${now - lastAntiCheatTrigger}ms`);
+
+                if (now - lastSwitchTime < 700) return;
+                if (now - lastAntiCheatTrigger < 500) {
+                    console.log('[ANTI-CHEAT] Відхилено switch: дублювання');
+                    return;
+                }
 
                 lastAntiCheatTrigger = now;
-                switchCount++;
                 lastSwitchTime = now;
-                console.log('[ANTI-CHEAT] Перемикання #' + switchCount + ' (' + source + ')');
+                switchCount++;
+                
+                console.log(`[ANTI-CHEAT] ✅ Перемикання ЗАРАХОВАНО #${switchCount} (${source})`);
                 saveSuspiciousActivity();
             }
 
             // ПК — PrintScreen
             document.addEventListener('keyup', function(e) {
-                if (e.key === 'PrintScreen' || e.keyCode === 44) registerScreenshot('PrintScreen');
+                if (e.key === 'PrintScreen' || e.keyCode === 44) {
+                    console.log('[ANTI-CHEAT] Виявлено PrintScreen');
+                    registerScreenshot('PrintScreen');
+                }
             });
 
             // Мобільні — Volume Up
             document.addEventListener('keydown', function(e) {
                 if (e.key === 'AudioVolumeUp' || e.keyCode === 175) {
+                    console.log('[ANTI-CHEAT] Виявлено VolumeUp');
                     lastVolumePress = Date.now();
                     registerScreenshot('VolumeUp');
                 }
@@ -3017,8 +3036,9 @@ app.get('/test/question', checkAuth, async (req, res) => {
 
             // Blur
             window.addEventListener('blur', function() {
+                console.log('[ANTI-CHEAT] Подія blur');
                 const now = Date.now();
-                if (now - lastVolumePress < 2000) {
+                if (now - lastVolumePress < 1800) {
                     registerScreenshot('Blur+Volume');
                 } else {
                     registerSwitch('blur');
@@ -3026,10 +3046,12 @@ app.get('/test/question', checkAuth, async (req, res) => {
                 lastBlurTime = Date.now() / 1000;
             });
 
-            // Visibilitychange — головне для мобільних
+            // Visibilitychange (як у твоїй PHP-версії)
             document.addEventListener('visibilitychange', function() {
+                console.log(`[ANTI-CHEAT] visibilitychange | hidden=${document.hidden}`);
                 if (document.hidden) {
                     const isMobile = /Mobi|Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
+                    console.log(`[ANTI-CHEAT] Мобільний пристрій: ${isMobile}`);
                     if (isMobile) {
                         registerScreenshot('visibilitychange (mobile)');
                     } else {
@@ -3040,15 +3062,18 @@ app.get('/test/question', checkAuth, async (req, res) => {
 
             // Час відсутності
             window.addEventListener('focus', function() {
+                console.log('[ANTI-CHEAT] Подія focus');
                 if (lastBlurTime > 0) {
                     const awayTime = (Date.now() / 1000) - lastBlurTime;
                     timeAway = (timeAway || 0) + awayTime;
+                    console.log(`[ANTI-CHEAT] Додано часу відсутності: ${awayTime.toFixed(1)}с`);
                     lastBlurTime = 0;
                 }
                 saveSuspiciousActivity();
             });
 
             async function saveSuspiciousActivity() {
+                console.log(`[ANTI-CHEAT] Збереження: screenshots=${screenshotCount}, switches=${switchCount}, timeAway=${timeAway}`);
                 const formData = new URLSearchParams();
                 formData.append('screenshotCount', screenshotCount);
                 formData.append('switchCount', switchCount);
@@ -3061,7 +3086,9 @@ app.get('/test/question', checkAuth, async (req, res) => {
                         headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
                         body: formData
                     });
-                } catch (err) {}
+                } catch (err) {
+                    console.error('[ANTI-CHEAT] Помилка збереження', err);
+                }
             }
 
             setInterval(saveSuspiciousActivity, 4000);
