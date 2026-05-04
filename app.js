@@ -2949,21 +2949,17 @@ app.get('/test/question', checkAuth, async (req, res) => {
             let questionStartTime = questionStartTimeObj[currentQuestionIndex] || Date.now();
 
             // ==================== АНТИ-ЧИТ З ФІКСАЦІЄЮ СКРІНШОТІВ ====================
-            // === СКИДАННЯ ЛІЧИЛЬНИКІВ ПРИ СТАРТІ НОВОГО ТЕСТУ ===
-            // Якщо це новий тест (або перше питання) — скидаємо все
-            if (currentQuestionIndex === 0 || !localStorage.getItem('currentTestId')) {
-                localStorage.setItem('screenshotCount', '0');
-                // Можна також скинути на сервері, але для швидкості робимо тут
-            }
-
+            // Зберігаємо скріншоти між питаннями через localStorage
             let screenshotCount = parseInt(localStorage.getItem('screenshotCount') || '0');
-            // switchCount і timeAway вже ініціалізовані з PHP вище
+            
+            // switchCount і timeAway вже є вище (з PHP)
+            timeAway = timeAway || 0;
 
             let notificationTimeout = null;
             let lastScreenshotTime = 0;
             let lastVolumePress = 0;
             let lastSwitchTime = 0;
-            // lastBlurTime вже є вище
+            // lastBlurTime вже оголошений вище
 
             function showScreenshotWarning() {
                 if (notificationTimeout) return;
@@ -2986,7 +2982,7 @@ app.get('/test/question', checkAuth, async (req, res) => {
 
                 screenshotCount++;
                 lastScreenshotTime = now;
-                localStorage.setItem('screenshotCount', screenshotCount);
+                localStorage.setItem('screenshotCount', screenshotCount);   // зберігаємо між питаннями
                 showScreenshotWarning();
                 console.log('[ANTI-CHEAT] Скріншот #' + screenshotCount + ' (' + source + ')');
                 saveSuspiciousActivity();
@@ -3275,6 +3271,9 @@ app.get('/test/question', checkAuth, async (req, res) => {
                 const result = await response.json();
 
                 if (result.success) {
+                  // === СКИДАННЯ ЛІЧИЛЬНИКІВ ПРИ УСПІШНОМУ ЗАВЕРШЕННІ ТЕСТУ ===
+                  localStorage.removeItem('screenshotCount');
+                  
                   setTimeout(() => window.location.href = '/result', 300);
                 } else {
                   alert('Помилка завершення тесту');
