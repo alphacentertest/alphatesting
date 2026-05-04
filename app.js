@@ -2950,15 +2950,15 @@ app.get('/test/question', checkAuth, async (req, res) => {
 
 // ==================== АНТИ-ЧИТ З ФІКСАЦІЄЮ СКРІНШОТІВ ====================
             // Зберігаємо скріншоти між питаннями через localStorage
-            window.screenshotCount = window.screenshotCount || parseInt(localStorage.getItem('screenshotCount') || '0');
-            window.switchCount = window.switchCount || 0;
-            window.timeAway = window.timeAway || 0;
+            let screenshotCount = parseInt(localStorage.getItem('screenshotCount') || '0');
+            // switchCount і timeAway вже є вище
+            timeAway = timeAway || 0;
 
             let notificationTimeout = null;
             let lastScreenshotTime = 0;
             let lastVolumePress = 0;
             let lastSwitchTime = 0;
-            let lastBlurTime = 0;
+            // lastBlurTime вже оголошений вище — НЕ оголошуємо ще раз!
 
             function showScreenshotWarning() {
                 if (notificationTimeout) return;
@@ -2979,11 +2979,11 @@ app.get('/test/question', checkAuth, async (req, res) => {
                 const now = Date.now();
                 if (now - lastScreenshotTime < 900) return;
 
-                window.screenshotCount++;
+                screenshotCount++;
                 lastScreenshotTime = now;
-                localStorage.setItem('screenshotCount', window.screenshotCount);
+                localStorage.setItem('screenshotCount', screenshotCount);
                 showScreenshotWarning();
-                console.log('[ANTI-CHEAT] Скріншот #' + window.screenshotCount + ' (' + source + ')');
+                console.log('[ANTI-CHEAT] Скріншот #' + screenshotCount + ' (' + source + ')');
                 saveSuspiciousActivity();
             }
 
@@ -2991,9 +2991,9 @@ app.get('/test/question', checkAuth, async (req, res) => {
                 const now = Date.now();
                 if (now - lastSwitchTime < 1000) return;
 
-                window.switchCount++;
+                switchCount++;
                 lastSwitchTime = now;
-                console.log('[ANTI-CHEAT] Перемикання #' + window.switchCount + ' (' + source + ')');
+                console.log('[ANTI-CHEAT] Перемикання #' + switchCount + ' (' + source + ')');
                 saveSuspiciousActivity();
             }
 
@@ -3021,7 +3021,7 @@ app.get('/test/question', checkAuth, async (req, res) => {
                 lastBlurTime = Date.now() / 1000;
             });
 
-            // Visibilitychange (дуже важливо для мобільних)
+            // Visibilitychange (дуже допомагає на мобільних)
             document.addEventListener('visibilitychange', function() {
                 if (document.hidden) {
                     const isMobile = /Mobi|Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
@@ -3037,7 +3037,7 @@ app.get('/test/question', checkAuth, async (req, res) => {
             window.addEventListener('focus', function() {
                 if (lastBlurTime > 0) {
                     const awayTime = (Date.now() / 1000) - lastBlurTime;
-                    window.timeAway = (window.timeAway || 0) + awayTime;
+                    timeAway = (timeAway || 0) + awayTime;
                     lastBlurTime = 0;
                 }
                 saveSuspiciousActivity();
@@ -3045,9 +3045,9 @@ app.get('/test/question', checkAuth, async (req, res) => {
 
             async function saveSuspiciousActivity() {
                 const formData = new URLSearchParams();
-                formData.append('screenshotCount', window.screenshotCount);
-                formData.append('switchCount', window.switchCount);
-                formData.append('timeAway', window.timeAway);
+                formData.append('screenshotCount', screenshotCount);
+                formData.append('switchCount', switchCount);
+                formData.append('timeAway', timeAway);
                 formData.append('_csrf', '${res.locals._csrf}');
 
                 try {
