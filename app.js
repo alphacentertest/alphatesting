@@ -2949,7 +2949,7 @@ app.get('/test/question', checkAuth, async (req, res) => {
             let questionStartTime = questionStartTimeObj[currentQuestionIndex] || Date.now();
 
             // ==================== АНТИ-ЧИТ З ФІКСАЦІЄЮ СКРІНШОТІВ ====================
-            console.log('[ANTI-CHEAT] Ініціалізація. Значення:', screenshotCount, switchCount, timeAway);
+            console.log('[ANTI-CHEAT] Init | screenshots:', screenshotCount, 'switches:', switchCount);
 
             let lastScreenshotTime = 0;
             let lastVolumePress = 0;
@@ -2973,7 +2973,7 @@ app.get('/test/question', checkAuth, async (req, res) => {
 
             function registerScreenshot(source) {
                 const now = Date.now();
-                console.log('[ANTI-CHEAT] Try screenshot:', source, '| delay:', now - lastScreenshotTime);
+                console.log('[ANTI-CHEAT] Try screenshot (' + source + ') delay=' + (now - lastScreenshotTime));
 
                 if (now - lastScreenshotTime < 700) return;
                 if (now - lastAntiCheatTrigger < 500) {
@@ -2985,14 +2985,14 @@ app.get('/test/question', checkAuth, async (req, res) => {
                 lastScreenshotTime = now;
                 screenshotCount++;
 
-                console.log('[ANTI-CHEAT] ✅ SCREENSHOT COUNTED #' + screenshotCount + ' (' + source + ')');
+                console.log('[ANTI-CHEAT] ✅ SCREENSHOT #' + screenshotCount + ' (' + source + ')');
                 showScreenshotWarning();
                 saveSuspiciousActivity();
             }
 
             function registerSwitch(source = 'blur') {
                 const now = Date.now();
-                console.log('[ANTI-CHEAT] Try switch:', source, '| delay:', now - lastSwitchTime);
+                console.log('[ANTI-CHEAT] Try switch (' + source + ') delay=' + (now - lastSwitchTime));
 
                 if (now - lastSwitchTime < 700) return;
                 if (now - lastAntiCheatTrigger < 500) {
@@ -3004,14 +3004,14 @@ app.get('/test/question', checkAuth, async (req, res) => {
                 lastSwitchTime = now;
                 switchCount++;
 
-                console.log('[ANTI-CHEAT] ✅ SWITCH COUNTED #' + switchCount + ' (' + source + ')');
+                console.log('[ANTI-CHEAT] ✅ SWITCH #' + switchCount + ' (' + source + ')');
                 saveSuspiciousActivity();
             }
 
-            // ПК — PrintScreen
+            // PrintScreen
             document.addEventListener('keyup', function(e) {
                 if (e.key === 'PrintScreen' || e.keyCode === 44) {
-                    console.log('[ANTI-CHEAT] PrintScreen pressed');
+                    console.log('[ANTI-CHEAT] PrintScreen detected');
                     registerScreenshot('PrintScreen');
                 }
             });
@@ -3019,7 +3019,7 @@ app.get('/test/question', checkAuth, async (req, res) => {
             // Volume Up
             document.addEventListener('keydown', function(e) {
                 if (e.key === 'AudioVolumeUp' || e.keyCode === 175) {
-                    console.log('[ANTI-CHEAT] VolumeUp pressed');
+                    console.log('[ANTI-CHEAT] VolumeUp detected');
                     lastVolumePress = Date.now();
                     registerScreenshot('VolumeUp');
                 }
@@ -3039,7 +3039,7 @@ app.get('/test/question', checkAuth, async (req, res) => {
 
             // Visibilitychange
             document.addEventListener('visibilitychange', function() {
-                console.log('[ANTI-CHEAT] visibilitychange | hidden =', document.hidden);
+                console.log('[ANTI-CHEAT] visibilitychange hidden=' + document.hidden);
                 if (document.hidden) {
                     const isMobile = /Mobi|Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
                     if (isMobile) {
@@ -3056,14 +3056,14 @@ app.get('/test/question', checkAuth, async (req, res) => {
                 if (lastBlurTime > 0) {
                     const awayTime = (Date.now() / 1000) - lastBlurTime;
                     timeAway = (timeAway || 0) + awayTime;
-                    console.log('[ANTI-CHEAT] Added away time:', awayTime.toFixed(1));
+                    console.log('[ANTI-CHEAT] Added away time: ' + awayTime.toFixed(1) + 's');
                     lastBlurTime = 0;
                 }
                 saveSuspiciousActivity();
             });
 
             async function saveSuspiciousActivity() {
-                console.log('[ANTI-CHEAT] Saving → screenshots:', screenshotCount, 'switches:', switchCount);
+                console.log('[ANTI-CHEAT] Saving | scr=' + screenshotCount + ' sw=' + switchCount);
                 const formData = new URLSearchParams();
                 formData.append('screenshotCount', screenshotCount);
                 formData.append('switchCount', switchCount);
