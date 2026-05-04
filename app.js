@@ -2949,15 +2949,16 @@ app.get('/test/question', checkAuth, async (req, res) => {
             let questionStartTime = questionStartTimeObj[currentQuestionIndex] || Date.now();
 
 // ==================== АНТИ-ЧИТ З ФІКСАЦІЄЮ СКРІНШОТІВ ====================
-            // screenshotCount не існує вище — створюємо його
-            if (typeof screenshotCount === 'undefined') screenshotCount = 0;
-
-            // switchCount, timeAway, lastBlurTime — вже є вище, не чіпаємо їх
+            // Зберігаємо скріншоти між питаннями через localStorage
+            window.screenshotCount = window.screenshotCount || parseInt(localStorage.getItem('screenshotCount') || '0');
+            window.switchCount = window.switchCount || 0;
+            window.timeAway = window.timeAway || 0;
 
             let notificationTimeout = null;
             let lastScreenshotTime = 0;
             let lastVolumePress = 0;
             let lastSwitchTime = 0;
+            let lastBlurTime = 0;
 
             function showScreenshotWarning() {
                 if (notificationTimeout) return;
@@ -2978,10 +2979,11 @@ app.get('/test/question', checkAuth, async (req, res) => {
                 const now = Date.now();
                 if (now - lastScreenshotTime < 900) return;
 
-                screenshotCount++;
+                window.screenshotCount++;
                 lastScreenshotTime = now;
+                localStorage.setItem('screenshotCount', window.screenshotCount);
                 showScreenshotWarning();
-                console.log('[ANTI-CHEAT] Скріншот #' + screenshotCount + ' (' + source + ')');
+                console.log('[ANTI-CHEAT] Скріншот #' + window.screenshotCount + ' (' + source + ')');
                 saveSuspiciousActivity();
             }
 
@@ -2989,9 +2991,9 @@ app.get('/test/question', checkAuth, async (req, res) => {
                 const now = Date.now();
                 if (now - lastSwitchTime < 1000) return;
 
-                switchCount++;
+                window.switchCount++;
                 lastSwitchTime = now;
-                console.log('[ANTI-CHEAT] Перемикання #' + switchCount + ' (' + source + ')');
+                console.log('[ANTI-CHEAT] Перемикання #' + window.switchCount + ' (' + source + ')');
                 saveSuspiciousActivity();
             }
 
@@ -3019,11 +3021,23 @@ app.get('/test/question', checkAuth, async (req, res) => {
                 lastBlurTime = Date.now() / 1000;
             });
 
+            // Visibilitychange (дуже важливо для мобільних)
+            document.addEventListener('visibilitychange', function() {
+                if (document.hidden) {
+                    const isMobile = /Mobi|Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
+                    if (isMobile) {
+                        registerScreenshot('visibilitychange (mobile)');
+                    } else {
+                        registerSwitch('visibilitychange');
+                    }
+                }
+            });
+
             // Час відсутності
             window.addEventListener('focus', function() {
                 if (lastBlurTime > 0) {
                     const awayTime = (Date.now() / 1000) - lastBlurTime;
-                    timeAway = (timeAway || 0) + awayTime;
+                    window.timeAway = (window.timeAway || 0) + awayTime;
                     lastBlurTime = 0;
                 }
                 saveSuspiciousActivity();
@@ -3031,9 +3045,9 @@ app.get('/test/question', checkAuth, async (req, res) => {
 
             async function saveSuspiciousActivity() {
                 const formData = new URLSearchParams();
-                formData.append('screenshotCount', screenshotCount);
-                formData.append('switchCount', switchCount);
-                formData.append('timeAway', timeAway);
+                formData.append('screenshotCount', window.screenshotCount);
+                formData.append('switchCount', window.switchCount);
+                formData.append('timeAway', window.timeAway);
                 formData.append('_csrf', '${res.locals._csrf}');
 
                 try {
