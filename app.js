@@ -2948,23 +2948,23 @@ app.get('/test/question', checkAuth, async (req, res) => {
             let questionStartTimeObj = ${JSON.stringify(questionStartTimeObj || {})};
             let questionStartTime = questionStartTimeObj[currentQuestionIndex] || Date.now();
 
-            // ==================== АНТИ-ЧИТ (максимально близький до PHP) ====================
-            // Використовуємо window.* як в PHP
-            window.screenshotCount = window.screenshotCount || 0;
-            window.switchCount     = window.switchCount || 0;
-            window.timeAway        = window.timeAway || 0;
+// ==================== АНТИ-ЧИТ З ФІКСАЦІЄЮ СКРІНШОТІВ ====================
+            // screenshotCount не існує вище — створюємо його
+            if (typeof screenshotCount === 'undefined') screenshotCount = 0;
 
+            // switchCount, timeAway, lastBlurTime — вже є вище, не чіпаємо їх
+
+            let notificationTimeout = null;
             let lastScreenshotTime = 0;
             let lastVolumePress = 0;
-            let lastBlurTime = 0;
-            let notificationTimeout = null;
+            let lastSwitchTime = 0;
 
             function showScreenshotWarning() {
                 if (notificationTimeout) return;
 
                 const notif = document.createElement('div');
                 notif.style.cssText = 'position:fixed;top:20px;left:50%;transform:translateX(-50%);background:#ef4444;color:white;padding:16px 32px;border-radius:12px;font-weight:700;z-index:99999;box-shadow:0 10px 25px rgba(0,0,0,0.6);white-space:nowrap;font-size:16px;';
-                notif.textContent = '⚠️ Зафіксована спроба скріншоту';
+                notif.textContent = '⚠️ Зафіксована спроба скріншоту!';
                 document.body.appendChild(notif);
 
                 notificationTimeout = setTimeout(function() {
@@ -2978,27 +2978,26 @@ app.get('/test/question', checkAuth, async (req, res) => {
                 const now = Date.now();
                 if (now - lastScreenshotTime < 900) return;
 
-                window.screenshotCount++;
+                screenshotCount++;
                 lastScreenshotTime = now;
                 showScreenshotWarning();
-                console.log('[ANTI-CHEAT] Скріншот #' + window.screenshotCount + ' (' + source + ')');
+                console.log('[ANTI-CHEAT] Скріншот #' + screenshotCount + ' (' + source + ')');
                 saveSuspiciousActivity();
             }
 
             function registerSwitch(source = 'blur') {
                 const now = Date.now();
-                if (now - lastScreenshotTime < 1000) return;   // використовуємо той самий таймер
+                if (now - lastSwitchTime < 1000) return;
 
-                window.switchCount = (window.switchCount || 0) + 1;
-                console.log('[ANTI-CHEAT] Перемикання #' + window.switchCount + ' (' + source + ')');
+                switchCount++;
+                lastSwitchTime = now;
+                console.log('[ANTI-CHEAT] Перемикання #' + switchCount + ' (' + source + ')');
                 saveSuspiciousActivity();
             }
 
             // ПК — PrintScreen
             document.addEventListener('keyup', function(e) {
-                if (e.key === 'PrintScreen' || e.keyCode === 44) {
-                    registerScreenshot('PrintScreen');
-                }
+                if (e.key === 'PrintScreen' || e.keyCode === 44) registerScreenshot('PrintScreen');
             });
 
             // Мобільні — Volume Up
@@ -3020,18 +3019,11 @@ app.get('/test/question', checkAuth, async (req, res) => {
                 lastBlurTime = Date.now() / 1000;
             });
 
-            // Visibility Change — тільки для мобільних (як в твоєму PHP)
-            document.addEventListener('visibilitychange', function() {
-                if (document.hidden && /Mobi|Android|iPhone|iPad/i.test(navigator.userAgent)) {
-                    registerScreenshot('visibilitychange (mobile)');
-                }
-            });
-
             // Час відсутності
             window.addEventListener('focus', function() {
                 if (lastBlurTime > 0) {
                     const awayTime = (Date.now() / 1000) - lastBlurTime;
-                    window.timeAway = (window.timeAway || 0) + awayTime;
+                    timeAway = (timeAway || 0) + awayTime;
                     lastBlurTime = 0;
                 }
                 saveSuspiciousActivity();
@@ -3039,9 +3031,9 @@ app.get('/test/question', checkAuth, async (req, res) => {
 
             async function saveSuspiciousActivity() {
                 const formData = new URLSearchParams();
-                formData.append('screenshotCount', window.screenshotCount);
-                formData.append('switchCount', window.switchCount);
-                formData.append('timeAway', window.timeAway);
+                formData.append('screenshotCount', screenshotCount);
+                formData.append('switchCount', switchCount);
+                formData.append('timeAway', timeAway);
                 formData.append('_csrf', '${res.locals._csrf}');
 
                 try {
